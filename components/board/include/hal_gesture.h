@@ -29,6 +29,13 @@ typedef void (*hal_gesture_cb_t)(hal_gesture_type_t gesture);
  */
 esp_err_t hal_gesture_init(hal_gesture_cb_t cb);
 
+/**
+ * @brief Recreate gesture strips after display rotation.
+ *        Deletes old strips and creates new ones with current display dimensions.
+ *        Must be called with LVGL mutex held.
+ */
+esp_err_t hal_gesture_recreate(void);
+
 #ifdef __cplusplus
 }
 #endif

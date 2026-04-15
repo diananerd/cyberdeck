@@ -163,14 +163,11 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     bool pressed = esp_lcd_touch_get_coordinates(tp, &x, &y, NULL, &cnt, 1);
 
     if (pressed && cnt > 0) {
-        if (s_rotation == 1) {
-            /* Portrait 90° CW: swap axes, mirror new X */
-            data->point.x = (UI_ENGINE_V_RES - 1) - y;
-            data->point.y = x;
-        } else {
-            data->point.x = x;
-            data->point.y = y;
-        }
+        /* Pass raw panel coordinates — LVGL sw_rotate (LV_DISP_ROT_90) handles
+         * the portrait coordinate transform internally via lv_indev.c.
+         * Do NOT transform here; doing so would double-transform and break touch. */
+        data->point.x = x;
+        data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;

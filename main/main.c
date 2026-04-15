@@ -1,6 +1,6 @@
 /*
  * S3 Cyber-Deck — Main boot sequence
- * Phase 3: OS Services (event bus, settings, WiFi, time, battery, SD, gestures, OTA)
+ * Phase 4: Launcher + Settings (app_framework, app_launcher, app_settings)
  */
 
 #include "freertos/FreeRTOS.h"
@@ -21,8 +21,8 @@
 #include "ui_engine.h"
 #include "ui_theme.h"
 #include "ui_statusbar.h"
+#include "ui_navbar.h"
 #include "ui_activity.h"
-#include "ui_common.h"
 #include "ui_effect.h"
 
 /* Services */
@@ -34,200 +34,223 @@
 #include "svc_downloader.h"
 #include "svc_ota.h"
 
+/* App Framework */
+#include "app_registry.h"
+#include "app_state.h"
+#include "app_manager.h"
+
+/* Apps */
+#include "app_launcher.h"
+#include "app_settings.h"
+
 #include "driver/usb_serial_jtag.h"
 
 static const char *TAG = "cyberdeck";
 
-/* ---------- Gesture -> Event bridge ---------- */
+/* ================================================================
+ * Event handlers — update app_state and statusbar
+ * ================================================================ */
 
-static void gesture_cb(hal_gesture_type_t gesture)
+static void on_wifi_connected(void *arg, esp_event_base_t base,
+                               int32_t id, void *data)
 {
-    switch (gesture) {
-    case HAL_GESTURE_HOME:
-        svc_event_post(EVT_GESTURE_HOME, NULL, 0);
-        break;
-    case HAL_GESTURE_BACK:
-        svc_event_post(EVT_GESTURE_BACK, NULL, 0);
-        break;
-    case HAL_GESTURE_LOCK:
-        svc_event_post(EVT_GESTURE_LOCK, NULL, 0);
-        break;
+    (void)arg; (void)base; (void)id; (void)data;
+    char ssid[33] = {0};
+    svc_wifi_get_ssid(ssid, sizeof(ssid));
+    int8_t rssi = svc_wifi_get_rssi();
+    app_state_update_wifi(true, ssid, rssi);
+
+    /* Update statusbar from LVGL task via event */
+    if (ui_lock(200)) {
+        ui_statusbar_set_wifi(true, rssi);
+        ui_unlock();
     }
+    ESP_LOGI(TAG, "WiFi connected: %s (%d dBm)", ssid, rssi);
 }
 
-/* ---------- Gesture event handler (pop activity on BACK/HOME) ---------- */
-
-static void on_gesture_event(void *arg, esp_event_base_t base,
-                             int32_t id, void *data)
+static void on_wifi_disconnected(void *arg, esp_event_base_t base,
+                                  int32_t id, void *data)
 {
-    (void)arg; (void)base; (void)data;
+    (void)arg; (void)base; (void)id; (void)data;
+    app_state_update_wifi(false, NULL, 0);
+
+    if (ui_lock(200)) {
+        ui_statusbar_set_wifi(false, 0);
+        ui_unlock();
+    }
+    ESP_LOGI(TAG, "WiFi disconnected");
+}
+
+static void on_battery_updated(void *arg, esp_event_base_t base,
+                                int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id;
+    if (!data) return;
+    uint8_t pct = *(uint8_t *)data;
+    app_state_update_battery(pct);
+
+    /* Battery charging detection: TODO — use GPIO when available */
     if (ui_lock(100)) {
-        switch ((cyberdeck_event_id_t)id) {
-        case EVT_GESTURE_HOME:
-            ESP_LOGI(TAG, "HOME gesture -> pop to home");
-            ui_activity_pop_to_home();
-            break;
-        case EVT_GESTURE_BACK:
-            ESP_LOGI(TAG, "BACK gesture -> pop activity");
-            ui_activity_pop();
-            break;
-        case EVT_GESTURE_LOCK:
-            ESP_LOGI(TAG, "LOCK gesture (TODO: lock screen)");
-            ui_effect_toast("LOCK", 1000);
-            break;
-        default:
-            break;
-        }
+        ui_statusbar_set_battery(pct, false);
         ui_unlock();
     }
 }
 
-/* ---------- Display rotation handler ---------- */
+static void on_sdcard_mounted(void *arg, esp_event_base_t base,
+                               int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id; (void)data;
+    app_state_update_sd(true);
+    if (ui_lock(500)) {
+        ui_statusbar_set_sdcard(true);
+        ui_unlock();
+    }
+    ESP_LOGI(TAG, "SD card mounted → state updated");
+}
+
+static void on_sdcard_unmounted(void *arg, esp_event_base_t base,
+                                 int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id; (void)data;
+    app_state_update_sd(false);
+    if (ui_lock(500)) {
+        ui_statusbar_set_sdcard(false);
+        ui_unlock();
+    }
+}
+
+/* ================================================================
+ * Gesture → navigation
+ * ================================================================ */
+
+static void gesture_cb(hal_gesture_type_t gesture)
+{
+    switch (gesture) {
+    case HAL_GESTURE_HOME: svc_event_post(EVT_GESTURE_HOME, NULL, 0); break;
+    case HAL_GESTURE_BACK: svc_event_post(EVT_GESTURE_BACK, NULL, 0); break;
+    case HAL_GESTURE_LOCK: svc_event_post(EVT_GESTURE_LOCK, NULL, 0); break;
+    }
+}
+
+static void on_gesture_event(void *arg, esp_event_base_t base,
+                              int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)data;
+    switch ((cyberdeck_event_id_t)id) {
+    case EVT_GESTURE_HOME:
+        ESP_LOGI(TAG, "HOME gesture");
+        app_manager_go_home();
+        break;
+    case EVT_GESTURE_BACK:
+        ESP_LOGI(TAG, "BACK gesture");
+        app_manager_go_back();
+        break;
+    case EVT_GESTURE_LOCK:
+        ESP_LOGI(TAG, "LOCK gesture");
+        app_manager_lock();
+        break;
+    default:
+        break;
+    }
+}
+
+/* ================================================================
+ * Display rotation
+ * ================================================================ */
 
 static void on_display_rotated(void *arg, esp_event_base_t base,
-                               int32_t id, void *data)
+                                int32_t id, void *data)
 {
     (void)arg; (void)base; (void)id;
     uint8_t rotation = data ? *(uint8_t *)data : 0;
-    ESP_LOGI(TAG, "EVT_DISPLAY_ROTATED (%s) -> recreating all activities",
+    ESP_LOGI(TAG, "EVT_DISPLAY_ROTATED (%s) → recreating all activities",
              rotation ? "portrait" : "landscape");
     if (ui_lock(500)) {
+        /* Adapt statusbar width to new display dimensions */
+        ui_statusbar_refresh_theme();
+        /* Rebuild navbar for new orientation (portrait ↔ landscape) */
+        ui_navbar_adapt();
+        /* Recreate gesture strips (sizing depends on display dimensions) */
+        hal_gesture_recreate();
+        /* Recreate all activity screens */
         ui_activity_recreate_all();
         ui_unlock();
     }
 }
 
-/* ---------- Launcher app grid ---------- */
-
-typedef struct {
-    const char *icon;   /* Short symbol for the card */
-    const char *name;   /* App name below the card */
-} launcher_app_t;
-
-static const launcher_app_t launcher_apps[] = {
-    { "Bk",  "Books"   },
-    { "Nt",  "Notes"   },
-    { "Tk",  "Tasks"   },
-    { "Mu",  "Music"   },
-    { "Pd",  "Podcasts"},
-    { "Ca",  "Calc"    },
-    { "Bs",  "Bluesky" },
-    { "Fl",  "Files"   },
-    { "St",  "Settings"},
-};
-
-#define LAUNCHER_APP_COUNT  (sizeof(launcher_apps) / sizeof(launcher_apps[0]))
-
-static void launcher_on_create(lv_obj_t *screen, void *intent_data)
+static void on_nav_processes(void *arg, esp_event_base_t base,
+                              int32_t id, void *data)
 {
-    (void)intent_data;
-    const cyberdeck_theme_t *t = ui_theme_get();
-
-    /*
-     * Derive grid columns from the actual display width reported by LVGL.
-     * This is rotation-agnostic: landscape (800px) → 5 cols, portrait (480px) → 3 cols.
-     * No need to read the rotation setting here.
-     */
-    const lv_coord_t gap = 16;
-    lv_disp_t *disp = lv_disp_get_default();
-    const lv_coord_t avail_w = lv_disp_get_hor_res(disp);
-    uint8_t cols = (avail_w >= 600) ? 5 : 3;
-    uint8_t rows = (LAUNCHER_APP_COUNT + cols - 1) / cols;  /* ceil */
-    const lv_coord_t avail_h = lv_disp_get_ver_res(disp) - UI_STATUSBAR_HEIGHT;
-    lv_coord_t card_from_w = (avail_w - gap * (cols + 1)) / cols;
-    lv_coord_t card_from_h = (avail_h - gap * (rows + 1)) / rows;
-    lv_coord_t card_sz = (card_from_w < card_from_h) ? card_from_w : card_from_h;
-
-    /* Compute centering margins so gap is uniform in both axes */
-    lv_coord_t margin_h = (avail_w - cols * card_sz - (cols - 1) * gap) / 2;
-    lv_coord_t margin_v = (avail_h - rows * card_sz - (rows - 1) * gap) / 2;
-
-    /* Content area — flex wrap with explicit uniform gaps */
-    lv_obj_t *cont = lv_obj_create(screen);
-    lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(cont, 0, 0);
-    lv_obj_set_style_radius(cont, 0, 0);
-    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(cont, margin_h, 0);
-    lv_obj_set_style_pad_right(cont, margin_h, 0);
-    lv_obj_set_style_pad_top(cont, margin_v, 0);
-    lv_obj_set_style_pad_bottom(cont, margin_v, 0);
-    lv_obj_set_style_pad_column(cont, gap, 0);
-    lv_obj_set_style_pad_row(cont, gap, 0);
-
-    /* Create app cards — fixed square size */
-    for (uint8_t i = 0; i < LAUNCHER_APP_COUNT && i < (uint8_t)(cols * rows); i++) {
-        const launcher_app_t *app = &launcher_apps[i];
-
-        lv_obj_t *card = lv_obj_create(cont);
-        lv_obj_set_size(card, card_sz, card_sz);
-        lv_obj_set_style_bg_color(card, t->bg_dark, 0);
-        lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(card, t->primary_dim, 0);
-        lv_obj_set_style_border_width(card, 2, 0);
-        lv_obj_set_style_border_opa(card, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(card, 16, 0);
-        lv_obj_set_style_pad_all(card, 4, 0);
-        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-
-        /* Flex column: icon centered, name at bottom */
-        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(card, 4, 0);
-
-        /* Icon label */
-        lv_obj_t *icon = lv_label_create(card);
-        lv_label_set_text(icon, app->icon);
-        lv_obj_set_style_text_color(icon, t->primary, 0);
-        lv_obj_set_style_text_font(icon, &CYBERDECK_FONT_LG, 0);
-
-        /* App name label */
-        lv_obj_t *name = lv_label_create(card);
-        lv_label_set_text(name, app->name);
-        lv_obj_set_style_text_color(name, t->text_dim, 0);
-        lv_obj_set_style_text_font(name, &CYBERDECK_FONT_SM, 0);
-
-        /* Press feedback: invert */
-        lv_obj_set_style_bg_color(card, t->primary, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_border_color(card, t->primary, LV_STATE_PRESSED);
+    (void)arg; (void)base; (void)id; (void)data;
+    ESP_LOGI(TAG, "NAV: Processes");
+    /* TODO: push a process manager activity once implemented */
+    if (ui_lock(100)) {
+        ui_effect_toast("Processes — coming soon", 1500);
+        ui_unlock();
     }
-
-    ui_statusbar_set_title("S3 CYBER-DECK");
-
-    ESP_LOGI(TAG, "Launcher created (%dx%d grid)", cols, rows);
 }
 
-static void launcher_on_resume(lv_obj_t *screen, void *state)
+/* ================================================================
+ * SD card background polling
+ * ================================================================ */
+
+static void sd_poll_task(void *arg)
 {
-    (void)screen;
-    (void)state;
-    ui_statusbar_set_title("S3 CYBER-DECK");
+    (void)arg;
+    /* Wait for system to settle before first poll */
+    vTaskDelay(pdMS_TO_TICKS(8000));
+
+    bool last_mounted = hal_sdcard_is_mounted();
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));   /* poll every 5s */
+
+        bool mounted = hal_sdcard_is_mounted();
+
+        if (!mounted) {
+            /* Try to mount in case a card was inserted since last check */
+            if (hal_sdcard_mount() == ESP_OK) {
+                mounted = true;
+                ESP_LOGI(TAG, "sd_poll: card mounted");
+            }
+        }
+
+        if (mounted != last_mounted) {
+            last_mounted = mounted;
+            app_state_update_sd(mounted);
+
+            if (!mounted) hal_sdcard_unmount();
+
+            /* Update statusbar directly — more reliable than bouncing through
+             * the event loop where ui_lock() can silently time out. */
+            for (int retry = 0; retry < 5; retry++) {
+                if (ui_lock(500)) {
+                    ui_statusbar_set_sdcard(mounted);
+                    ui_unlock();
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(200));
+            }
+
+            /* Also post event for any other listeners */
+            svc_event_post(mounted ? EVT_SDCARD_MOUNTED : EVT_SDCARD_UNMOUNTED,
+                           NULL, 0);
+            ESP_LOGI(TAG, "sd_poll: SD %s", mounted ? "mounted" : "unmounted");
+        }
+    }
 }
 
-static const activity_cbs_t launcher_cbs = {
-    .on_create  = launcher_on_create,
-    .on_resume  = launcher_on_resume,
-    .on_pause   = NULL,
-    .on_destroy = NULL,
-};
-
-/* ---------- Boot sequence ---------- */
+/* ================================================================
+ * Boot sequence
+ * ================================================================ */
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== S3 CYBER-DECK BOOT ===");
+    ESP_LOGI(TAG, "=== S3 CYBER-DECK BOOT (Phase 4) ===");
 
-    /* 1. NVS + Settings (must be first for WiFi/theme preferences) */
+    /* 1. NVS + Settings */
     ESP_ERROR_CHECK(svc_settings_init());
+    svc_settings_inc_boot_count();
     ESP_LOGI(TAG, "Settings OK");
 
     /* 2. Event bus */
@@ -240,11 +263,11 @@ void app_main(void)
 
     /* 4. LCD + Touch */
     esp_lcd_panel_handle_t lcd_handle = NULL;
-    esp_lcd_touch_handle_t tp_handle = NULL;
+    esp_lcd_touch_handle_t tp_handle  = NULL;
     ESP_ERROR_CHECK(hal_lcd_init(&lcd_handle, &tp_handle));
     ESP_LOGI(TAG, "LCD + Touch OK");
 
-    /* 5. Backlight on (AFTER lcd_init — touch_reset overwrites CH422G OUT) */
+    /* 5. Backlight on */
     hal_backlight_on();
     ESP_LOGI(TAG, "Backlight ON");
 
@@ -252,11 +275,21 @@ void app_main(void)
     ESP_ERROR_CHECK(ui_engine_init(lcd_handle, tp_handle));
     ESP_LOGI(TAG, "UI Engine OK");
 
-    /* 7. Rotation + Theme + Status bar + Activity system */
+    /* 7. App framework */
+    app_registry_init();
+    app_state_init();
+    ESP_ERROR_CHECK(app_manager_init());
+    ESP_LOGI(TAG, "App framework OK");
+
+    /* 8. Register apps */
+    ESP_ERROR_CHECK(app_launcher_register());   /* also registers lockscreen */
+    ESP_ERROR_CHECK(app_settings_register());
+    ESP_LOGI(TAG, "Apps registered");
+
+    /* 9. Theme + rotation + status bar + activity system */
     if (ui_lock(1000)) {
         uint8_t saved_rotation = 0;
         svc_settings_get_rotation(&saved_rotation);
-        saved_rotation = 1;  /* TEMP: force portrait until Settings UI exists */
         ui_engine_set_rotation(saved_rotation);
         ESP_LOGI(TAG, "Rotation: %s", saved_rotation ? "portrait" : "landscape");
 
@@ -264,87 +297,102 @@ void app_main(void)
         svc_settings_get_theme(&saved_theme);
         if (saved_theme >= THEME_COUNT) saved_theme = 0;
         ui_theme_apply((cyberdeck_theme_id_t)saved_theme);
+
         ui_statusbar_init();
+        ui_navbar_init();
         ui_activity_init();
 
-        /* Push launcher as the root activity */
-        ui_activity_push(0, 0, &launcher_cbs, NULL);
+        /* Push launcher as root activity */
+        ui_activity_push(APP_ID_LAUNCHER, 0, app_launcher_get_cbs(), NULL);
 
-        /* Set initial status bar state */
+        /* Initial statusbar placeholders */
         ui_statusbar_set_time(0, 0, 0);
         ui_statusbar_set_wifi(false, 0);
         ui_statusbar_set_battery(0, false);
-        ui_statusbar_set_sdcard(false);  /* TODO: set from hal_sdcard_mount result */
+        ui_statusbar_set_sdcard(false);
 
         ui_unlock();
     }
 
-    /* 8. RTC -> system time */
+    /* 10. Check PIN lock */
+    bool pin_enabled = false;
+    svc_settings_get_pin_enabled(&pin_enabled);
+    if (pin_enabled) {
+        ESP_LOGI(TAG, "PIN lock enabled — pushing lockscreen");
+        app_manager_lock();
+    }
+
+    /* 11. RTC → system time */
     if (hal_rtc_init() == ESP_OK) {
         hal_rtc_sync_to_system();
         ESP_LOGI(TAG, "RTC OK");
     } else {
-        ESP_LOGW(TAG, "RTC init failed (continuing without RTC)");
+        ESP_LOGW(TAG, "RTC init failed (continuing)");
     }
 
-    /* 9. Gesture detection (needs LVGL mutex) */
+    /* 12. Gesture detection */
     if (ui_lock(1000)) {
         hal_gesture_init(gesture_cb);
         ui_unlock();
     }
-    /* Register gesture event handlers */
     svc_event_register(EVT_GESTURE_HOME, on_gesture_event, NULL);
     svc_event_register(EVT_GESTURE_BACK, on_gesture_event, NULL);
     svc_event_register(EVT_GESTURE_LOCK, on_gesture_event, NULL);
-    ESP_LOGI(TAG, "Gestures OK");
-
-    /* Register display rotation handler (recreates all activity layouts) */
     svc_event_register(EVT_DISPLAY_ROTATED, on_display_rotated, NULL);
+    svc_event_register(EVT_NAV_PROCESSES, on_nav_processes, NULL);
+    ESP_LOGI(TAG, "Gestures + nav OK");
 
-    /* 10. Battery ADC + monitor task */
+    /* 13. Battery */
     if (hal_battery_init() == ESP_OK) {
         svc_battery_start();
+        svc_event_register(EVT_BATTERY_UPDATED, on_battery_updated, NULL);
         ESP_LOGI(TAG, "Battery monitor OK");
     } else {
         ESP_LOGW(TAG, "Battery ADC init failed (continuing)");
     }
 
-    /* 11. SD card mount */
+    /* 14. SD card */
+    svc_event_register(EVT_SDCARD_MOUNTED,   on_sdcard_mounted,   NULL);
+    svc_event_register(EVT_SDCARD_UNMOUNTED, on_sdcard_unmounted, NULL);
     if (hal_sdcard_mount() == ESP_OK) {
         svc_event_post(EVT_SDCARD_MOUNTED, NULL, 0);
         ESP_LOGI(TAG, "SD card mounted");
     } else {
-        ESP_LOGW(TAG, "SD card not available (continuing without SD)");
+        ESP_LOGW(TAG, "SD card not available (continuing)");
     }
+    /* Background SD card poll task (low priority, checks every 5s) */
+    xTaskCreate(sd_poll_task, "sd_poll", 4096, NULL, 2, NULL);
 
-    /* 12. Time service (SNTP + RTC bridge + status bar clock) */
+    /* 15. Time service */
     ESP_ERROR_CHECK(svc_time_init());
     ESP_LOGI(TAG, "Time service OK");
 
-    /* 13. Downloader + OTA (ready but idle until needed) */
+    /* 16. Downloader + OTA */
     ESP_ERROR_CHECK(svc_downloader_init());
     ESP_ERROR_CHECK(svc_ota_init());
     ESP_LOGI(TAG, "Downloader + OTA OK");
 
-    /* 14. USB Serial/JTAG for debug console */
+    /* 17. USB Serial/JTAG */
     usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     esp_err_t usj_ret = usb_serial_jtag_driver_install(&usj_cfg);
-    ESP_LOGI(TAG, "USB Serial/JTAG: %s", usj_ret == ESP_OK ? "OK" : esp_err_to_name(usj_ret));
+    ESP_LOGI(TAG, "USB Serial/JTAG: %s",
+             usj_ret == ESP_OK ? "OK" : esp_err_to_name(usj_ret));
 
-    /* 15. WiFi (last — auto-connects in background, triggers SNTP on connect) */
+    /* 18. WiFi (last — auto-connects in background) */
+    svc_event_register(EVT_WIFI_CONNECTED,    on_wifi_connected,    NULL);
+    svc_event_register(EVT_WIFI_DISCONNECTED, on_wifi_disconnected, NULL);
     ESP_ERROR_CHECK(svc_wifi_init());
-    svc_wifi_auto_connect();  /* non-blocking, will post EVT_WIFI_CONNECTED */
-    ESP_LOGI(TAG, "WiFi init OK (auto-connecting in background)");
+    svc_wifi_auto_connect();
+    ESP_LOGI(TAG, "WiFi init OK (auto-connecting)");
 
-    /* Boot toast */
+    /* Boot complete toast */
     if (ui_lock(100)) {
-        ui_effect_toast("BOOT OK — Phase 3", 2000);
+        ui_effect_toast("BOOT OK — Phase 4", 2000);
         ui_unlock();
     }
 
-    ESP_LOGI(TAG, "Boot complete, entering idle");
+    ESP_LOGI(TAG, "Boot complete");
 
-    /* Keep main task alive */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

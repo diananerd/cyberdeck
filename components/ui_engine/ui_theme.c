@@ -125,11 +125,10 @@ void ui_theme_style_btn(lv_obj_t *btn)
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
     lv_obj_set_style_text_color(btn, t->bg_dark, LV_STATE_PRESSED);
 
-    /* Focused state: primary outline (no glow) */
-    lv_obj_set_style_border_color(btn, t->primary, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_width(btn, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_color(btn, t->primary, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_pad(btn, 4, LV_STATE_FOCUSED);
+    /* On a touchscreen the indev keeps focus on the last tapped object,
+     * causing it to appear stuck. Disable click-focus so pressed state
+     * always clears fully after release. */
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 }
 
 void ui_theme_style_label(lv_obj_t *label, const lv_font_t *font)

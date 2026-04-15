@@ -46,7 +46,11 @@ lv_obj_t *ui_common_content_area(lv_obj_t *parent)
     lv_obj_set_style_pad_top(cont, 8, 0);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(cont, 8, 0);
+    lv_obj_set_style_pad_row(cont, 12, 0);
+
+    /* Allow children (e.g. focused-state button outline) to draw outside
+     * the container's content box without being clipped. */
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     /* Scrollbar */
     ui_theme_style_scrollbar(cont);
@@ -92,6 +96,7 @@ lv_obj_t *ui_common_list_add(lv_obj_t *list, const char *text,
             ctx->data = data;
             ctx->index = index;
             lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
             lv_obj_add_event_cb(row, list_item_click_cb, LV_EVENT_CLICKED, ctx);
 
             /* Press feedback: invert colors */
@@ -131,6 +136,7 @@ lv_obj_t *ui_common_list_add_two_line(lv_obj_t *list, const char *primary,
             ctx->data = data;
             ctx->index = index;
             lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
             lv_obj_add_event_cb(row, list_item_click_cb, LV_EVENT_CLICKED, ctx);
 
             const cyberdeck_theme_t *t = ui_theme_get();
@@ -185,6 +191,7 @@ lv_obj_t *ui_common_grid_cell(lv_obj_t *grid, const char *icon,
     lv_obj_set_style_pad_row(cell, 6, 0);
     lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
     /* Press feedback */
     lv_obj_set_style_bg_color(cell, t->primary, LV_STATE_PRESSED);

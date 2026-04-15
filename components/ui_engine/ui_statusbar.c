@@ -7,6 +7,7 @@
  */
 
 #include "ui_statusbar.h"
+#include "ui_navbar.h"
 #include "ui_theme.h"
 #include "esp_log.h"
 #include <stdio.h>
@@ -41,6 +42,18 @@ static lv_obj_t *batt_bolt    = NULL;
 static lv_obj_t *lbl_sdcard    = NULL;
 static lv_obj_t *lbl_bluetooth = NULL;
 static lv_obj_t *lbl_time      = NULL;
+
+/* Border accent lines */
+static lv_obj_t *s_top_line    = NULL;
+static lv_obj_t *s_bot_line    = NULL;
+static lv_obj_t *s_right_line  = NULL;
+
+/* Cached icon states for theme refresh */
+static bool    s_sd_mounted    = false;
+static bool    s_bt_connected  = false;
+static int     s_wifi_bars     = 0;     /* 0=disconnected, 1-4=signal level */
+static bool    s_batt_charging = false;
+static uint8_t s_batt_pct      = 0;
 
 /* ========== Helpers ========== */
 
@@ -92,7 +105,7 @@ static void title_canvas_redraw(const char *title)
     poly_dsc.radius       = 0;
     lv_canvas_draw_polygon(title_canvas, pts, 4, &poly_dsc);
 
-    /* 3. Inverse title text (bg_dark on primary = negative) */
+    /* 3. Inverse title text (bg_dark on primary = negative), drawn twice for bold */
     if (title && title[0]) {
         lv_draw_label_dsc_t txt_dsc;
         lv_draw_label_dsc_init(&txt_dsc);
@@ -104,7 +117,9 @@ static void title_canvas_redraw(const char *title)
         /* Safe width: at text mid-height (y=H/2) the diagonal is at x=(W-1)-(H/2).
          * Subtract left pad (12) and a small margin (4). */
         lv_coord_t max_w = (W - 1 - H / 2) - 12 - 4;
+        /* Draw twice with 1px horizontal offset for bold effect */
         lv_canvas_draw_text(title_canvas, 12, ty, max_w, &txt_dsc, title);
+        lv_canvas_draw_text(title_canvas, 13, ty, max_w - 1, &txt_dsc, title);
     }
 }
 
@@ -114,10 +129,16 @@ void ui_statusbar_init(void)
 {
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    /* ---- Bar container on layer_top ---- */
+    /* ---- Bar container on layer_top — full width in portrait,
+     *       stops at navbar's left edge in landscape ---- */
+    lv_disp_t  *s_disp  = lv_disp_get_default();
+    lv_coord_t  hor_res = lv_disp_get_hor_res(s_disp);
+    lv_coord_t  ver_res = lv_disp_get_ver_res(s_disp);
+    bool        s_port  = (hor_res < ver_res);
+    lv_coord_t  bar_w   = s_port ? hor_res : (hor_res - UI_NAVBAR_THICK);
     bar_obj = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(bar_obj, LV_PCT(100), UI_STATUSBAR_HEIGHT);
-    lv_obj_align(bar_obj, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_size(bar_obj, bar_w, UI_STATUSBAR_HEIGHT);
+    lv_obj_align(bar_obj, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_color(bar_obj, t->bg_dark, 0);
     lv_obj_set_style_bg_opa(bar_obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(bar_obj, 0, 0);   /* no border — avoids inner-area inset */
@@ -157,19 +178,60 @@ void ui_statusbar_init(void)
     lv_obj_set_style_text_color(lbl_time, t->text, 0);
     lv_obj_set_style_text_font(lbl_time, &CYBERDECK_FONT_SM, 0);
 
-    /* --- 2. Bluetooth --- */
-    lbl_bluetooth = lv_label_create(right_cont);
-    lv_label_set_text(lbl_bluetooth, LV_SYMBOL_BLUETOOTH);
-    lv_obj_set_style_text_color(lbl_bluetooth, t->text_dim, 0);  /* dim = off */
-    lv_obj_set_style_text_font(lbl_bluetooth, &lv_font_montserrat_14, 0);
+    /* --- 2. Bluetooth — fixed-width wrapper so LV_ALIGN_CENTER has room --- */
+    {
+        lv_obj_t *bt_cont = lv_obj_create(right_cont);
+        lv_obj_set_size(bt_cont, 18, UI_STATUSBAR_HEIGHT);
+        lv_obj_set_style_bg_opa(bt_cont, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(bt_cont, 0, 0);
+        lv_obj_set_style_pad_all(bt_cont, 0, 0);
+        lv_obj_clear_flag(bt_cont, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_layout(bt_cont, 0, 0);
+        lbl_bluetooth = lv_label_create(bt_cont);
+        lv_label_set_text(lbl_bluetooth, LV_SYMBOL_BLUETOOTH);
+        lv_obj_set_style_text_color(lbl_bluetooth, t->text_dim, 0);
+        lv_obj_set_style_text_font(lbl_bluetooth, &lv_font_montserrat_18, 0);
+        lv_obj_align(lbl_bluetooth, LV_ALIGN_CENTER, 0, 0);
+    }
 
-    /* --- 3. SD card --- */
-    lbl_sdcard = lv_label_create(right_cont);
-    lv_label_set_text(lbl_sdcard, LV_SYMBOL_SD_CARD);
-    lv_obj_set_style_text_color(lbl_sdcard, t->text_dim, 0);     /* dim = no card */
-    lv_obj_set_style_text_font(lbl_sdcard, &lv_font_montserrat_14, 0);
+    /* --- 3. SD card — same fixed-width wrapper --- */
+    {
+        lv_obj_t *sd_cont = lv_obj_create(right_cont);
+        lv_obj_set_size(sd_cont, 18, UI_STATUSBAR_HEIGHT);
+        lv_obj_set_style_bg_opa(sd_cont, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(sd_cont, 0, 0);
+        lv_obj_set_style_pad_all(sd_cont, 0, 0);
+        lv_obj_clear_flag(sd_cont, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_layout(sd_cont, 0, 0);
+        lbl_sdcard = lv_label_create(sd_cont);
+        lv_label_set_text(lbl_sdcard, LV_SYMBOL_SD_CARD);
+        lv_obj_set_style_text_color(lbl_sdcard, t->text_dim, 0);
+        lv_obj_set_style_text_font(lbl_sdcard, &lv_font_montserrat_18, 0);
+        lv_obj_align(lbl_sdcard, LV_ALIGN_CENTER, 0, 0);
+    }
 
-    /* --- 4. Battery (sub-container: body outline + fill + tip) --- */
+    /* --- 4. WiFi bars — full bar height container, bars bottom-anchored at bar-8 ---
+     * UI_STATUSBAR_HEIGHT=36, bar_base_y=28: tallest bar (h=20) → y=8..28, center y=18
+     * Battery body (h=18) is LV_ALIGN_LEFT_MID → y=9..27, center y=18 — matches. */
+    wifi_cont = lv_obj_create(right_cont);
+    lv_obj_set_size(wifi_cont, 26, UI_STATUSBAR_HEIGHT);
+    lv_obj_set_style_bg_opa(wifi_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(wifi_cont, 0, 0);
+    lv_obj_set_style_pad_all(wifi_cont, 0, 0);
+    lv_obj_clear_flag(wifi_cont, LV_OBJ_FLAG_SCROLLABLE);
+
+    const lv_coord_t bw = 4, bgap = 2;
+    const lv_coord_t bh[] = {6, 10, 16, 20};
+    /* Bottom of bars at UI_STATUSBAR_HEIGHT-8 = 28; tallest bar centers at y=18 */
+    const lv_coord_t bar_base_y = UI_STATUSBAR_HEIGHT - 8;
+    for (int i = 0; i < 4; i++) {
+        wifi_bars[i] = make_rect(wifi_cont, bw, bh[i], t->text_dim);
+        lv_obj_set_pos(wifi_bars[i],
+                       i * (bw + bgap),
+                       bar_base_y - bh[i]);
+    }
+
+    /* --- 5. Battery (sub-container: body outline + fill + tip) — rightmost --- */
     lv_obj_t *batt_cont = lv_obj_create(right_cont);
     lv_obj_set_size(batt_cont, 48, UI_STATUSBAR_HEIGHT);
     lv_obj_set_style_bg_opa(batt_cont, LV_OPA_TRANSP, 0);
@@ -208,54 +270,40 @@ void ui_statusbar_init(void)
     lv_obj_center(batt_bolt);
     lv_obj_add_flag(batt_bolt, LV_OBJ_FLAG_HIDDEN);
 
-    /* --- 5. WiFi bars (4 rects of increasing height) --- */
-    wifi_cont = lv_obj_create(right_cont);
-    lv_obj_set_size(wifi_cont, 26, 24);
-    lv_obj_set_style_bg_opa(wifi_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(wifi_cont, 0, 0);
-    lv_obj_set_style_pad_all(wifi_cont, 0, 0);
-    lv_obj_clear_flag(wifi_cont, LV_OBJ_FLAG_SCROLLABLE);
-
-    const lv_coord_t bw = 4, bgap = 2;
-    const lv_coord_t bh[] = {6, 10, 16, 22};
-    for (int i = 0; i < 4; i++) {
-        wifi_bars[i] = make_rect(wifi_cont, bw, bh[i], t->text_dim);
-        lv_obj_align(wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, i * (bw + bgap), 0);
-    }
-
     /* ---- Border lines (drawn last = highest z-order, paint over all children) ---- */
     /* Top line */
-    lv_obj_t *top_line = lv_obj_create(bar_obj);
-    lv_obj_set_size(top_line, LV_PCT(100), 2);
-    lv_obj_set_style_bg_color(top_line, t->primary, 0);
-    lv_obj_set_style_bg_opa(top_line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(top_line, 0, 0);
-    lv_obj_set_style_radius(top_line, 0, 0);
-    lv_obj_set_style_pad_all(top_line, 0, 0);
-    lv_obj_clear_flag(top_line, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(top_line, LV_ALIGN_TOP_LEFT, 0, 0);
+    s_top_line = lv_obj_create(bar_obj);
+    lv_obj_set_size(s_top_line, LV_PCT(100), 2);
+    lv_obj_set_style_bg_color(s_top_line, t->primary, 0);
+    lv_obj_set_style_bg_opa(s_top_line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_top_line, 0, 0);
+    lv_obj_set_style_radius(s_top_line, 0, 0);
+    lv_obj_set_style_pad_all(s_top_line, 0, 0);
+    lv_obj_clear_flag(s_top_line, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_top_line, LV_ALIGN_TOP_LEFT, 0, 0);
 
     /* Bottom line */
-    lv_obj_t *bot_line = lv_obj_create(bar_obj);
-    lv_obj_set_size(bot_line, LV_PCT(100), 2);
-    lv_obj_set_style_bg_color(bot_line, t->primary, 0);
-    lv_obj_set_style_bg_opa(bot_line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(bot_line, 0, 0);
-    lv_obj_set_style_radius(bot_line, 0, 0);
-    lv_obj_set_style_pad_all(bot_line, 0, 0);
-    lv_obj_clear_flag(bot_line, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(bot_line, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    s_bot_line = lv_obj_create(bar_obj);
+    lv_obj_set_size(s_bot_line, LV_PCT(100), 2);
+    lv_obj_set_style_bg_color(s_bot_line, t->primary, 0);
+    lv_obj_set_style_bg_opa(s_bot_line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_bot_line, 0, 0);
+    lv_obj_set_style_radius(s_bot_line, 0, 0);
+    lv_obj_set_style_pad_all(s_bot_line, 0, 0);
+    lv_obj_clear_flag(s_bot_line, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_bot_line, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-    /* Right line */
-    lv_obj_t *right_line = lv_obj_create(bar_obj);
-    lv_obj_set_size(right_line, 2, LV_PCT(100));
-    lv_obj_set_style_bg_color(right_line, t->primary, 0);
-    lv_obj_set_style_bg_opa(right_line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(right_line, 0, 0);
-    lv_obj_set_style_radius(right_line, 0, 0);
-    lv_obj_set_style_pad_all(right_line, 0, 0);
-    lv_obj_clear_flag(right_line, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(right_line, LV_ALIGN_TOP_RIGHT, 0, 0);
+    /* Right line — created always, visible in portrait only */
+    s_right_line = lv_obj_create(bar_obj);
+    lv_obj_set_size(s_right_line, 2, LV_PCT(100));
+    lv_obj_set_style_bg_color(s_right_line, t->primary, 0);
+    lv_obj_set_style_bg_opa(s_right_line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_right_line, 0, 0);
+    lv_obj_set_style_radius(s_right_line, 0, 0);
+    lv_obj_set_style_pad_all(s_right_line, 0, 0);
+    lv_obj_clear_flag(s_right_line, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_right_line, LV_ALIGN_TOP_RIGHT, 0, 0);
+    if (!s_port) lv_obj_add_flag(s_right_line, LV_OBJ_FLAG_HIDDEN);
 
     ESP_LOGI(TAG, "Status bar initialized");
 }
@@ -284,22 +332,24 @@ void ui_statusbar_set_wifi(bool connected, int8_t rssi)
     if (!wifi_cont) return;
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    int bars = 0;
+    s_wifi_bars = 0;
     if (connected) {
-        if      (rssi > -50) bars = 4;
-        else if (rssi > -60) bars = 3;
-        else if (rssi > -70) bars = 2;
-        else                 bars = 1;
+        if      (rssi > -50) s_wifi_bars = 4;
+        else if (rssi > -60) s_wifi_bars = 3;
+        else if (rssi > -70) s_wifi_bars = 2;
+        else                 s_wifi_bars = 1;
     }
 
     for (int i = 0; i < 4; i++) {
-        lv_color_t c = (i < bars) ? t->primary : t->text_dim;
+        lv_color_t c = (i < s_wifi_bars) ? t->primary : t->text_dim;
         lv_obj_set_style_bg_color(wifi_bars[i], c, 0);
     }
 }
 
 void ui_statusbar_set_battery(uint8_t pct, bool charging)
 {
+    s_batt_pct      = pct;
+    s_batt_charging = charging;
     if (!batt_body) return;
     const cyberdeck_theme_t *t = ui_theme_get();
 
@@ -346,6 +396,7 @@ void ui_statusbar_set_audio(bool playing)
 
 void ui_statusbar_set_sdcard(bool inserted)
 {
+    s_sd_mounted = inserted;
     if (!lbl_sdcard) return;
     const cyberdeck_theme_t *t = ui_theme_get();
     lv_obj_set_style_text_color(lbl_sdcard,
@@ -354,6 +405,7 @@ void ui_statusbar_set_sdcard(bool inserted)
 
 void ui_statusbar_set_bluetooth(bool connected)
 {
+    s_bt_connected = connected;
     if (!lbl_bluetooth) return;
     const cyberdeck_theme_t *t = ui_theme_get();
     lv_obj_set_style_text_color(lbl_bluetooth,
@@ -364,6 +416,14 @@ void ui_statusbar_refresh_theme(void)
 {
     if (!bar_obj) return;
     const cyberdeck_theme_t *t = ui_theme_get();
+
+    /* Recalculate width — display dimensions may have changed after rotation */
+    lv_disp_t  *disp    = lv_disp_get_default();
+    lv_coord_t  hor_res = lv_disp_get_hor_res(disp);
+    lv_coord_t  ver_res = lv_disp_get_ver_res(disp);
+    bool        port    = (hor_res < ver_res);
+    lv_coord_t  bar_w   = port ? hor_res : (hor_res - UI_NAVBAR_THICK);
+    lv_obj_set_width(bar_obj, bar_w);
 
     lv_obj_set_style_bg_color(bar_obj, t->bg_dark, 0);
     lv_obj_set_style_border_color(bar_obj, t->primary, 0);
@@ -378,7 +438,48 @@ void ui_statusbar_refresh_theme(void)
     lv_obj_set_style_bg_color(batt_tip, t->text_dim, 0);
     lv_obj_set_style_bg_color(batt_fill, t->primary, 0);
 
-    /* Icon defaults (caller should re-set actual state) */
-    lv_obj_set_style_text_color(lbl_bluetooth, t->text_dim, 0);
-    lv_obj_set_style_text_color(lbl_sdcard, t->text_dim, 0);
+    /* Border accent lines */
+    if (s_top_line)   lv_obj_set_style_bg_color(s_top_line,   t->primary, 0);
+    if (s_bot_line)   lv_obj_set_style_bg_color(s_bot_line,   t->primary, 0);
+    if (s_right_line) {
+        lv_obj_set_style_bg_color(s_right_line, t->primary, 0);
+        if (port) lv_obj_clear_flag(s_right_line, LV_OBJ_FLAG_HIDDEN);
+        else      lv_obj_add_flag(s_right_line,   LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* WiFi bars — restore with cached signal level */
+    for (int i = 0; i < 4; i++) {
+        lv_color_t c = (i < s_wifi_bars) ? t->primary : t->text_dim;
+        lv_obj_set_style_bg_color(wifi_bars[i], c, 0);
+    }
+
+    /* Battery — mirror the same logic as ui_statusbar_set_battery() */
+    bool dc_power = (s_batt_pct == 0 && !s_batt_charging);
+    if (dc_power) {
+        /* DC power: bolt + primary color, no fill */
+        lv_obj_set_style_border_color(batt_body, t->primary, 0);
+        lv_obj_set_style_bg_color(batt_tip,  t->primary, 0);
+        lv_obj_set_style_bg_color(batt_fill, t->primary, 0);
+        lv_obj_clear_flag(batt_bolt, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(batt_bolt, t->primary, 0);
+    } else if (s_batt_charging) {
+        lv_obj_set_style_border_color(batt_body, t->primary,   0);
+        lv_obj_set_style_bg_color(batt_tip,      t->primary,   0);
+        lv_obj_clear_flag(batt_bolt, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(batt_bolt, t->bg_dark, 0);
+        lv_color_t fill_c = (s_batt_pct > 20) ? t->primary : t->accent;
+        lv_obj_set_style_bg_color(batt_fill, fill_c, 0);
+    } else {
+        lv_obj_set_style_border_color(batt_body, t->text_dim, 0);
+        lv_obj_set_style_bg_color(batt_tip,      t->text_dim, 0);
+        lv_obj_add_flag(batt_bolt, LV_OBJ_FLAG_HIDDEN);
+        lv_color_t fill_c = (s_batt_pct > 20) ? t->primary : t->accent;
+        lv_obj_set_style_bg_color(batt_fill, fill_c, 0);
+    }
+
+    /* Discrete icons — restore with cached states */
+    lv_obj_set_style_text_color(lbl_bluetooth,
+                                s_bt_connected ? t->primary : t->text_dim, 0);
+    lv_obj_set_style_text_color(lbl_sdcard,
+                                s_sd_mounted   ? t->text    : t->text_dim, 0);
 }

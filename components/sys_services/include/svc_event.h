@@ -51,6 +51,9 @@ typedef enum {
 
     /* Display */
     EVT_DISPLAY_ROTATED,        /* data: uint8_t* rotation (0=landscape, 1=portrait) */
+
+    /* Navigation bar */
+    EVT_NAV_PROCESSES,          /* data: NULL — show process manager */
 } cyberdeck_event_id_t;
 
 /**

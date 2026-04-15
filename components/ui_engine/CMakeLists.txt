@@ -7,7 +7,8 @@ idf_component_register(
          "ui_effect.c"
          "ui_common.c"
          "ui_keyboard.c"
+         "ui_navbar.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_lcd lvgl__lvgl
+    REQUIRES esp_lcd lvgl__lvgl sys_services
     PRIV_REQUIRES esp_timer
 )

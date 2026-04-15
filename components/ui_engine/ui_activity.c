@@ -5,6 +5,7 @@
 
 #include "ui_activity.h"
 #include "ui_statusbar.h"
+#include "ui_navbar.h"
 #include "ui_theme.h"
 #include "esp_log.h"
 #include <string.h>
@@ -17,14 +18,31 @@ static uint8_t    depth = 0;
 
 /* ---------- Internal helpers ---------- */
 
+static void apply_screen_padding(lv_obj_t *scr)
+{
+    /* Leave room for statusbar (top) and navbar (right in landscape, bottom in portrait).
+     * Uses 2px gap between content and the bar so borders don't overlap content. */
+    lv_disp_t *d = lv_disp_get_default();
+    bool portrait = lv_disp_get_hor_res(d) < lv_disp_get_ver_res(d);
+
+    lv_obj_set_style_pad_top(scr, UI_STATUSBAR_HEIGHT + 2, 0);
+    if (portrait) {
+        lv_obj_set_style_pad_right(scr,  2, 0);
+        lv_obj_set_style_pad_bottom(scr, UI_NAVBAR_THICK + 2, 0);
+    } else {
+        lv_obj_set_style_pad_right(scr,  UI_NAVBAR_THICK + 2, 0);
+        lv_obj_set_style_pad_bottom(scr, 2, 0);
+    }
+}
+
 static lv_obj_t *create_screen(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
     const cyberdeck_theme_t *t = ui_theme_get();
     lv_obj_set_style_bg_color(scr, t->bg_dark, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    /* Leave room for status bar */
-    lv_obj_set_style_pad_top(scr, UI_STATUSBAR_HEIGHT + 2, 0);
+    apply_screen_padding(scr);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     return scr;
 }
 
@@ -122,12 +140,22 @@ bool ui_activity_pop(void)
         return false;
     }
 
-    /* Destroy top */
-    destroy_entry(&stack[depth - 1]);
-    depth--;
+    /* Copy old top so we can destroy it after loading the new screen.
+     * This prevents a flash-of-empty-screen glitch. */
+    activity_t old_top = stack[depth - 1];
 
-    /* Resume new top */
-    resume_top();
+    /* Reduce depth and resume the now-top activity first */
+    depth--;
+    resume_top();   /* lv_scr_load(stack[depth-1].screen) */
+
+    /* Now it's safe to destroy the old screen (no longer active) */
+    if (old_top.cbs.on_destroy) {
+        old_top.cbs.on_destroy(old_top.screen, old_top.state);
+    }
+    lv_obj_del(old_top.screen);
+
+    /* Clear the vacated slot */
+    memset(&stack[depth], 0, sizeof(activity_t));
 
     ESP_LOGI(TAG, "Popped, new depth=%d", depth);
     return true;
@@ -181,7 +209,7 @@ void ui_activity_recreate_all(void)
         const cyberdeck_theme_t *t = ui_theme_get();
         lv_obj_set_style_bg_color(a->screen, t->bg_dark, 0);
         lv_obj_set_style_bg_opa(a->screen, LV_OPA_COVER, 0);
-        lv_obj_set_style_pad_top(a->screen, UI_STATUSBAR_HEIGHT + 2, 0);
+        apply_screen_padding(a->screen);
 
         /* Recreate layout with current display dimensions */
         a->cbs.on_create(a->screen, NULL);
