@@ -7,6 +7,7 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/components/app_framework"
     "${CMAKE_CURRENT_LIST_DIR}/components/apps/launcher"
     "${CMAKE_CURRENT_LIST_DIR}/components/apps/settings"
+    "${CMAKE_CURRENT_LIST_DIR}/components/apps/taskman"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

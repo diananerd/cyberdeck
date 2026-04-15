@@ -10,6 +10,7 @@
 #include "ui_common.h"
 #include "ui_effect.h"
 #include "svc_settings.h"
+#include "os_settings.h"
 #include "svc_time.h"
 #include "svc_wifi.h"
 #include "esp_log.h"
@@ -57,7 +58,7 @@ static void clock_tick_cb(lv_timer_t *timer)
 static void save_btn_cb(lv_event_t *e)
 {
     time_state_t *s = (time_state_t *)lv_event_get_user_data(e);
-    svc_settings_set_tz_offset(s->tz_offset);
+    os_settings_set_tz_offset(s->tz_offset);  /* E2: cache + NVS + event */
     ui_effect_toast("Timezone saved", 1200);
     ESP_LOGI(TAG, "TZ offset saved: %+d", (int)s->tz_offset);
 }
@@ -81,9 +82,7 @@ static void *time_on_create(lv_obj_t *screen, const view_args_t *args)
     time_state_t *s = (time_state_t *)lv_mem_alloc(sizeof(time_state_t));
     if (!s) return NULL;
 
-    int8_t saved_tz = 0;
-    svc_settings_get_tz_offset(&saved_tz);
-    s->tz_offset = saved_tz;
+    s->tz_offset = os_settings_get()->tz_offset;  /* E3: read from cache */
 
     ui_statusbar_set_title("SETTINGS");
 

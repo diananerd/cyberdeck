@@ -24,14 +24,14 @@ typedef struct {
 } menu_item_t;
 
 static const menu_item_t s_items[] = {
-    { "WiFi",       "Networks & connections",      SETTINGS_SCR_WIFI,     &settings_wifi_cbs      },
-    { "Display",    "Theme, rotation, brightness",  SETTINGS_SCR_DISPLAY,  &settings_display_cbs   },
-    { "Time",       "Timezone & sync",              SETTINGS_SCR_TIME,     &settings_time_cbs      },
-    { "Storage",    "SD card info",                 SETTINGS_SCR_STORAGE,  &settings_storage_cbs   },
-    { "Security",   "PIN lock",                     SETTINGS_SCR_SECURITY, &settings_security_cbs  },
-    { "Bluetooth",  "Audio module",                 SETTINGS_SCR_BT,       &settings_bluetooth_cbs },
-    { "Audio",      "Volume",                       SETTINGS_SCR_AUDIO,    &settings_audio_cbs     },
-    { "About",      "Firmware & OTA",               SETTINGS_SCR_ABOUT,    &settings_about_cbs     },
+    { "WiFi",       "Networks & connections",       SETTINGS_SCR_WIFI,      &settings_wifi_cbs      },
+    { "Display",    "Theme, rotation, brightness",  SETTINGS_SCR_DISPLAY,   &settings_display_cbs   },
+    { "Time",       "Timezone & sync",              SETTINGS_SCR_TIME,      &settings_time_cbs      },
+    { "Storage",    "SD card info",                 SETTINGS_SCR_STORAGE,   &settings_storage_cbs   },
+    { "Security",   "PIN lock",                     SETTINGS_SCR_SECURITY,  &settings_security_cbs  },
+    { "Bluetooth",  "Audio module",                 SETTINGS_SCR_BT,        &settings_bluetooth_cbs },
+    { "Audio",      "Volume",                       SETTINGS_SCR_AUDIO,     &settings_audio_cbs     },
+    { "About",      "Firmware & OTA",               SETTINGS_SCR_ABOUT,     &settings_about_cbs     },
 };
 #define ITEMS_COUNT  ((uint8_t)(sizeof(s_items) / sizeof(s_items[0])))
 

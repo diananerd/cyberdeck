@@ -24,6 +24,7 @@
 /* Services */
 #include "svc_settings.h"
 #include "svc_event.h"
+#include "os_settings.h"  /* E1: typed settings cache */
 
 /* libc */
 #include "esp_log.h"

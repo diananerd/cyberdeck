@@ -16,6 +16,7 @@
 #include "ui_effect.h"
 #include "svc_settings.h"
 #include "svc_event.h"
+#include "os_settings.h"
 #include "esp_log.h"
 #include <stdio.h>
 
@@ -30,7 +31,7 @@ static void theme_btn_cb(lv_event_t *e)
     theme_ctx_t *ctx = (theme_ctx_t *)lv_event_get_user_data(e);
     if (!ctx) return;
     ui_theme_apply(ctx->theme_id);
-    svc_settings_set_theme((uint8_t)ctx->theme_id);
+    os_settings_set_theme((uint8_t)ctx->theme_id);  /* E2: cache + NVS + event */
     ui_statusbar_refresh_theme();
     ui_navbar_refresh_theme();
     ui_activity_recreate_all();
@@ -43,11 +44,10 @@ static void theme_btn_cb(lv_event_t *e)
 static void rotation_btn_cb(lv_event_t *e)
 {
     (void)e;
-    uint8_t cur = 0;
-    svc_settings_get_rotation(&cur);
+    uint8_t cur = os_settings_get()->rotation;  /* E3: read from cache */
     uint8_t new_rot = cur ? 0 : 1;
     ui_engine_set_rotation(new_rot);
-    svc_settings_set_rotation(new_rot);
+    os_settings_set_rotation(new_rot);           /* E2: cache + NVS + EVT_SETTINGS_CHANGED */
     svc_event_post(EVT_DISPLAY_ROTATED, &new_rot, sizeof(new_rot));
     ESP_LOGI(TAG, "Rotation toggled to %s", new_rot ? "portrait" : "landscape");
 }
@@ -82,7 +82,7 @@ static void timeout_btn_cb(lv_event_t *e)
 {
     timeout_ctx_t *ctx = (timeout_ctx_t *)lv_event_get_user_data(e);
     if (!ctx) return;
-    svc_settings_set_screen_timeout(ctx->val);
+    os_settings_set_screen_timeout(ctx->val);  /* E2: cache + NVS + event */
     if (ctx->cur_val_lbl)
         lv_label_set_text(ctx->cur_val_lbl, timeout_label(ctx->val));
     const cyberdeck_theme_t *t = ui_theme_get();
@@ -118,10 +118,9 @@ static void *display_on_create(lv_obj_t *screen, const view_args_t *args)
     (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
     cyberdeck_theme_id_t cur_theme = ui_theme_get_id();
-    uint8_t cur_rotation = 0;
-    svc_settings_get_rotation(&cur_rotation);
-    uint16_t cur_timeout = 120;
-    svc_settings_get_screen_timeout(&cur_timeout);
+    const cyberdeck_settings_t *cfg = os_settings_get();  /* E3: read from cache */
+    uint8_t  cur_rotation = cfg->rotation;
+    uint16_t cur_timeout  = cfg->screen_timeout;
 
     ui_statusbar_set_title("SETTINGS");
     lv_obj_t *content = ui_common_content_area(screen);

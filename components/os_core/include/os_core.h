@@ -35,6 +35,7 @@ typedef uint16_t app_id_t;
 #define APP_ID_BLUESKY      ((app_id_t)7)
 #define APP_ID_FILES        ((app_id_t)8)
 #define APP_ID_SETTINGS     ((app_id_t)9)
+#define APP_ID_TASKMAN      ((app_id_t)10)  /* Task Manager / Process list */
 #define APP_ID_BUILTIN_MAX  ((app_id_t)255)
 #define APP_ID_DYNAMIC_BASE ((app_id_t)256)
 #define APP_ID_INVALID      ((app_id_t)0xFFFE)

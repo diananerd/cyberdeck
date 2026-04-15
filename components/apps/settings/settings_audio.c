@@ -9,6 +9,7 @@
 #include "ui_statusbar.h"
 #include "ui_common.h"
 #include "svc_settings.h"
+#include "os_settings.h"
 #include "esp_log.h"
 #include <stdio.h>
 
@@ -29,7 +30,7 @@ static void slider_cb(lv_event_t *e)
     snprintf(buf, sizeof(buf), "%ld%%", (long)val);
     lv_label_set_text(s->vol_val, buf);
 
-    svc_settings_set_volume((uint8_t)val);
+    os_settings_set_volume((uint8_t)val);  /* E2: cache + NVS + event */
     ESP_LOGI(TAG, "Volume: %ld%%", (long)val);
 }
 
@@ -42,8 +43,7 @@ static void *audio_on_create(lv_obj_t *screen, const view_args_t *args)
     audio_state_t *s = (audio_state_t *)lv_mem_alloc(sizeof(audio_state_t));
     if (!s) return NULL;
 
-    uint8_t cur_vol = 50;
-    svc_settings_get_volume(&cur_vol);
+    uint8_t cur_vol = os_settings_get()->volume;  /* E3: read from cache */
 
     ui_statusbar_set_title("SETTINGS");
 

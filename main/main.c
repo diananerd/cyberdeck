@@ -44,10 +44,14 @@
 /* Apps */
 #include "app_launcher.h"
 #include "app_settings.h"
+#include "app_taskman.h"
 
 /* OS Services (Phase 4) */
 #include "os_storage.h"
 #include "os_crash.h"
+
+/* OS Settings (Fase 5) */
+#include "os_settings.h"
 
 #include "driver/usb_serial_jtag.h"
 
@@ -186,12 +190,8 @@ static void on_nav_processes(void *arg, esp_event_base_t base,
                               int32_t id, void *data)
 {
     (void)arg; (void)base; (void)id; (void)data;
-    ESP_LOGI(TAG, "NAV: Processes");
-    /* TODO: push a process manager activity once implemented */
-    if (ui_lock(100)) {
-        ui_effect_toast("Processes - coming soon", 1500);
-        ui_unlock();
-    }
+    ESP_LOGI(TAG, "NAV: Processes → launching task manager app");
+    app_manager_launch(APP_ID_TASKMAN, NULL, 0);
 }
 
 /* ================================================================
@@ -252,6 +252,7 @@ void app_main(void)
     /* 1. NVS + Settings */
     ESP_ERROR_CHECK(svc_settings_init());
     svc_settings_inc_boot_count();
+    ESP_ERROR_CHECK(os_settings_init());  /* Fase 5: typed settings cache */
     ESP_LOGI(TAG, "Settings OK");
 
     /* 1b. Storage registry */
@@ -289,17 +290,17 @@ void app_main(void)
     /* 8. Register apps */
     ESP_ERROR_CHECK(app_launcher_register());   /* also registers lockscreen */
     ESP_ERROR_CHECK(app_settings_register());
+    ESP_ERROR_CHECK(app_taskman_register());
     ESP_LOGI(TAG, "Apps registered");
 
     /* 9. Theme + rotation + status bar + activity system */
     if (ui_lock(1000)) {
-        uint8_t saved_rotation = 0;
-        svc_settings_get_rotation(&saved_rotation);
+        /* Fase 5: use os_settings cache — NVS already loaded in step 1 */
+        uint8_t saved_rotation = os_settings_get()->rotation;
         ui_engine_set_rotation(saved_rotation);
         ESP_LOGI(TAG, "Rotation: %s", saved_rotation ? "portrait" : "landscape");
 
-        uint8_t saved_theme = 0;
-        svc_settings_get_theme(&saved_theme);
+        uint8_t saved_theme = os_settings_get()->theme;
         if (saved_theme >= THEME_COUNT) saved_theme = 0;
         ui_theme_apply((cyberdeck_theme_id_t)saved_theme);
 
@@ -320,8 +321,7 @@ void app_main(void)
     }
 
     /* 10. Check PIN lock */
-    bool pin_enabled = false;
-    svc_settings_get_pin_enabled(&pin_enabled);
+    bool pin_enabled = os_settings_get()->pin_enabled;  /* Fase 5: cache */
     if (pin_enabled) {
         ESP_LOGI(TAG, "PIN lock enabled — pushing lockscreen");
         app_manager_lock();

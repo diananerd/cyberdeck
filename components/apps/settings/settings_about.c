@@ -11,6 +11,7 @@
 #include "ui_effect.h"
 #include "svc_settings.h"
 #include "svc_ota.h"
+#include "os_settings.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -21,8 +22,7 @@ static const char *TAG = "settings_about";
 static void ota_btn_cb(lv_event_t *e)
 {
     (void)e;
-    char ota_url[128] = {0};
-    svc_settings_get_ota_url(ota_url, sizeof(ota_url));
+    const char *ota_url = os_settings_get()->ota_url;  /* E3: read from cache */
     if (ota_url[0] == '\0') {
         ui_effect_toast("No OTA URL configured", 2000);
         return;
@@ -59,8 +59,7 @@ static void *about_on_create(lv_obj_t *screen, const view_args_t *args)
              desc ? desc->date : "?", desc ? desc->time : "");
     ui_common_data_row(content, "BUILD DATE:", build_str);
 
-    uint32_t boot_count = 0;
-    svc_settings_get_boot_count(&boot_count);
+    uint32_t boot_count = os_settings_get()->boot_count;  /* E3: read from cache */
     char boot_str[16];
     snprintf(boot_str, sizeof(boot_str), "%lu", (unsigned long)boot_count);
     ui_common_data_row(content, "BOOT COUNT:", boot_str);
@@ -76,8 +75,7 @@ static void *about_on_create(lv_obj_t *screen, const view_args_t *args)
 
     ui_common_section_gap(content);
 
-    char ota_url[128] = {0};
-    svc_settings_get_ota_url(ota_url, sizeof(ota_url));
+    const char *ota_url = os_settings_get()->ota_url;          /* E3: read from cache */
     const char *ota_display = (ota_url[0] != '\0') ? ota_url : "(not configured)";
 
     lv_obj_t *ota_key = lv_label_create(content);
