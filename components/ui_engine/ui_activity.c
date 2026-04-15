@@ -12,14 +12,42 @@
 #include "ui_navbar.h"
 #include "ui_theme.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "activity";
 
-static activity_t stack[ACTIVITY_STACK_MAX];
-static uint8_t    depth      = 0;
-static bool       s_nav_lock = false;
+static activity_t              stack[ACTIVITY_STACK_MAX];
+static uint8_t                 depth        = 0;
+static bool                    s_nav_lock   = false;
+static ui_activity_close_hook_fn s_close_hook = NULL;
+
+void ui_activity_set_close_hook(ui_activity_close_hook_fn fn)
+{
+    s_close_hook = fn;
+}
+
+/* Fire the close hook for every unique app_id in ids[0..count-1].
+ * Skips APP_ID_LAUNCHER — the launcher is never truly "closed". */
+static void fire_close_hook(const app_id_t *ids, uint8_t count)
+{
+    if (!s_close_hook) return;
+    for (uint8_t i = 0; i < count; i++) {
+        if (ids[i] == APP_ID_LAUNCHER || ids[i] == APP_ID_INVALID) continue;
+        s_close_hook(ids[i]);
+    }
+}
+
+/* Add id to seen[] (max capacity) if not already present. */
+static void track_id(app_id_t *seen, uint8_t *n, uint8_t max, app_id_t id)
+{
+    if (*n >= max) return;
+    for (uint8_t i = 0; i < *n; i++) {
+        if (seen[i] == id) return;
+    }
+    seen[(*n)++] = id;
+}
 
 /* ---------- Internal helpers ---------- */
 
@@ -122,8 +150,11 @@ bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
 
     depth++;
 
-    /* D1: on_create returns state* — OS stores it directly */
+    /* D1: on_create returns state* — measure heap before/after to track usage */
+    size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     a->state = a->cbs.on_create(scr, args);
+    size_t heap_after  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    a->heap_used = (heap_before > heap_after) ? (heap_before - heap_after) : 0;
 
     /* D6: if args are owned, free the data buffer now */
     if (args && args->owned && args->data) {
@@ -167,6 +198,31 @@ void ui_activity_set_nav_lock(bool locked)
     ESP_LOGI(TAG, "Nav lock: %s", locked ? "ON" : "OFF");
 }
 
+void ui_activity_suspend_to_home(void)
+{
+    if (s_nav_lock) {
+        ESP_LOGD(TAG, "suspend_to_home blocked (nav_lock)");
+        return;
+    }
+    if (depth <= 1) return;  /* already at launcher */
+
+    /* Pause the current top and hide it */
+    activity_t *top = &stack[depth - 1];
+    if (top->cbs.on_pause) {
+        top->cbs.on_pause(top->screen, top->state);
+    }
+    lv_obj_add_flag(top->screen, LV_OBJ_FLAG_HIDDEN);
+
+    /* Show launcher and call its on_resume */
+    lv_obj_clear_flag(stack[0].screen, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load(stack[0].screen);
+    if (stack[0].cbs.on_resume) {
+        stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
+    }
+
+    ESP_LOGI(TAG, "Suspended to home (depth=%d, apps in background)", depth);
+}
+
 void ui_activity_pop_to_home(void)
 {
     if (s_nav_lock) {
@@ -177,11 +233,19 @@ void ui_activity_pop_to_home(void)
         return;
     }
 
+    /* Collect unique app_ids before destroying so we can fire the close hook. */
+    app_id_t closed_ids[ACTIVITY_STACK_MAX];
+    uint8_t  closed_count = 0;
+    for (uint8_t i = 1; i < depth; i++) {
+        track_id(closed_ids, &closed_count, ACTIVITY_STACK_MAX, stack[i].app_id);
+    }
+
     lv_obj_clear_flag(stack[0].screen, LV_OBJ_FLAG_HIDDEN);
     lv_scr_load(stack[0].screen);
 
     while (depth > 1) {
         destroy_entry(&stack[depth - 1]);
+        memset(&stack[depth - 1], 0, sizeof(activity_t));
         depth--;
     }
 
@@ -189,7 +253,118 @@ void ui_activity_pop_to_home(void)
         stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
     }
 
+    fire_close_hook(closed_ids, closed_count);
     ESP_LOGI(TAG, "Popped to home, final depth=%d", depth);
+}
+
+bool ui_activity_raise(app_id_t app_id)
+{
+    /* Find the app (search from top to handle duplicates gracefully) */
+    int idx = -1;
+    for (int i = (int)depth - 1; i >= 1; i--) {
+        if (stack[i].app_id == app_id) { idx = i; break; }
+    }
+    if (idx < 0) return false;              /* not in stack */
+    if (idx == (int)depth - 1) return true; /* already on top */
+
+    /* Collect app_ids ABOVE the target that belong to OTHER apps.
+     * Sub-screens of the raised app itself are not "closing" — they're being
+     * replaced by the root screen of the same app. */
+    app_id_t closed_ids[ACTIVITY_STACK_MAX];
+    uint8_t  closed_count = 0;
+    for (int i = idx + 1; i < (int)depth; i++) {
+        if (stack[i].app_id != app_id) {
+            track_id(closed_ids, &closed_count, ACTIVITY_STACK_MAX, stack[i].app_id);
+        }
+    }
+
+    /* Load the target screen first (safe before destroying those above it) */
+    lv_obj_clear_flag(stack[idx].screen, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load(stack[idx].screen);
+
+    /* Destroy everything above the target */
+    while ((int)depth - 1 > idx) {
+        destroy_entry(&stack[depth - 1]);
+        memset(&stack[depth - 1], 0, sizeof(activity_t));
+        depth--;
+    }
+
+    /* Resume the raised app */
+    if (stack[depth - 1].cbs.on_resume) {
+        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].state);
+    }
+
+    fire_close_hook(closed_ids, closed_count);
+    ESP_LOGI(TAG, "Raised app=%d to top (depth=%d)", (int)app_id, depth);
+    return true;
+}
+
+uint8_t ui_activity_list(activity_info_t *buf, uint8_t max)
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < depth && n < max; i++) {
+        buf[n].app_id    = stack[i].app_id;
+        buf[n].screen_id = stack[i].screen_id;
+        buf[n].stack_idx = i;
+        buf[n].heap_used = stack[i].heap_used;
+        n++;
+    }
+    return n;
+}
+
+/* Async trampoline — runs on the LVGL task after the triggering event returns.
+ * This avoids destroying our own screen while still inside an event callback. */
+static void close_app_async(void *arg)
+{
+    app_id_t target = (app_id_t)(uintptr_t)arg;
+
+    /* Find the target's stack index (skip launcher at 0) */
+    int idx = -1;
+    for (int i = 1; i < (int)depth; i++) {
+        if (stack[i].app_id == target) { idx = i; break; }
+    }
+    if (idx < 0) return;  /* already gone */
+
+    /* Collect unique app_ids that will be destroyed (target + anything above it). */
+    app_id_t closed_ids[ACTIVITY_STACK_MAX];
+    uint8_t  closed_count = 0;
+    for (int i = idx; i < (int)depth; i++) {
+        track_id(closed_ids, &closed_count, ACTIVITY_STACK_MAX, stack[i].app_id);
+    }
+
+    /* Load the screen that will become visible (just below target) */
+    lv_obj_clear_flag(stack[idx - 1].screen, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load(stack[idx - 1].screen);
+
+    /* Destroy all entries from current top down to and including target */
+    while ((int)depth > idx) {
+        destroy_entry(&stack[depth - 1]);
+        memset(&stack[depth - 1], 0, sizeof(activity_t));
+        depth--;
+    }
+
+    /* Resume the new top */
+    if (depth > 0 && stack[depth - 1].cbs.on_resume) {
+        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].state);
+    }
+
+    /* Fire OS-level close hook for each unique app that was closed (H2).
+     * Called AFTER on_destroy — safe to kill bg tasks here. */
+    fire_close_hook(closed_ids, closed_count);
+
+    ESP_LOGI(TAG, "Closed app=%d, new depth=%d", (int)target, depth);
+}
+
+bool ui_activity_close_app(app_id_t app_id)
+{
+    /* Verify it exists before scheduling */
+    for (int i = 1; i < (int)depth; i++) {
+        if (stack[i].app_id == app_id) {
+            lv_async_call(close_app_async, (void *)(uintptr_t)app_id);
+            return true;
+        }
+    }
+    return false;
 }
 
 const activity_t *ui_activity_current(void)

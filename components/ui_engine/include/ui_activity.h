@@ -57,8 +57,9 @@ typedef struct {
     app_id_t        app_id;
     uint8_t         screen_id;
     lv_obj_t       *screen;
-    void           *state;   /* returned by on_create, passed back to all other cbs */
+    void           *state;      /* returned by on_create, passed back to all other cbs */
     activity_cbs_t  cbs;
+    size_t          heap_used;  /* bytes consumed by on_create (internal heap delta) */
 } activity_t;
 
 /**
@@ -90,7 +91,16 @@ bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
 bool ui_activity_pop(void);
 
 /**
- * @brief Pop all activities except the bottom one (go home).
+ * @brief Suspend all activities and show the launcher (go home).
+ *        Apps remain in the stack with their state preserved.
+ *        Use ui_activity_close_app() (Task Manager) to actually free memory.
+ *        No-op while nav lock is active.
+ */
+void ui_activity_suspend_to_home(void);
+
+/**
+ * @brief Destroy all activities except the launcher (hard close all).
+ *        Used internally and by Task Manager "close all".
  *        No-op while nav lock is active.
  */
 void ui_activity_pop_to_home(void);
@@ -114,11 +124,65 @@ const activity_t *ui_activity_current(void);
 uint8_t ui_activity_depth(void);
 
 /**
+ * @brief Snapshot of a single entry in the activity stack (for Task Manager).
+ */
+typedef struct {
+    app_id_t app_id;
+    uint8_t  screen_id;
+    uint8_t  stack_idx;   /**< Index in the stack (0 = launcher). */
+    size_t   heap_used;   /**< Internal heap consumed at on_create time (bytes). */
+} activity_info_t;
+
+/**
+ * @brief Fill buf with snapshots of all active activities (bottom-to-top).
+ * @return Number of entries written.
+ */
+uint8_t ui_activity_list(activity_info_t *buf, uint8_t max);
+
+/**
+ * @brief Raise an existing app to the top of the stack.
+ *        If the app is already on top, does nothing.
+ *        If the app is below the top, destroys all activities above it
+ *        (calling on_destroy on each) and resumes the target app.
+ * @return true if the app was found in the stack (and raised or already top).
+ *         false if the app is not in the stack.
+ */
+bool ui_activity_raise(app_id_t app_id);
+
+/**
+ * @brief Force-close an app and everything stacked above it.
+ *        Equivalent to popping the stack down to just below the target app.
+ *        Safe to call from within the Task Manager (uses lv_async_call internally).
+ * @param app_id  The app to close. Launcher (depth 0) cannot be closed.
+ * @return true if the app was found and closed.
+ */
+bool ui_activity_close_app(app_id_t app_id);
+
+/**
  * @brief Recreate all activities in-place (after display rotation).
  *        Calls on_destroy + on_create on every entry with NULL args.
  *        Must be called with the LVGL mutex held.
  */
 void ui_activity_recreate_all(void);
+
+/* ---- App close hook (H2) ---- */
+
+/**
+ * @brief Callback type invoked once per unique app_id when one or more
+ *        of its activities are permanently destroyed.
+ *
+ *        Called AFTER on_destroy for all affected activities.
+ *        NOT called during ui_activity_recreate_all() (rotation — app stays alive).
+ *        Safe to call os_task_destroy_all_for_app() and app_ops.on_terminate() here.
+ */
+typedef void (*ui_activity_close_hook_fn)(app_id_t app_id);
+
+/**
+ * @brief Register the OS-level app-closed callback.
+ *        There is only one hook slot — calling this again replaces the prior hook.
+ *        Typically called from app_manager_init().
+ */
+void ui_activity_set_close_hook(ui_activity_close_hook_fn fn);
 
 #ifdef __cplusplus
 }
