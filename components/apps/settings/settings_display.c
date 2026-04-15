@@ -172,7 +172,7 @@ static void display_on_create(lv_obj_t *screen, void *intent_data)
 
     lv_obj_t *rot_val = lv_label_create(content);
     lv_label_set_text(rot_val,
-        cur_rotation ? "PORTRAIT  480×800" : "LANDSCAPE  800×480");
+        cur_rotation ? "PORTRAIT  480x800" : "LANDSCAPE  800x480");
     ui_theme_style_label(rot_val, &CYBERDECK_FONT_MD);
 
     lv_obj_t *rot_btn = ui_common_btn(content,
