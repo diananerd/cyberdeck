@@ -6,6 +6,9 @@ idf_component_register(
          "svc_time.c"
          "svc_downloader.c"
          "svc_ota.c"
+         "os_storage.c"
+         "os_crash.c"
+         "os_db.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_event nvs_flash esp_wifi esp_netif esp_http_client esp_https_ota
              app_update board ui_engine os_core

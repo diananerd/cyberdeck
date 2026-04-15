@@ -696,15 +696,61 @@ E3  — namespace "sys" para settings OS     ⏳  Depende de E1
 
 ### Fase 4 — Storage y Apps Dinamicas
 
+**COMPLETADA** (2026-04-15) — build limpio, 0 warnings.
+
 ```
-F2  — os_storage API
-F3  — SQLite (opcional)
-F4  — crash log
-G1  — parser manifest.json
-G2  — os_app_discover_sd
-G3  — script app stub
-G4  — runtime interface
+F2  — os_storage API                        ✅  sys_services/os_storage.c + os_storage.h
+                                               Registro de paths por app_id. Default:
+                                               /sdcard/apps/<id>. os_storage_register()
+                                               para apps dinámicas. Crea dir en primer acceso.
+F3  — SQLite wrapper (opcional)             ✅  sys_services/os_db.c + os_db.h
+                                               Gated por CONFIG_OS_ENABLE_SQLITE (Kconfig).
+                                               API: os_db_open/exec/close con row callback.
+                                               PENDIENTE: añadir espressif/idf-sqlite3 a
+                                               idf_component.yml antes de habilitar.
+F4  — crash log                             ✅  sys_services/os_crash.c + os_crash.h
+                                               Lee esp_reset_reason() en boot. Si fue crash
+                                               (panic/WDT/brownout), append a
+                                               /sdcard/.cyberdeck/crash.log con timestamp.
+G1  — parser manifest.json                  ✅  app_framework/os_manifest.c + os_manifest.h
+                                               Usa cJSON (vendorizado desde IDF json/cJSON/).
+                                               sd_manifest_t con buffers inline (lifecycle safe).
+                                               Parsea: id, name, icon, type, runtime, entry,
+                                               permissions[], version, min_os_api.
+G2  — os_app_discover_sd                    ✅  app_framework/os_app_discover.c + .h
+                                               Escanea /sdcard/apps/ con opendir/readdir.
+                                               Llama os_manifest_parse en cada subdir.
+                                               Asigna IDs desde APP_ID_DYNAMIC_BASE (256).
+                                               Llama os_storage_register + os_app_register.
+                                               Publica EVT_SD_APP_DISCOVERED por cada app.
+                                               Re-llamable (hot-plug: EVT_SDCARD_MOUNTED).
+G3  — script app stub                       ✅  En app_launcher.c (card_click_cb).
+                                               Tapping una app con APP_TYPE_SCRIPT sin
+                                               on_create muestra "Script runtime not available"
+                                               en lugar de "Coming soon...".
+G4  — runtime interface                     ✅  app_framework/os_script.c + os_script.h
+                                               script_runtime_t vtable: name, file_ext,
+                                               load/call/unload. Registro: os_script_register_runtime.
+                                               Lookup: os_script_get_runtime(name).
 ```
+
+**Cambios adicionales:**
+- `intent_t.app_id` cambiado de `uint8_t` a `app_id_t` (uint16_t) para soportar IDs >= 256.
+  Actualizado: ui_intent.h, app_manager.c, app_launcher.c.
+- `main.c`: os_storage_init() en step 1b; os_crash_init() + os_app_discover_sd() tras SD mount.
+- `Kconfig.projbuild`: menú "OS Services" con CONFIG_OS_ENABLE_SQLITE.
+- cJSON: incluido directamente desde $IDF_PATH/components/json/cJSON/cJSON.c (no hay
+  CMakeLists.txt en el raíz de json en IDF 6.0.0).
+
+**Notas:**
+- sd_manifest_t se heap-alloca en process_app_dir() y NUNCA se libera — su memoria
+  vive para siempre porque app_manifest_t.name/icon apuntan a sus buffers.
+  Esto es intencional: apps dinámicas son permanentes en el registry hasta el próximo boot.
+- min_os_api check: apps que requieren OS_API_VERSION > 1 se descartan en esta fase
+  (actualmente OS_API_VERSION = 1 hardcodeado en os_app_discover.c).
+- F3 (SQLite) requiere add manual a idf_component.yml:
+    espressif/idf-sqlite3: "^1"
+  + idf.py update-dependencies antes de habilitar en menuconfig.
 
 ### Fase 5 — Task Manager y Pulido
 

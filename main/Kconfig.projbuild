@@ -1,5 +1,20 @@
 menu "Cyberdeck Configuration"
 
+    menu "OS Services"
+        config OS_ENABLE_SQLITE
+            bool "Enable SQLite database support"
+            default n
+            help
+                Enables the os_db API (os_db_open, os_db_exec, os_db_close).
+                Requires the espressif/idf-sqlite3 managed component.
+                To enable:
+                  1. Add to main/idf_component.yml: espressif/idf-sqlite3 "^1"
+                  2. Run: idf.py update-dependencies
+                  3. Enable this option in menuconfig
+                Adds ~300 KB of flash. Requires PSRAM for page cache.
+    endmenu
+
+
     menu "Display"
         config EXAMPLE_LCD_RGB_BOUNCE_BUFFER_HEIGHT
             int "RGB Bounce buffer height"

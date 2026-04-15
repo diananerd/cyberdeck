@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "os_core.h"   /* app_id_t — supports dynamic apps (id >= 256) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,7 +12,7 @@ extern "C" {
  * @brief Navigation intent. Describes which screen to navigate to and optional data.
  */
 typedef struct {
-    uint8_t  app_id;        /* Target app */
+    app_id_t app_id;        /* Target app (uint16_t — supports dynamic IDs >= 256) */
     uint8_t  screen_id;     /* Screen within the app (0 = main) */
     void    *data;          /* Heap-allocated, ownership transfers to target on_create */
     size_t   data_size;     /* Size of data allocation */

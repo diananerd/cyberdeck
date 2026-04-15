@@ -39,12 +39,18 @@ static void card_click_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Tapped app_id=%u", (unsigned)ctx->app_id);
 
     if (!app_registry_get(ctx->app_id)) {
-        ui_effect_toast("Coming soon...", 1500);
+        /* G3: differentiate script apps (no runtime) from unfinished built-ins */
+        const app_entry_t *raw = app_registry_get_raw(ctx->app_id);
+        if (raw && raw->manifest.type == APP_TYPE_SCRIPT) {
+            ui_effect_toast("Script runtime not available", 1500);
+        } else {
+            ui_effect_toast("Coming soon...", 1500);
+        }
         return;
     }
 
     intent_t intent = {
-        .app_id    = (uint8_t)ctx->app_id,
+        .app_id    = ctx->app_id,   /* app_id_t (uint16_t) — supports dynamic IDs */
         .screen_id = 0,
         .data      = NULL,
         .data_size = 0,

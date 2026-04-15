@@ -51,7 +51,7 @@ void app_manager_launch(app_id_t app_id, void *data, size_t data_size)
 {
     if (ui_lock(500)) {
         intent_t intent = {
-            .app_id    = (uint8_t)app_id,
+            .app_id    = app_id,
             .screen_id = 0,
             .data      = data,
             .data_size = data_size,

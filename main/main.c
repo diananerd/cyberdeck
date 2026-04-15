@@ -39,10 +39,15 @@
 #include "app_registry.h"
 #include "app_state.h"
 #include "app_manager.h"
+#include "os_app_discover.h"
 
 /* Apps */
 #include "app_launcher.h"
 #include "app_settings.h"
+
+/* OS Services (Phase 4) */
+#include "os_storage.h"
+#include "os_crash.h"
 
 #include "driver/usb_serial_jtag.h"
 
@@ -107,6 +112,9 @@ static void on_sdcard_mounted(void *arg, esp_event_base_t base,
         ui_unlock();
     }
     ESP_LOGI(TAG, "SD card mounted → state updated");
+    /* Re-scan for new SD apps when card is hot-plugged */
+    os_crash_init();
+    os_app_discover_sd();
 }
 
 static void on_sdcard_unmounted(void *arg, esp_event_base_t base,
@@ -239,12 +247,16 @@ static void poll_sd(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== CYBERDECK BOOT (Phase 4) ===");
+    ESP_LOGI(TAG, "=== CYBERDECK BOOT (Refactor Fase 4) ===");
 
     /* 1. NVS + Settings */
     ESP_ERROR_CHECK(svc_settings_init());
     svc_settings_inc_boot_count();
     ESP_LOGI(TAG, "Settings OK");
+
+    /* 1b. Storage registry */
+    ESP_ERROR_CHECK(os_storage_init());
+    ESP_LOGI(TAG, "OS Storage OK");
 
     /* 2. Event bus */
     ESP_ERROR_CHECK(svc_event_init());
@@ -357,6 +369,12 @@ void app_main(void)
         }
         svc_event_post(EVT_SDCARD_MOUNTED, NULL, 0);
         ESP_LOGI(TAG, "SD card mounted");
+
+        /* F4: log if the previous boot ended in a crash */
+        os_crash_init();
+
+        /* G2: discover and register apps from /sdcard/apps/ */
+        os_app_discover_sd();
     } else {
         ESP_LOGW(TAG, "SD card not available (continuing)");
     }
