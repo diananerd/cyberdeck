@@ -175,6 +175,10 @@ void ui_theme_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_text_color(ta, t->text, 0);
     lv_obj_set_style_text_font(ta, &CYBERDECK_FONT_MD, 0);
 
+    /* Placeholder text: dim primary so it reads as a hint */
+    lv_obj_set_style_text_color(ta, t->primary_dim, LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_text_font(ta, &CYBERDECK_FONT_MD, LV_PART_TEXTAREA_PLACEHOLDER);
+
     /* Cursor: primary color block (terminal underscore style) */
     lv_obj_set_style_border_color(ta, t->primary, LV_PART_CURSOR);
     lv_obj_set_style_border_width(ta, 2, LV_PART_CURSOR);
