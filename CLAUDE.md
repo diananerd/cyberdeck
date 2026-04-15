@@ -283,6 +283,197 @@ Do not use Unicode arrows (→, ◀, ●) directly as string literals — use th
 | `ui_theme_style_textarea(ta)` | Black bg, primary border, blinking cursor |
 | `ui_theme_style_scrollbar(obj)` | 2 px wide, dim color, radius 0 |
 
+## Navigation Flows & State Management
+
+### Activity Stack Model
+
+The system is a **push/pop stack** (max 4 slots). Slot 0 is always the launcher — it is never popped. Stack depth never exceeds 4: if full, slot [1] is evicted (not [0] nor the current top) and remaining entries shift down.
+
+```
+[0] Launcher  [1] Settings main  [2] WiFi list  [3] WiFi connect
+                                                 ↑ current (depth=4)
+```
+
+Each activity holds: `app_id`, `screen_id`, LVGL screen object, opaque `state*`, and lifecycle callbacks.
+
+### Lifecycle Callbacks
+
+| Callback | When called | Typical use |
+|---|---|---|
+| `on_create(screen, intent_data)` | Once, when pushed | Allocate state, create widgets, register event handlers, start timers |
+| `on_resume(screen, state)` | When activity becomes top again | Restart timers, re-scan, show keyboard |
+| `on_pause(screen, state)` | When another activity is pushed on top | Rarely used — most screens leave it NULL |
+| `on_destroy(screen, state)` | When popped or evicted | **Must** unregister event handlers, delete timers, free state |
+
+**`on_destroy` is synchronous.** It is called before returning from `ui_activity_pop()`, preventing dangling pointers. `on_pause` does not clean up — cleanup is `on_destroy`'s job.
+
+**Display rotation calls `on_destroy` + `on_create` on every active activity** (via `ui_activity_recreate_all()`), passing `NULL` as intent_data. Each screen must be rebuildable from NVS/`app_state_get()` alone — never assume intent_data is non-NULL in `on_create`.
+
+### Navigation APIs
+
+```c
+// Gesture → app_manager → activity stack
+app_manager_go_back();       // pop top (blocked while lockscreen active)
+app_manager_go_home();       // pop all except launcher (blocked while locked)
+app_manager_lock();          // push lockscreen + set nav_lock
+
+// Inside an activity (direct stack ops)
+ui_activity_push(app_id, screen_id, &cbs, intent_data);
+ui_activity_pop();
+
+// Cross-app navigation via intent (used from launcher)
+intent_t intent = { .app_id = APP_ID_SETTINGS, .screen_id = 0, .data = NULL };
+ui_intent_navigate(&intent);   // resolved by app_manager_init()
+```
+
+Settings sub-screens call `ui_activity_push()` directly (no intent needed — destination is known at compile time):
+```c
+// app_settings.c item_click_cb
+ui_activity_push(APP_ID_SETTINGS, scr_id, cbs, NULL);
+```
+
+### Intent Data (Parent → Child)
+
+Caller heap-allocates, `on_create` owns and must `free()`:
+
+```c
+// Caller (WiFi list → connect sub-screen)
+char *ssid = malloc(33);
+strncpy(ssid, ap_ssid, 32);
+ui_activity_push(APP_ID_SETTINGS, SETTINGS_SCR_WIFI + 100, &connect_cbs, ssid);
+
+// on_create of connect screen
+strncpy(s->ssid, (char *)intent_data, sizeof(s->ssid) - 1);
+free(intent_data);   // ownership transferred
+```
+
+Rules: heap only (no stack pointers), caller and callee agree on structure out-of-band, `NULL` is valid (no data).
+
+### Screen ID Conventions
+
+Each app owns a `screen_id` namespace. Main screen is always 0. Sub-screens use increments:
+- `SETTINGS_SCR_WIFI` = WiFi list screen
+- `SETTINGS_SCR_WIFI + 100` = WiFi connect sub-screen (avoids enum proliferation)
+- `APP_ID_LAUNCHER, screen_id=1` = lockscreen (special reserved)
+
+### State: Three Tiers
+
+| Tier | Where | Lifetime | Access |
+|---|---|---|---|
+| **Global device state** | `app_state.c` static struct | Forever | `app_state_get()` → read-only; updated by event handlers |
+| **Persistent settings** | NVS via `svc_settings` | Survives reboot | `svc_settings_get_*()` / `svc_settings_set_*()` |
+| **Activity local state** | Heap, set via `ui_activity_set_state(state)` | `on_create` → `on_destroy` | `ui_activity_current()->state` or passed into callbacks |
+
+Activities **read** global state and NVS in `on_create`. They **write** NVS on user action and rely on events to propagate changes back to global state. Never query a service directly from a UI update callback — read from `app_state_get()`.
+
+### Event Subscription Pattern
+
+Register in `on_create`, unregister in `on_destroy` — always both or neither:
+
+```c
+// on_create
+svc_event_register(EVT_WIFI_SCAN_DONE, scan_done_handler, NULL);
+
+// on_destroy
+svc_event_unregister(EVT_WIFI_SCAN_DONE, scan_done_handler);
+g_wifi_scr_state = NULL;   // clear global pointer BEFORE unregister returns
+```
+
+Event handlers execute on the **event-loop task** (not LVGL task). They must:
+1. Check a global screen pointer — if `NULL`, the screen was destroyed, return immediately.
+2. Acquire `ui_lock()`.
+3. Re-check the pointer (double-checked locking).
+4. Update LVGL widgets.
+5. Release `ui_unlock()`.
+
+```c
+static void scan_done_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (!g_wifi_scr_state) return;
+    if (ui_lock(200)) {
+        if (g_wifi_scr_state)
+            populate_scan_results(g_wifi_scr_state, ...);
+        ui_unlock();
+    }
+}
+```
+
+### Screen-Local State Machines
+
+When a screen has multi-step interaction, model it as an explicit enum state:
+
+```c
+// Security PIN screen (settings_security.c)
+typedef enum { SEC_STATE_IDLE, SEC_STATE_NEW_PIN, SEC_STATE_CONFIRM_PIN } sec_state_t;
+```
+
+State transitions live in a single `*_logic()` function — not scattered across callbacks. Callbacks feed events in; the logic function decides the next state and updates the UI.
+
+```
+IDLE ──[Set PIN tapped]──► NEW_PIN ──[4 digits + OK]──► CONFIRM_PIN
+                                                              │
+                           ◄──[mismatch, toast]──────────────┤
+                                                              │
+IDLE ◄──[match, save to NVS + enable]───────────────────────┘
+```
+
+### Keyboard Timing Rule
+
+Never show the keyboard in `on_create`. The screen is not yet the active display at that point. Show it in `on_resume`:
+
+```c
+static void connect_on_resume(lv_obj_t *screen, void *state) {
+    connect_state_t *s = state;
+    if (s) ui_keyboard_show(s->pass_ta);   // screen is active now
+}
+```
+
+### Back-Navigation Safety Rules
+
+1. **Load new screen before deleting old.** `ui_activity_pop()` calls `resume_top()` (loads previous screen via `lv_scr_load`) before `on_destroy` + `lv_obj_del` on the popped activity. Prevents `disp->act_scr` from pointing at a deleted object.
+
+2. **Pop-to-home loads launcher first.** `ui_activity_pop_to_home()` calls `lv_scr_load(stack[0].screen)` before the destroy loop. Prevents the same dangling-pointer crash on multi-level pops.
+
+3. **Lockscreen blocks all back/home navigation.** `app_manager_go_back()` and `ui_activity_pop_to_home()` both check `s_nav_lock` / `s_locked` and return early. No gesture can bypass the lockscreen.
+
+### Full Navigation Sequence (Launcher → WiFi → Connect → Back)
+
+```
+Boot: push Launcher (depth 1)
+  └─ on_create: build app grid
+
+Tap Settings card
+  └─ intent_navigate → push Settings main (depth 2)
+       on_create: build menu list
+
+Tap WiFi item
+  └─ push Settings/WiFi (depth 3)
+       on_create: alloc state, register EVT_WIFI_SCAN_DONE,
+                 build scan list, start scan + 12s timer
+
+[scan done, event-loop task]
+  └─ scan_done_handler: ui_lock → populate list → ui_unlock
+
+Tap AP row
+  └─ push Settings/WiFi+100 (depth 4)
+       on_create: copy SSID from intent, build password form
+       on_resume: show keyboard
+
+Tap CONNECT
+  └─ save creds to NVS, svc_wifi_connect(), ui_activity_pop()
+       → WiFi main on_resume: restart scan + timer   (depth 3)
+       → Connect on_destroy: hide keyboard, free state
+
+[EVT_WIFI_CONNECTED fires]
+  └─ main.c handler: app_state_update_wifi + statusbar update
+
+Back gesture ×2
+  └─ pop WiFi (depth 2): on_destroy: unregister handler, del timer
+  └─ pop Settings (depth 1): Launcher resumes
+
+Home gesture
+  └─ pop_to_home: load launcher, destroy remaining, launcher on_resume
+```
+
 ## Hardware Notes
 
 - **No Bluetooth Classic on ESP32-S3.** A2DP is impossible. Audio uses an optional external BT module on UART1 (GPIO 15/16), auto-detected at boot.
