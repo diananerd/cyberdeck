@@ -53,6 +53,23 @@ typedef enum {
 
     /* Navigation bar */
     EVT_NAV_PROCESSES,          /* data: NULL — show process manager */
+
+    /* Boot */
+    EVT_BOOT_COMPLETE,          /* data: NULL — fired at end of app_main boot sequence */
+
+    /* System resources */
+    EVT_MEMORY_LOW,             /* data: NULL — free heap dropped below threshold */
+    EVT_BATTERY_LOW,            /* data: NULL — battery pct <= low threshold */
+
+    /* App lifecycle */
+    EVT_APP_LAUNCHED,           /* data: uint8_t* app_id */
+    EVT_APP_TERMINATED,         /* data: uint8_t* app_id */
+
+    /* Dynamic SD apps */
+    EVT_SD_APP_DISCOVERED,      /* data: uint8_t* app_id (newly registered dynamic app) */
+
+    /* Theme */
+    EVT_THEME_CHANGED,          /* data: NULL — fired from ui_theme_apply() */
 } cyberdeck_event_id_t;
 
 /**

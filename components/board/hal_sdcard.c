@@ -93,6 +93,19 @@ esp_err_t hal_sdcard_mount(void)
     s_mounted = true;
     sdmmc_card_print_info(stdout, s_card);
     ESP_LOGI(TAG, "SD card mounted at %s", HAL_SDCARD_MOUNT_POINT);
+
+    /* Ensure standard directory structure exists.
+     * mkdir() returns EEXIST when already present — that is fine. */
+    const char *std_dirs[] = {
+        HAL_SDCARD_MOUNT_POINT "/apps",
+        HAL_SDCARD_MOUNT_POINT "/media",
+        HAL_SDCARD_MOUNT_POINT "/downloads",
+        HAL_SDCARD_MOUNT_POINT "/.cyberdeck",
+    };
+    for (int i = 0; i < (int)(sizeof(std_dirs) / sizeof(std_dirs[0])); i++) {
+        mkdir(std_dirs[i], 0755);
+    }
+
     return ESP_OK;
 }
 

@@ -614,15 +614,22 @@ Solo en headers publicos. Sin exagerar.
 
 ### Fase 1 — Fundamentos sin riesgo (empezar aqui, todo paralelo)
 
+**COMPLETADA** (2026-04-15) — build limpio, 0 warnings.
+
 ```
-A1  — tipos base os_core.h
-B5  — nuevos event IDs
-F1  — dirs en SD mount
-I1  — macro UI_LOCKED_SECTION
-I2  — settings_common.h
+A1  — tipos base os_core.h                ✅  components/os_core/include/os_core.h
+B5  — nuevos event IDs                    ✅  svc_event.h (+8 IDs nuevos)
+F1  — dirs en SD mount                    ✅  hal_sdcard_mount() crea /apps /media /downloads /.cyberdeck
+I1  — macro UI_LOCKED_SECTION             ✅  ui_engine.h
+I2  — settings_common.h                   ✅  components/apps/settings/settings_common.h
 ```
 
-### Fase 2 — Task Factory y Event Bus
+**Notas:**
+- `os_core` es un componente header-only: `CMakeLists.txt` con `SRCS` vacío, solo `INCLUDE_DIRS`.
+- Los dirs de SD mount (F1) son distintos a los que crea `hal_sdcard_format()` (/apps /books /music /system). mount crea los del OS; format recrea los de la app. Podría unificarse en Fase 4 (F2).
+- `settings_common.h` incluye todos los headers UI+services; cada settings_*.c puede incluirlo en lugar de 8-10 includes individuales. Migración de callers queda para I2 follow-up en Fase 5.
+
+### Fase 2 — Task Factory y Event Bus  ← SIGUIENTE
 
 ```
 A2  — os_task_create

@@ -82,6 +82,18 @@ bool ui_lock(int timeout_ms);
 void ui_unlock(void);
 
 /**
+ * @brief Execute code block with LVGL mutex held.
+ *        If the lock cannot be acquired within timeout_ms, the block is skipped.
+ *
+ * Usage:
+ *   UI_LOCKED_SECTION(200, {
+ *       lv_label_set_text(lbl, "hello");
+ *   });
+ */
+#define UI_LOCKED_SECTION(timeout_ms, code) \
+    do { if (ui_lock(timeout_ms)) { code; ui_unlock(); } } while (0)
+
+/**
  * @brief Notify LVGL task on VSYNC. Called from ISR.
  * @return true if higher priority task was woken
  */
