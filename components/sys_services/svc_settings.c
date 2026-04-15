@@ -147,18 +147,18 @@ esp_err_t svc_settings_wifi_set_auto_idx(uint8_t idx)
 
 /* ========== Display ========== */
 
-esp_err_t svc_settings_get_brightness(uint8_t *val)  { return get_u8("brightness", val, 100); }
+esp_err_t svc_settings_get_brightness(uint8_t *val)  { return get_u8("brightness", val, 80); }
 esp_err_t svc_settings_set_brightness(uint8_t val)   { return set_u8("brightness", val); }
 esp_err_t svc_settings_get_theme(uint8_t *val)       { return get_u8("theme", val, 0); }
 esp_err_t svc_settings_set_theme(uint8_t val)        { return set_u8("theme", val); }
-esp_err_t svc_settings_get_screen_timeout(uint16_t *val) { return get_u16("scr_timeout", val, 60); }
+esp_err_t svc_settings_get_screen_timeout(uint16_t *val) { return get_u16("scr_timeout", val, 120); }
 esp_err_t svc_settings_set_screen_timeout(uint16_t val)  { return set_u16("scr_timeout", val); }
 esp_err_t svc_settings_get_rotation(uint8_t *val)        { return get_u8("rotation", val, 0); }
 esp_err_t svc_settings_set_rotation(uint8_t val)         { return set_u8("rotation", val); }
 
 /* ========== Audio ========== */
 
-esp_err_t svc_settings_get_volume(uint8_t *val)      { return get_u8("volume", val, 80); }
+esp_err_t svc_settings_get_volume(uint8_t *val)      { return get_u8("volume", val, 50); }
 esp_err_t svc_settings_set_volume(uint8_t val)       { return set_u8("volume", val); }
 esp_err_t svc_settings_get_bt_paired(char *addr, size_t len) { return get_str("bt_paired", addr, len); }
 esp_err_t svc_settings_set_bt_paired(const char *addr)      { return set_str("bt_paired", addr); }

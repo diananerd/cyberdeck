@@ -120,7 +120,7 @@ static void display_on_create(lv_obj_t *screen, void *intent_data)
     cyberdeck_theme_id_t cur_theme = ui_theme_get_id();
     uint8_t cur_rotation = 0;
     svc_settings_get_rotation(&cur_rotation);
-    uint16_t cur_timeout = 60;
+    uint16_t cur_timeout = 120;
     svc_settings_get_screen_timeout(&cur_timeout);
 
     ui_statusbar_set_title("SETTINGS");

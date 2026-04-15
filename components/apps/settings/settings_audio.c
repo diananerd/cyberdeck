@@ -15,7 +15,7 @@
 static const char *TAG = "settings_audio";
 
 typedef struct {
-    lv_obj_t *vol_val;   /* data-row value label: "70%" */
+    lv_obj_t *vol_val;   /* data-row value label: "50%" */
     lv_obj_t *slider;
 } audio_state_t;
 
@@ -44,7 +44,7 @@ static void audio_on_create(lv_obj_t *screen, void *intent_data)
     if (!s) return;
     ui_activity_set_state(s);
 
-    uint8_t cur_vol = 70;
+    uint8_t cur_vol = 50;
     svc_settings_get_volume(&cur_vol);
 
     ui_statusbar_set_title("SETTINGS");
