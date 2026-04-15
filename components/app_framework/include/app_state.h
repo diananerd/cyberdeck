@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Runtime State
+ * CyberDeck — Runtime State
  * Centralizes volatile device state updated by service events.
  * Apps read this rather than querying services directly.
  */

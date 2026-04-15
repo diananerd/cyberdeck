@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Status bar
+ * CyberDeck — Status bar
  * Layout:
  *   LEFT:  Title polygon (parallelogram, primary fill, inverse/negative text)
  *            Shape: left/top/bottom edges flush, right side = 45° ascending diagonal

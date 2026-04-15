@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Task Factory API
+ * CyberDeck — OS Core: Task Factory API
  */
 
 #pragma once

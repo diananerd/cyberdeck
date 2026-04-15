@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Time
+ * CyberDeck — Settings > Time
  * SNTP sync status, current time, timezone offset.
  *
  * Auto-syncs on create if WiFi is connected and time is not synced.

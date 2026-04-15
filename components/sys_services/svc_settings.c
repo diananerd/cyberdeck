@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — NVS Settings service
+ * CyberDeck — NVS Settings service
  * Persistent key-value storage for all cyberdeck configuration.
  */
 

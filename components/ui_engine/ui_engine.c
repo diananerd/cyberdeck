@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — LVGL porting layer
+ * CyberDeck — LVGL porting layer
  * Adapted from Waveshare ESP32-S3-Touch-LCD-4.3 example (lvgl_port.c)
  */
 

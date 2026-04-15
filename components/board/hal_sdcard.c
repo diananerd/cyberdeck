@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — SD Card driver (SPI mode)
+ * CyberDeck — SD Card driver (SPI mode)
  * CS via CH422G EXIO4. USB_SEL (bit 5) MUST stay LOW.
  * Based on Waveshare SD example, adapted for new I2C API.
  */

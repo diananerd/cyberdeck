@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — App Registry implementation
+ * CyberDeck — App Registry implementation
  */
 
 #include "app_registry.h"

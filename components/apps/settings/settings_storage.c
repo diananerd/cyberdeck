@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Storage
+ * CyberDeck — Settings > Storage
  *
  * Shows SD card status and space breakdown.
  * Subscribes to EVT_SDCARD_MOUNTED / EVT_SDCARD_UNMOUNTED so the UI

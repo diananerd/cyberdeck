@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Cyberdeck theme system
+ * CyberDeck — Cyberdeck theme system
  * Terminal-inspired monochromatic themes with outlined LVGL widgets.
  */
 

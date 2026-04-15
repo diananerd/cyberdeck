@@ -1,4 +1,4 @@
-# S3 Cyber-Deck
+# CyberDeck
 
 ESP32-S3 firmware for the [Waveshare ESP32-S3-Touch-LCD-4.3](https://www.waveshare.com/esp32-s3-touch-lcd-4.3.htm) board — an OS-like launcher with a terminal-aesthetic UI built on ESP-IDF and LVGL 8.
 

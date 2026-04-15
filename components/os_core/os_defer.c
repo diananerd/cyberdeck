@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Deferred execution
+ * CyberDeck — OS Core: Deferred execution
  *
  * os_defer usa esp_timer one-shot. Cada llamada crea y destruye su propio timer —
  * adecuado para usos ocasionales. No usar en hot paths (crear muchos timers por segundo).

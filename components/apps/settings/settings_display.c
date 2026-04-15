@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Display
+ * CyberDeck — Settings > Display
  * Theme selector, rotation toggle, screen timeout.
  *
  * Groups are separated by spacing only (no dividers).

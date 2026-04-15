@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Battery ADC driver
+ * CyberDeck — Battery ADC driver
  * Reads battery voltage via ADC on GPIO 6.
  */
 

@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — App Manager
+ * CyberDeck — App Manager
  * High-level API for launching apps and managing navigation.
  * Wires the app registry into the intent system at boot.
  */

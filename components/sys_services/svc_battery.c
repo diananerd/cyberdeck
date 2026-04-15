@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Battery monitoring service
+ * CyberDeck — Battery monitoring service
  * Lee el ADC cada 30s via os_poller (sin task dedicada).
  * Llamar svc_battery_start() y luego os_poller_start() en app_main.
  */

@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Lock Screen
+ * CyberDeck — Lock Screen
  * Full-screen (no statusbar/navbar), 4-digit PIN entry via LVGL numpad.
  * Hides system bars on create, restores on destroy.
  */

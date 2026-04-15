@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Time service
+ * CyberDeck — Time service
  * SNTP sync on WiFi connect, RTC bridge, periodic status bar update.
  */
 

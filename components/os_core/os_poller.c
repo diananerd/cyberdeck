@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Poller task
+ * CyberDeck — OS Core: Poller task
  *
  * Task única en Core 0 que itera la lista de pollers cada 100 ms y
  * llama a los que han alcanzado su intervalo.

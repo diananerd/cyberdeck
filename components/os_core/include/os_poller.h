@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Poller
+ * CyberDeck — OS Core: Poller
  *
  * Un único FreeRTOS task (`os_poller_task`) que ejecuta funciones periódicas
  * de forma cooperativa, reemplazando N tasks del patrón:

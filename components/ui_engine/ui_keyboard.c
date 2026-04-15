@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — On-screen keyboard
+ * CyberDeck — On-screen keyboard
  * Terminal-styled LVGL keyboard with cyberdeck theme colors.
  */
 

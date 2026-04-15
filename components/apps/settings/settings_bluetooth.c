@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Bluetooth
+ * CyberDeck — Settings > Bluetooth
  * BT module status and paired device info.
  * Actual A2DP functionality deferred to Phase 6.
  *

@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — WiFi STA service
+ * CyberDeck — WiFi STA service
  * Manages WiFi connection, scan, auto-reconnect.
  */
 

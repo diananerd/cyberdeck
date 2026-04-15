@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — HTTPS download service with resume
+ * CyberDeck — HTTPS download service with resume
  * FreeRTOS task on Core 0, processes a queue of download requests.
  */
 

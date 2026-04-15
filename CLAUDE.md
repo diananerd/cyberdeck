@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-S3 Cyber-Deck — ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-LCD-4.3 board. A modular, OS-like UI application built with ESP-IDF (v6.0.0), LVGL 8.4.0, and FreeRTOS. 800x480 RGB LCD, GT911 touch, CH422G I/O expander, PCF85063A RTC, SD card, PSRAM, 8MB flash.
+CyberDeck — ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-LCD-4.3 board. A modular, OS-like UI application built with ESP-IDF (v6.0.0), LVGL 8.4.0, and FreeRTOS. 800x480 RGB LCD, GT911 touch, CH422G I/O expander, PCF85063A RTC, SD card, PSRAM, 8MB flash.
 
 ## Build & Flash Commands
 
@@ -142,7 +142,7 @@ Font aliases defined in `ui_theme.h`:
 **Copy rules:**
 - All labels, titles, and button text are **ALL CAPS** (`"SETTINGS"`, `"MASTER VOLUME:"`, `"CANCEL"`, `"OK"`).
 - Field name labels end with a colon+space (`"SSID:"`, `"IP:"`, `"CHANNEL:"`).
-- Status bar title: `"S3 CYBERDECK"` (the product name, always that exact string).
+- Status bar title: `"CYBERDECK"` (the product name, always that exact string).
 - Stub/coming-soon toast: `"Coming soon..."` (only exception to all-caps, it's a toast message).
 
 ### Spacing System

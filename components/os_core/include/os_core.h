@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: tipos base y constantes del sistema operativo.
+ * CyberDeck — OS Core: tipos base y constantes del sistema operativo.
  *
  * Este header define los tipos fundamentales que comparten todos los tracks
  * del refactor (task factory, event bus, registro dinámico de apps, storage).

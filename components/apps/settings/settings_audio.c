@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Audio
+ * CyberDeck — Settings > Audio
  * Volume control — auto-saves on slider change, no button needed.
  */
 

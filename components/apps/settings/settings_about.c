@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > About
+ * CyberDeck — Settings > About
  * Device identity, firmware details, and OTA update trigger.
  *
  * Layout: technical data breakdown (label/value pairs),

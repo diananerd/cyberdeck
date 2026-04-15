@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Deferred execution
+ * CyberDeck — OS Core: Deferred execution
  *
  * os_defer  — ejecuta fn(arg) una vez después de delay_ms (usa esp_timer one-shot).
  * os_ui_post — ejecuta fn(arg) en el LVGL task en el siguiente tick (usa lv_async_call).

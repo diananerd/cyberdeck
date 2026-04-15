@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Intent-based navigation
+ * CyberDeck — Intent-based navigation
  * Bridges the intent system to the activity stack.
  * Navigation is resolved via a callback registered by app_manager_init().
  */

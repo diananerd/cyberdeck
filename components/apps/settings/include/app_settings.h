@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings App
+ * CyberDeck — Settings App
  * Main menu + sub-screen IDs for all settings categories.
  */
 

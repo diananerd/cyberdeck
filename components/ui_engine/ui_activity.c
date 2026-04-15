@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Activity stack manager
+ * CyberDeck — Activity stack manager
  * Manages a stack of up to 4 activities with lifecycle callbacks.
  */
 

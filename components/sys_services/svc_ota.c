@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OTA update service
+ * CyberDeck — OTA update service
  * HTTPS OTA via esp_https_ota, runs in a dedicated task.
  */
 

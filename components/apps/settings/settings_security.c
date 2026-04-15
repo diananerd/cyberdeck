@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > Security
+ * CyberDeck — Settings > Security
  * PIN lock enable/disable and PIN change.
  * 4-digit numeric entry via LVGL number keyboard.
  *

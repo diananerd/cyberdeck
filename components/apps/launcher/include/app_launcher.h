@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Launcher App
+ * CyberDeck — Launcher App
  * Home screen grid + lock screen.
  */
 

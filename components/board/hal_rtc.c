@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — PCF85063A RTC driver
+ * CyberDeck — PCF85063A RTC driver
  * I2C real-time clock on the shared bus (addr 0x51).
  */
 

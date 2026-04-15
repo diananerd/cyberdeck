@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Event bus service
+ * CyberDeck — Event bus service
  * Wraps esp_event with a dedicated cyberdeck event loop.
  */
 

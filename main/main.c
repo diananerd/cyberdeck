@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Main boot sequence
+ * CyberDeck — Main boot sequence
  * Phase 4: Launcher + Settings (app_framework, app_launcher, app_settings)
  */
 
@@ -239,7 +239,7 @@ static void poll_sd(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== S3 CYBER-DECK BOOT (Phase 4) ===");
+    ESP_LOGI(TAG, "=== CYBERDECK BOOT (Phase 4) ===");
 
     /* 1. NVS + Settings */
     ESP_ERROR_CHECK(svc_settings_init());

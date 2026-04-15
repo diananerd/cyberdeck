@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Common widget builders
+ * CyberDeck — Common widget builders
  * Reusable UI components with cyberdeck styling.
  */
 

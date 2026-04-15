@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings main menu
+ * CyberDeck — Settings main menu
  * List of settings categories; each item opens a sub-screen via ui_activity_push.
  */
 

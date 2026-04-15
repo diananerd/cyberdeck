@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Touch edge gesture detection
+ * CyberDeck — Touch edge gesture detection
  * Replaces physical buttons since GPIO 0 is owned by LCD.
  *
  * Gestures:

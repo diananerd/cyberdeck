@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — UI effects: toast, confirm dialog, loading overlay
+ * CyberDeck — UI effects: toast, confirm dialog, loading overlay
  * All effects render on lv_layer_top(), independent of the activity stack.
  */
 

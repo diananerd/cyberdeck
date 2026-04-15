@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Event Bus con ownership por app
+ * CyberDeck — OS Core: Event Bus con ownership por app
  *
  * Extiende svc_event con:
  *  - Tracking de owner por suscripción.

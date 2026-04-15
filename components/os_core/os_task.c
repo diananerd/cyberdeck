@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Task Factory
+ * CyberDeck — OS Core: Task Factory
  *
  * Todas las tasks del sistema pasan por os_task_create() en lugar de llamar
  * xTaskCreate / xTaskCreatePinnedToCore directamente.

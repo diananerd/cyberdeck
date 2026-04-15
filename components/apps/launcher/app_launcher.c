@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Launcher home screen
+ * CyberDeck — Launcher home screen
  * Reads app list from the app registry, sorts alphabetically, and shows a
  * flex-wrap grid of app cards.  Tapping a card navigates if on_create is
  * registered, otherwise shows a "Coming soon" toast.
@@ -170,7 +170,7 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
         }
     }
 
-    ui_statusbar_set_title("S3 CYBERDECK");
+    ui_statusbar_set_title("CYBERDECK");
     ESP_LOGI(TAG, "Created (%dx%d, card=%dpx, apps=%d)",
              cols, rows, (int)card_sz, app_count);
 }
@@ -179,7 +179,7 @@ static void launcher_on_resume(lv_obj_t *screen, void *state)
 {
     (void)screen;
     (void)state;
-    ui_statusbar_set_title("S3 CYBERDECK");
+    ui_statusbar_set_title("CYBERDECK");
 }
 
 static const activity_cbs_t s_launcher_cbs = {

@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — App Registry
+ * CyberDeck — App Registry
  * Central table of registered apps and their activity lifecycle callbacks.
  */
 

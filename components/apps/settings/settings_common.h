@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings screens: includes y tipos comunes.
+ * CyberDeck — Settings screens: includes y tipos comunes.
  *
  * Incluir este header en cada settings_*.c en lugar de repetir los includes
  * individualmente. Agrega aquí los includes que aparecen en ≥2 settings files.

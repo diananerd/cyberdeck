@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Runtime state store
+ * CyberDeck — Runtime state store
  */
 
 #include "app_state.h"

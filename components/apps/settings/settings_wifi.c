@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Settings > WiFi
+ * CyberDeck — Settings > WiFi
  *
  * Main screen: current connection details + auto-scanned network list.
  * No saved-networks management — credentials are stored transparently

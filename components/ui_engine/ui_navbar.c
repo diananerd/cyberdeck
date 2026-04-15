@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — Navigation bar
+ * CyberDeck — Navigation bar
  *
  * Landscape: right sidebar, UI_NAVBAR_THICK wide, flex COLUMN, left border
  * Portrait:  bottom bar,   UI_NAVBAR_THICK tall, flex ROW,    top  border

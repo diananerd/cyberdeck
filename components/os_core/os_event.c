@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — OS Core: Event Bus con ownership por app
+ * CyberDeck — OS Core: Event Bus con ownership por app
  *
  * Implementación de os_event_subscribe / os_event_subscribe_ui /
  * os_event_unsubscribe / os_event_unsubscribe_all.

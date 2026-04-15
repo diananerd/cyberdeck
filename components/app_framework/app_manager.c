@@ -1,5 +1,5 @@
 /*
- * S3 Cyber-Deck — App Manager
+ * CyberDeck — App Manager
  * Bridges ui_intent -> app_registry, and provides navigation helpers
  * for use from non-LVGL task contexts.
  */
