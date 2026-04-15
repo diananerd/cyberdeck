@@ -159,6 +159,10 @@ static void build_navbar(void)
                                  LV_IMG_CF_TRUE_COLOR);
             lv_obj_set_size(cv, ICON_SZ, ICON_SZ);
             lv_obj_clear_flag(cv, LV_OBJ_FLAG_CLICKABLE);
+            /* LVGL renders the canvas image slightly left of its logical
+             * center because the triangle tip sits near x=3. Shift right
+             * by 3 px so the glyph reads as optically centred in the button. */
+            lv_obj_set_style_translate_x(cv, 3, 0);
             draw_triangle(cv, t->bg_dark, t->primary);
 
         } else if (i == 1) {
