@@ -6,6 +6,7 @@
 #include "ui_effect.h"
 #include "ui_navbar.h"
 #include "ui_theme.h"
+#include "ui_common.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -83,10 +84,18 @@ void ui_effect_toast(const char *msg, uint16_t ms)
 
 /* ========== Confirm Dialog ========== */
 
+/* Dialog dimensions */
+#define DLG_W           380   /* dialog width in px                        */
+#define DLG_TITLE_H     28    /* title polygon height                      */
+#define DLG_BODY_PAD    24    /* inner body padding (2× the old 12)        */
+#define DLG_ROW_GAP     16    /* gap between body elements (2× old 8)      */
+#define DLG_BTN_GAP     24    /* extra top margin above button row         */
+
 typedef struct {
-    ui_confirm_cb_t cb;
-    void *ctx;
-    lv_obj_t *dialog;
+    ui_confirm_cb_t  cb;
+    void            *ctx;
+    lv_obj_t        *dialog;    /* backdrop — deleted to dismiss              */
+    lv_color_t      *title_buf; /* heap canvas buffer, freed on dismiss       */
 } confirm_state_t;
 
 static confirm_state_t confirm_st = { 0 };
@@ -95,29 +104,39 @@ static void confirm_btn_cb(lv_event_t *e)
 {
     bool confirmed = (bool)(uintptr_t)lv_event_get_user_data(e);
 
-    if (confirm_st.cb) {
-        confirm_st.cb(confirmed, confirm_st.ctx);
-    }
+    ui_confirm_cb_t cb  = confirm_st.cb;
+    void           *ctx = confirm_st.ctx;
 
+    /* Dismiss first so the callback can safely push new activities */
+    if (confirm_st.title_buf) {
+        lv_mem_free(confirm_st.title_buf);
+        confirm_st.title_buf = NULL;
+    }
     if (confirm_st.dialog) {
         lv_obj_del(confirm_st.dialog);
         confirm_st.dialog = NULL;
     }
     memset(&confirm_st, 0, sizeof(confirm_st));
+
+    if (cb) cb(confirmed, ctx);
 }
 
 void ui_effect_confirm(const char *title, const char *msg,
                        ui_confirm_cb_t cb, void *ctx)
 {
-    /* Remove existing dialog */
+    /* Dismiss any existing dialog */
     if (confirm_st.dialog) {
+        if (confirm_st.title_buf) {
+            lv_mem_free(confirm_st.title_buf);
+            confirm_st.title_buf = NULL;
+        }
         lv_obj_del(confirm_st.dialog);
         confirm_st.dialog = NULL;
     }
 
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    /* Semi-transparent backdrop */
+    /* ---- Semi-transparent backdrop ---- */
     lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
     lv_obj_align(backdrop, LV_ALIGN_CENTER, 0, 0);
@@ -127,70 +146,116 @@ void ui_effect_confirm(const char *title, const char *msg,
     lv_obj_set_style_radius(backdrop, 0, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Dialog box */
-    lv_obj_t *dialog = lv_obj_create(backdrop);
-    lv_obj_set_size(dialog, 350, LV_SIZE_CONTENT);
+    /* ---- Dialog box — no padding, title canvas goes edge-to-edge ---- */
     lv_coord_t dlg_x = effect_portrait() ? 0 : -(UI_NAVBAR_THICK / 2);
+    lv_obj_t *dialog = lv_obj_create(backdrop);
+    lv_obj_set_size(dialog, DLG_W, LV_SIZE_CONTENT);
     lv_obj_align(dialog, LV_ALIGN_CENTER, dlg_x, 0);
     lv_obj_set_style_bg_color(dialog, t->bg_dark, 0);
     lv_obj_set_style_bg_opa(dialog, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(dialog, t->primary, 0);
+    lv_obj_set_style_border_color(dialog, t->primary_dim, 0);
     lv_obj_set_style_border_width(dialog, 1, 0);
     lv_obj_set_style_radius(dialog, 2, 0);
-    lv_obj_set_style_pad_all(dialog, 12, 0);
+    lv_obj_set_style_pad_all(dialog, 0, 0);
+    lv_obj_set_style_pad_row(dialog, 0, 0);
     lv_obj_set_flex_flow(dialog, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(dialog, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(dialog, 8, 0);
+    lv_obj_set_flex_align(dialog, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_clear_flag(dialog, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Title */
+    /* ---- Title polygon (only when title provided) ---- */
     if (title && title[0]) {
-        lv_obj_t *lbl_title = lv_label_create(dialog);
-        lv_label_set_text(lbl_title, title);
-        lv_obj_set_style_text_color(lbl_title, t->text, 0);
-        lv_obj_set_style_text_font(lbl_title, &CYBERDECK_FONT_LG, 0);
+        lv_color_t *tbuf = (lv_color_t *)lv_mem_alloc(
+                               DLG_W * DLG_TITLE_H * sizeof(lv_color_t));
+        if (tbuf) {
+            confirm_st.title_buf = tbuf;
+
+            lv_obj_t *tc = lv_canvas_create(dialog);
+            lv_canvas_set_buffer(tc, tbuf, DLG_W, DLG_TITLE_H,
+                                 LV_IMG_CF_TRUE_COLOR);
+            lv_obj_set_size(tc, DLG_W, DLG_TITLE_H);
+            lv_obj_clear_flag(tc, LV_OBJ_FLAG_CLICKABLE);
+
+            /* Clear to dialog background */
+            lv_canvas_fill_bg(tc, t->bg_dark, LV_OPA_COVER);
+
+            /* Parallelogram — same geometry as statusbar title, but dim fill:
+             *   A(0,0) ─────────────────── B(W-1, 0)
+             *   |                         ╱  45° diagonal
+             *   D(0,H-1) ────── C(W-H, H-1)          */
+            lv_point_t pts[4] = {
+                {0,           0            },
+                {DLG_W - 1,   0            },
+                {DLG_W - DLG_TITLE_H, DLG_TITLE_H - 1},
+                {0,           DLG_TITLE_H - 1},
+            };
+            lv_draw_rect_dsc_t poly_dsc;
+            lv_draw_rect_dsc_init(&poly_dsc);
+            poly_dsc.bg_color     = t->primary_dim;
+            poly_dsc.bg_opa       = LV_OPA_COVER;
+            poly_dsc.border_width = 0;
+            poly_dsc.radius       = 0;
+            lv_canvas_draw_polygon(tc, pts, 4, &poly_dsc);
+
+            /* Title text: primary color on dim fill, FONT_SM, bold-by-offset */
+            lv_draw_label_dsc_t txt_dsc;
+            lv_draw_label_dsc_init(&txt_dsc);
+            txt_dsc.color = t->text;
+            txt_dsc.font  = &CYBERDECK_FONT_SM;
+            lv_coord_t ty = (DLG_TITLE_H -
+                             (lv_coord_t)CYBERDECK_FONT_SM.line_height) / 2;
+            if (ty < 0) ty = 0;
+            lv_coord_t max_w = (DLG_W - 1 - DLG_TITLE_H / 2) - 12 - 4;
+            lv_canvas_draw_text(tc, 12, ty, max_w, &txt_dsc, title);
+            lv_canvas_draw_text(tc, 13, ty, max_w - 1, &txt_dsc, title);
+        }
     }
 
-    /* Message */
+    /* ---- Body container — padded, description + buttons ---- */
+    lv_obj_t *body = lv_obj_create(dialog);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_height(body, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_set_style_pad_all(body, DLG_BODY_PAD, 0);
+    lv_obj_set_style_pad_row(body, DLG_ROW_GAP, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Description — protagonist: primary color, FONT_MD */
     if (msg && msg[0]) {
-        lv_obj_t *lbl_msg = lv_label_create(dialog);
+        lv_obj_t *lbl_msg = lv_label_create(body);
         lv_label_set_text(lbl_msg, msg);
-        lv_obj_set_style_text_color(lbl_msg, t->text_dim, 0);
-        lv_obj_set_style_text_font(lbl_msg, &CYBERDECK_FONT_MD, 0);
+        lv_label_set_long_mode(lbl_msg, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(lbl_msg, LV_PCT(100));
+        ui_theme_style_label(lbl_msg, &CYBERDECK_FONT_MD);
     }
 
-    /* Button row */
-    lv_obj_t *btn_row = lv_obj_create(dialog);
-    lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btn_row, 0, 0);
-    lv_obj_set_style_pad_all(btn_row, 0, 0);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btn_row, 8, 0);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+    /* Extra gap above buttons */
+    lv_obj_t *gap = lv_obj_create(body);
+    lv_obj_set_size(gap, LV_PCT(100), DLG_BTN_GAP);
+    lv_obj_set_style_bg_opa(gap, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(gap, 0, 0);
+    lv_obj_set_style_pad_all(gap, 0, 0);
+    lv_obj_clear_flag(gap, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Cancel button */
-    lv_obj_t *btn_cancel = lv_btn_create(btn_row);
-    ui_theme_style_btn(btn_cancel);
-    lv_obj_t *lbl_cancel = lv_label_create(btn_cancel);
-    lv_label_set_text(lbl_cancel, "CANCEL");
+    /* Button row — [CANCEL] secondary, [OK] primary */
+    lv_obj_t *btn_row = ui_common_action_row(body);
+
+    lv_obj_t *btn_cancel = ui_common_btn(btn_row, "CANCEL");
     lv_obj_add_event_cb(btn_cancel, confirm_btn_cb, LV_EVENT_CLICKED,
                         (void *)(uintptr_t)false);
 
-    /* OK button */
-    lv_obj_t *btn_ok = lv_btn_create(btn_row);
-    ui_theme_style_btn(btn_ok);
-    lv_obj_t *lbl_ok = lv_label_create(btn_ok);
-    lv_label_set_text(lbl_ok, "OK");
+    lv_obj_t *btn_ok = ui_common_btn(btn_row, "OK");
+    ui_common_btn_style_primary(btn_ok);
     lv_obj_add_event_cb(btn_ok, confirm_btn_cb, LV_EVENT_CLICKED,
                         (void *)(uintptr_t)true);
 
-    /* Store state */
-    confirm_st.cb = cb;
-    confirm_st.ctx = ctx;
-    confirm_st.dialog = backdrop;  /* Delete the whole backdrop to dismiss */
+    confirm_st.cb     = cb;
+    confirm_st.ctx    = ctx;
+    confirm_st.dialog = backdrop;
 
     ESP_LOGD(TAG, "Confirm dialog: %s", title ? title : "(no title)");
 }

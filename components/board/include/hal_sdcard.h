@@ -27,6 +27,14 @@ esp_err_t hal_sdcard_unmount(void);
 bool hal_sdcard_is_mounted(void);
 
 /**
+ * @brief Format the SD card as FAT32 and create the standard directory
+ *        structure (books, notes, tasks, music, podcasts, audiobooks,
+ *        system/downloads). Card must be mounted. Blocks until complete.
+ * @return ESP_OK on success
+ */
+esp_err_t hal_sdcard_format(void);
+
+/**
  * @brief Probe whether the SD card is physically present and accessible.
  *        Performs a lightweight statvfs call. Returns false if the card
  *        was removed since the last mount (even if s_mounted flag is true).

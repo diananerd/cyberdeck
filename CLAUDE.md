@@ -136,7 +136,7 @@ Font aliases defined in `ui_theme.h`:
 |---|---|---|
 | `CYBERDECK_FONT_SM` | Montserrat 18 | Statusbar, captions, dim labels, secondary text, toast messages |
 | `CYBERDECK_FONT_MD` | Montserrat 24 | Body text, list primary items, data row values, button labels |
-| `CYBERDECK_FONT_LG` | Montserrat 32 | Dialog titles, app card icons |
+| `CYBERDECK_FONT_LG` | Montserrat 32 | App card icons |
 | `CYBERDECK_FONT_XL` | Montserrat 40 | Launcher card icons, system time display, PIN dot characters |
 
 **Copy rules:**
@@ -160,7 +160,10 @@ Content flows inside `ui_common_content_area()` which sets `pad_all=16`, `pad_ro
 | Card icon-to-name gap | 4 px |
 | Dialog button row `pad_column` | 8 px |
 | Toast pad | 12 px horizontal, 6 px vertical |
-| Dialog pad | 12 px all |
+| Dialog body pad | 24 px all sides |
+| Dialog body row gap | 16 px |
+| Dialog button gap (above row) | 24 px transparent spacer |
+| Dialog title polygon height | 28 px |
 
 **Visual grouping rule:** Use `ui_common_section_gap()` between unrelated content groups — never dividers outside list views. `ui_common_divider()` is only valid inside a list container.
 
@@ -250,6 +253,30 @@ Do not use Unicode arrows (→, ◀, ●) directly as string literals — use th
 - "Coming soon": 1 500 ms.
 
 **Transitions:** No slide/fade animations between activities — instant screen swap. Only toasts and the loading overlay have animations (fade-in + timer dismiss).
+
+### Dialog / Toast / Modal Visual Rules
+
+All overlay elements (toast, confirm dialog, loading overlay) render on `lv_layer_top()`, independent of the activity stack.
+
+**Toast:**
+- Centered in the content area (shifted to exclude navbar: portrait → up by `UI_NAVBAR_THICK/2`, landscape → left by `UI_NAVBAR_THICK/2`)
+- `bg_card` fill, 1 px `primary` border, radius 2, pad 12 horizontal / 6 vertical
+- Text: `CYBERDECK_FONT_SM`, `text` color
+
+**Confirm dialog (`ui_effect_confirm`):**
+- Semi-transparent black backdrop (`LV_OPA_50`) covers full screen
+- Dialog box: `DLG_W=380 px` wide, `bg_dark` fill, 1 px `primary_dim` border, radius 2, `pad_all=0` (no internal padding — title canvas goes edge-to-edge)
+- **Title polygon** (only when title is non-empty): `DLG_TITLE_H=28 px` canvas at the top of the dialog. Parallelogram shape: same geometry as the statusbar title — left edge vertical, right edge a 45° ascending diagonal (`A(0,0)─B(W-1,0)─C(W-H,H-1)─D(0,H-1)`). Fill: `primary_dim`. Title text: `CYBERDECK_FONT_SM`, `text` color, bold-by-double-draw (+1 px offset), ALL CAPS.
+- **Body container**: `pad_all=24`, `pad_row=16` (flex column). The description is the **protagonist** — `CYBERDECK_FONT_MD`, `primary` color via `ui_theme_style_label`. Title is subordinate context.
+- **Button gap**: 24 px transparent spacer before the button row (`ui_common_action_row`)
+- Buttons: [CANCEL] outline (`ui_common_btn`), [OK] filled primary (`ui_common_btn_style_primary`)
+- Dismiss order: free canvas buffer → delete dialog backdrop → invoke callback. Ensures callback can safely push new activities.
+- Canvas buffer (`lv_color_t *`) is heap-allocated with `lv_mem_alloc` and stored in `confirm_state_t.title_buf`. LVGL does not own it — must free manually.
+
+**Loading overlay (`ui_effect_loading`):**
+- Full-screen semi-transparent black (`LV_OPA_70`)
+- Centered blinking `"_"` cursor, `CYBERDECK_FONT_XL`, `primary` color, shifted for navbar same as toast
+- Blinks at 500 ms interval via `lv_timer`
 
 ### ui_common Helper Reference
 

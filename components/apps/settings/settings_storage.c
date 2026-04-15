@@ -54,6 +54,7 @@ static void format_kb(char *buf, size_t n, uint32_t kb)
  * ================================================================ */
 
 static void mount_btn_cb(lv_event_t *e);   /* forward declaration */
+static void format_btn_cb(lv_event_t *e);  /* forward declaration */
 
 static void build_content(storage_scr_state_t *s)
 {
@@ -102,14 +103,24 @@ static void build_content(storage_scr_state_t *s)
         ui_theme_style_label_dim(hint, &CYBERDECK_FONT_SM);
     }
 
-    /* ---- Spacer + action button ---- */
+    /* ---- Spacer + action buttons ---- */
     ui_common_spacer(s->content);
 
     lv_obj_t *btn_row = ui_common_action_row(s->content);
-    lv_obj_t *toggle_btn = ui_common_btn(btn_row,
-        mounted ? "UNMOUNT" : "MOUNT SD CARD");
-    if (!mounted) ui_common_btn_style_primary(toggle_btn);
-    lv_obj_add_event_cb(toggle_btn, mount_btn_cb, LV_EVENT_CLICKED, s);
+
+    if (mounted) {
+        /* [UNMOUNT] secondary  [FORMAT] primary */
+        lv_obj_t *unmount_btn = ui_common_btn(btn_row, "UNMOUNT");
+        lv_obj_add_event_cb(unmount_btn, mount_btn_cb, LV_EVENT_CLICKED, s);
+
+        lv_obj_t *format_btn = ui_common_btn(btn_row, "FORMAT");
+        ui_common_btn_style_primary(format_btn);
+        lv_obj_add_event_cb(format_btn, format_btn_cb, LV_EVENT_CLICKED, s);
+    } else {
+        lv_obj_t *mount_btn = ui_common_btn(btn_row, "MOUNT SD CARD");
+        ui_common_btn_style_primary(mount_btn);
+        lv_obj_add_event_cb(mount_btn, mount_btn_cb, LV_EVENT_CLICKED, s);
+    }
 }
 
 /* ================================================================
@@ -137,8 +148,33 @@ static void mount_btn_cb(lv_event_t *e)
         }
     }
 
-    /* Rebuild immediately — already on the LVGL task, no lock needed */
     build_content(s);
+}
+
+static void do_format(bool confirmed, void *ctx)
+{
+    if (!confirmed) return;
+    storage_scr_state_t *s = (storage_scr_state_t *)ctx;
+
+    ui_effect_loading(true);
+    esp_err_t ret = hal_sdcard_format();
+    ui_effect_loading(false);
+
+    if (ret == ESP_OK) {
+        ui_effect_toast("Format complete", 1500);
+    } else {
+        ui_effect_toast("Format failed", 2000);
+    }
+
+    if (s) build_content(s);
+}
+
+static void format_btn_cb(lv_event_t *e)
+{
+    storage_scr_state_t *s = (storage_scr_state_t *)lv_event_get_user_data(e);
+    ui_effect_confirm("FORMAT SD CARD",
+                      "All data will be erased.\nThis cannot be undone.",
+                      do_format, s);
 }
 
 /* ================================================================

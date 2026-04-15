@@ -10,6 +10,7 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "esp_log.h"
+#include <sys/stat.h>
 
 static const char *TAG = "hal_sdcard";
 
@@ -112,6 +113,32 @@ esp_err_t hal_sdcard_unmount(void)
 bool hal_sdcard_is_mounted(void)
 {
     return s_mounted;
+}
+
+esp_err_t hal_sdcard_format(void)
+{
+    if (!s_mounted || !s_card) return ESP_ERR_INVALID_STATE;
+
+    ESP_LOGI(TAG, "Formatting SD card...");
+    esp_err_t ret = esp_vfs_fat_sdcard_format(HAL_SDCARD_MOUNT_POINT, s_card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Format failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Create standard project directory structure */
+    const char *dirs[] = {
+        HAL_SDCARD_MOUNT_POINT "/apps",
+        HAL_SDCARD_MOUNT_POINT "/books",
+        HAL_SDCARD_MOUNT_POINT "/music",
+        HAL_SDCARD_MOUNT_POINT "/system",
+    };
+    for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) {
+        mkdir(dirs[i], 0775);
+    }
+
+    ESP_LOGI(TAG, "SD card formatted and directories created");
+    return ESP_OK;
 }
 
 bool hal_sdcard_probe(void)
