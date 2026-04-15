@@ -57,8 +57,8 @@ static void bt_on_create(lv_obj_t *screen, void *intent_data)
         ui_theme_style_label_dim(hint_key, &CYBERDECK_FONT_SM);
 
         const char *wiring[] = {
-            "TX → GPIO 15",
-            "RX → GPIO 16",
+            "TX -> GPIO 15",
+            "RX -> GPIO 16",
             "BAUD: 115200",
             "Modules: BM62, RN52, etc.",
         };

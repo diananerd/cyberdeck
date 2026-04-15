@@ -106,7 +106,7 @@ static void sec_enter_logic(sec_state_t *s)
         } else {
             s->state = SEC_STATE_NEW_PIN;
             lv_label_set_text(s->instruction_lbl, "ENTER NEW PIN:");
-            lv_label_set_text(s->status_lbl, "PINs did not match — try again");
+            lv_label_set_text(s->status_lbl, "PINs did not match - try again");
             reset_pin_entry(s);
         }
     }
