@@ -180,7 +180,7 @@ static void on_nav_processes(void *arg, esp_event_base_t base,
     ESP_LOGI(TAG, "NAV: Processes");
     /* TODO: push a process manager activity once implemented */
     if (ui_lock(100)) {
-        ui_effect_toast("Processes — coming soon", 1500);
+        ui_effect_toast("Processes - coming soon", 1500);
         ui_unlock();
     }
 }
@@ -381,7 +381,7 @@ void app_main(void)
 
     /* Boot complete toast */
     if (ui_lock(100)) {
-        ui_effect_toast("BOOT OK — Phase 4", 2000);
+        ui_effect_toast("BOOT OK - Phase 4", 2000);
         ui_unlock();
     }
 
