@@ -63,6 +63,13 @@ extern "C" {
 esp_err_t ui_engine_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle_t tp_handle);
 
 /**
+ * @brief Set display rotation at runtime (software rotation).
+ *        Must be called with the LVGL mutex held.
+ * @param rotation 0 = landscape (800x480), 1 = portrait (480x800)
+ */
+void ui_engine_set_rotation(uint8_t rotation);
+
+/**
  * @brief Take LVGL mutex. Must be called before any LVGL API usage from non-LVGL tasks.
  * @param timeout_ms Timeout in ms. -1 = block indefinitely.
  * @return true if mutex was taken

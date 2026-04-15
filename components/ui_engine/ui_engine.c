@@ -17,6 +17,8 @@
 static const char *TAG = "ui_engine";
 static SemaphoreHandle_t lvgl_mux;
 static TaskHandle_t lvgl_task_handle = NULL;
+static lv_disp_t *s_disp = NULL;
+static uint8_t s_rotation = 0;  /* 0=landscape, 1=portrait */
 
 /* --- Flush callbacks (anti-tearing) --- */
 
@@ -142,6 +144,10 @@ static lv_disp_t *display_init(esp_lcd_panel_handle_t panel_handle)
     disp_drv.direct_mode = 1;
 #endif
 
+    /* Enable software rotation support */
+    disp_drv.sw_rotate = 1;
+    disp_drv.rotated = LV_DISP_ROT_NONE;
+
     return lv_disp_drv_register(&disp_drv);
 }
 
@@ -157,8 +163,14 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     bool pressed = esp_lcd_touch_get_coordinates(tp, &x, &y, NULL, &cnt, 1);
 
     if (pressed && cnt > 0) {
-        data->point.x = x;
-        data->point.y = y;
+        if (s_rotation == 1) {
+            /* Portrait 90° CW: swap axes, mirror new X */
+            data->point.x = (UI_ENGINE_V_RES - 1) - y;
+            data->point.y = x;
+        } else {
+            data->point.x = x;
+            data->point.y = y;
+        }
         data->state = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
@@ -223,6 +235,7 @@ esp_err_t ui_engine_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
 
     lv_disp_t *disp = display_init(lcd_handle);
     assert(disp);
+    s_disp = disp;
 
     if (tp_handle) {
         lv_indev_t *indev = indev_init(tp_handle);
@@ -257,6 +270,18 @@ void ui_unlock(void)
 {
     assert(lvgl_mux && "ui_engine_init must be called first");
     xSemaphoreGiveRecursive(lvgl_mux);
+}
+
+void ui_engine_set_rotation(uint8_t rotation)
+{
+    if (!s_disp) return;
+    s_rotation = rotation;
+    if (rotation == 1) {
+        lv_disp_set_rotation(s_disp, LV_DISP_ROT_90);
+    } else {
+        lv_disp_set_rotation(s_disp, LV_DISP_ROT_NONE);
+    }
+    ESP_LOGI(TAG, "Display rotation set to %s", rotation ? "portrait" : "landscape");
 }
 
 bool ui_engine_notify_vsync(void)

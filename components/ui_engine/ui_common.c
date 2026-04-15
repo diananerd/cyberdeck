@@ -42,11 +42,11 @@ lv_obj_t *ui_common_content_area(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(cont, 0, 0);
     lv_obj_set_style_radius(cont, 0, 0);
-    lv_obj_set_style_pad_all(cont, 8, 0);
-    lv_obj_set_style_pad_top(cont, 4, 0);
+    lv_obj_set_style_pad_all(cont, 16, 0);
+    lv_obj_set_style_pad_top(cont, 8, 0);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(cont, 4, 0);
+    lv_obj_set_style_pad_row(cont, 8, 0);
 
     /* Scrollbar */
     ui_theme_style_scrollbar(cont);
@@ -114,7 +114,7 @@ lv_obj_t *ui_common_list_add_two_line(lv_obj_t *list, const char *primary,
     ui_theme_style_list_item(row);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(row, 2, 0);
+    lv_obj_set_style_pad_row(row, 4, 0);
 
     lv_obj_t *lbl1 = lv_label_create(row);
     lv_label_set_text(lbl1, primary ? primary : "");
@@ -162,9 +162,9 @@ lv_obj_t *ui_common_grid(lv_obj_t *parent, uint8_t cols, lv_coord_t row_h)
     lv_obj_set_height(grid, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_pad_all(grid, 4, 0);
-    lv_obj_set_style_pad_column(grid, 8, 0);
-    lv_obj_set_style_pad_row(grid, 8, 0);
+    lv_obj_set_style_pad_all(grid, 8, 0);
+    lv_obj_set_style_pad_column(grid, 12, 0);
+    lv_obj_set_style_pad_row(grid, 12, 0);
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
 
@@ -182,7 +182,7 @@ lv_obj_t *ui_common_grid_cell(lv_obj_t *grid, const char *icon,
                          LV_GRID_ALIGN_STRETCH, row, 1);
     lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(cell, 4, 0);
+    lv_obj_set_style_pad_row(cell, 6, 0);
     lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
 
@@ -220,7 +220,7 @@ lv_obj_t *ui_common_card(lv_obj_t *parent, const char *title,
     ui_theme_style_container(card);
     lv_obj_set_size(card, w, h);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 4, 0);
+    lv_obj_set_style_pad_row(card, 8, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     if (title && title[0]) {
@@ -279,7 +279,7 @@ lv_obj_t *ui_common_divider(lv_obj_t *parent)
     const cyberdeck_theme_t *t = ui_theme_get();
 
     lv_obj_t *line = lv_obj_create(parent);
-    lv_obj_set_size(line, LV_PCT(100), 1);
+    lv_obj_set_size(line, LV_PCT(100), 2);
     lv_obj_set_style_bg_color(line, t->primary_dim, 0);
     lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(line, 0, 0);

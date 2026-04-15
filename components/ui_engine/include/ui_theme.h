@@ -7,22 +7,19 @@
 extern "C" {
 #endif
 
-/* ---------- Font aliases (fallback to Montserrat 14 until Roboto Mono generated) ---------- */
-
-/* Generate with: lv_font_conv --bpp 4 --size <N> --font RobotoMono-Regular.ttf -r 0x20-0x7F --format lvgl -o font_roboto_mono_<N>.c */
-/* Once generated, place in components/ui_engine/fonts/ and replace these externs */
+/* ---------- Font aliases ---------- */
 
 #ifndef CYBERDECK_FONT_SM
-#define CYBERDECK_FONT_SM      lv_font_montserrat_14   /* target: Roboto Mono 12 */
+#define CYBERDECK_FONT_SM      lv_font_montserrat_18   /* statusbar, captions */
 #endif
 #ifndef CYBERDECK_FONT_MD
-#define CYBERDECK_FONT_MD      lv_font_montserrat_14   /* target: Roboto Mono 14 */
+#define CYBERDECK_FONT_MD      lv_font_montserrat_24   /* body text, list items */
 #endif
 #ifndef CYBERDECK_FONT_LG
-#define CYBERDECK_FONT_LG      lv_font_montserrat_14   /* target: Roboto Mono 18 */
+#define CYBERDECK_FONT_LG      lv_font_montserrat_32   /* subheadings */
 #endif
 #ifndef CYBERDECK_FONT_XL
-#define CYBERDECK_FONT_XL      lv_font_montserrat_14   /* target: Roboto Mono 24 */
+#define CYBERDECK_FONT_XL      lv_font_montserrat_40   /* card icons, titles */
 #endif
 
 /* ---------- Theme IDs ---------- */

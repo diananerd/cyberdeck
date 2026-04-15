@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-#define UI_STATUSBAR_HEIGHT  20
+#define UI_STATUSBAR_HEIGHT  36
 
 /**
  * @brief Create the status bar on lv_layer_top().
@@ -18,8 +18,9 @@ void ui_statusbar_init(void);
  * @brief Update the time display. Call periodically or on time sync.
  * @param hour 0-23
  * @param minute 0-59
+ * @param second 0-59
  */
-void ui_statusbar_set_time(uint8_t hour, uint8_t minute);
+void ui_statusbar_set_time(uint8_t hour, uint8_t minute, uint8_t second);
 
 /**
  * @brief Update WiFi icon state.
