@@ -1,6 +1,9 @@
 /*
  * S3 Cyber-Deck — Settings > About
- * Shows firmware version, board info, boot count, OTA trigger.
+ * Device identity, firmware details, and OTA update trigger.
+ *
+ * Layout: technical data breakdown (label/value pairs),
+ * OTA URL at bottom, [Check for Update] action button.
  */
 
 #include "app_settings.h"
@@ -13,6 +16,7 @@
 #include "svc_ota.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
+#include "esp_chip_info.h"
 #include <stdio.h>
 
 static const char *TAG = "settings_about";
@@ -38,53 +42,69 @@ static void about_on_create(lv_obj_t *screen, void *intent_data)
 
     lv_obj_t *content = ui_common_content_area(screen);
 
-    /* Firmware version */
+    /* ---- Firmware info ---- */
     const esp_app_desc_t *desc = esp_app_get_description();
-    char ver_str[64];
-    snprintf(ver_str, sizeof(ver_str), "Firmware: %s", desc ? desc->version : "0.1.0");
-    lv_obj_t *ver_lbl = lv_label_create(content);
-    lv_label_set_text(ver_lbl, ver_str);
-    ui_theme_style_label(ver_lbl, &CYBERDECK_FONT_MD);
 
-    /* IDF version */
-    char idf_str[64];
-    snprintf(idf_str, sizeof(idf_str), "IDF: %s", IDF_VER);
-    lv_obj_t *idf_lbl = lv_label_create(content);
-    lv_label_set_text(idf_lbl, idf_str);
-    ui_theme_style_label_dim(idf_lbl, &CYBERDECK_FONT_SM);
+    char ver_str[32];
+    snprintf(ver_str, sizeof(ver_str), "%s", desc ? desc->version : "0.1.0");
+    ui_common_data_row(content, "FIRMWARE:", ver_str);
 
-    /* App name */
-    char app_str[64];
-    snprintf(app_str, sizeof(app_str), "App: %s", desc ? desc->project_name : "cyberdeck");
-    lv_obj_t *app_lbl = lv_label_create(content);
-    lv_label_set_text(app_lbl, app_str);
-    ui_theme_style_label_dim(app_lbl, &CYBERDECK_FONT_SM);
+    char idf_str[24];
+    snprintf(idf_str, sizeof(idf_str), "%s", IDF_VER);
+    ui_common_data_row(content, "IDF VERSION:", idf_str);
+
+    char app_str[32];
+    snprintf(app_str, sizeof(app_str), "%s", desc ? desc->project_name : "cyberdeck");
+    ui_common_data_row(content, "APPLICATION:", app_str);
+
+    /* Build date */
+    char build_str[36];
+    snprintf(build_str, sizeof(build_str), "%.16s %.8s",
+             desc ? desc->date : "?", desc ? desc->time : "");
+    ui_common_data_row(content, "BUILD DATE:", build_str);
 
     /* Boot count */
     uint32_t boot_count = 0;
     svc_settings_get_boot_count(&boot_count);
-    char boot_str[32];
-    snprintf(boot_str, sizeof(boot_str), "Boot count: %lu", (unsigned long)boot_count);
-    lv_obj_t *boot_lbl = lv_label_create(content);
-    lv_label_set_text(boot_lbl, boot_str);
-    ui_theme_style_label_dim(boot_lbl, &CYBERDECK_FONT_SM);
+    char boot_str[16];
+    snprintf(boot_str, sizeof(boot_str), "%lu", (unsigned long)boot_count);
+    ui_common_data_row(content, "BOOT COUNT:", boot_str);
 
-    ui_common_divider(content);
+    /* Chip model */
+    esp_chip_info_t chip = {0};
+    esp_chip_info(&chip);
+    char chip_str[32];
+    snprintf(chip_str, sizeof(chip_str), "ESP32-S3  rev %d  %d cores",
+             chip.revision, chip.cores);
+    ui_common_data_row(content, "CHIP:", chip_str);
 
-    /* OTA URL */
+    /* Flash size (from build config) */
+    ui_common_data_row(content, "FLASH:", CONFIG_ESPTOOLPY_FLASHSIZE);
+
+    /* Section gap: device info → OTA section */
+    ui_common_section_gap(content);
+
+    /* ---- OTA section ---- */
     char ota_url[128] = {0};
     svc_settings_get_ota_url(ota_url, sizeof(ota_url));
-    char ota_str[160];
-    snprintf(ota_str, sizeof(ota_str), "OTA: %s",
-             (ota_url[0] != '\0') ? ota_url : "(not set)");
+    const char *ota_display = (ota_url[0] != '\0') ? ota_url : "(not configured)";
+
+    lv_obj_t *ota_key = lv_label_create(content);
+    lv_label_set_text(ota_key, "OTA ENDPOINT:");
+    ui_theme_style_label_dim(ota_key, &CYBERDECK_FONT_SM);
+
     lv_obj_t *ota_lbl = lv_label_create(content);
-    lv_label_set_text(ota_lbl, ota_str);
+    lv_label_set_text(ota_lbl, ota_display);
     lv_label_set_long_mode(ota_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ota_lbl, LV_PCT(100));
-    ui_theme_style_label_dim(ota_lbl, &CYBERDECK_FONT_SM);
+    ui_theme_style_label(ota_lbl, &CYBERDECK_FONT_MD);
 
-    /* Trigger OTA button */
-    lv_obj_t *ota_btn = ui_common_btn_full(content, "Check for OTA Update");
+    /* ---- Spacer + action button ---- */
+    ui_common_spacer(content);
+
+    lv_obj_t *btn_row = ui_common_action_row(content);
+    lv_obj_t *ota_btn = ui_common_btn(btn_row, "Check for Update");
+    ui_common_btn_style_primary(ota_btn);
     lv_obj_add_event_cb(ota_btn, ota_btn_cb, LV_EVENT_CLICKED, NULL);
 }
 

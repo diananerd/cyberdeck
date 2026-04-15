@@ -120,9 +120,45 @@ lv_obj_t *ui_common_btn_full(lv_obj_t *parent, const char *text);
 /* ========== Divider ========== */
 
 /**
- * @brief Create a horizontal divider line.
+ * @brief Create a horizontal divider line (for list views only).
  */
 lv_obj_t *ui_common_divider(lv_obj_t *parent);
+
+/* ========== Data display helpers ========== */
+
+/**
+ * @brief Create a stacked data row: small dim label above larger primary value.
+ * @param parent  Parent container
+ * @param label   Field name (shown small, dimmed)
+ * @param value   Field value (shown larger, primary color)
+ * @return The value label object — caller can call lv_label_set_text() to update it.
+ */
+lv_obj_t *ui_common_data_row(lv_obj_t *parent, const char *label, const char *value);
+
+/**
+ * @brief Create a fixed-height transparent gap between logical sections.
+ *        Adds ~18 px of visual breathing room on top of the normal row spacing,
+ *        creating a clear Gestalt separation between unrelated content groups.
+ */
+lv_obj_t *ui_common_section_gap(lv_obj_t *parent);
+
+/**
+ * @brief Create an invisible spacer that absorbs remaining flex space.
+ *        Place before an action_row to pin buttons to the bottom.
+ */
+lv_obj_t *ui_common_spacer(lv_obj_t *parent);
+
+/**
+ * @brief Create a right-aligned row for [secondary][primary] action buttons.
+ * @return The row container — add buttons via ui_common_btn().
+ */
+lv_obj_t *ui_common_action_row(lv_obj_t *parent);
+
+/**
+ * @brief Re-style an existing button as a solid primary (filled) CTA.
+ *        Call after ui_common_btn() to promote it to primary action.
+ */
+void ui_common_btn_style_primary(lv_obj_t *btn);
 
 #ifdef __cplusplus
 }

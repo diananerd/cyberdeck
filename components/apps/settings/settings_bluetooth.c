@@ -2,6 +2,9 @@
  * S3 Cyber-Deck — Settings > Bluetooth
  * BT module status and paired device info.
  * Actual A2DP functionality deferred to Phase 6.
+ *
+ * Layout: data breakdown (module, status, device, paired addr).
+ * Wiring instructions shown when module is absent.
  */
 
 #include "app_settings.h"
@@ -9,7 +12,6 @@
 #include "ui_theme.h"
 #include "ui_statusbar.h"
 #include "ui_common.h"
-#include "ui_effect.h"
 #include "app_state.h"
 #include "svc_settings.h"
 #include "esp_log.h"
@@ -25,57 +27,46 @@ static void bt_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_t *content = ui_common_content_area(screen);
     const cyberdeck_state_t *state = app_state_get();
 
-    /* Module status */
-    lv_obj_t *mod_lbl = lv_label_create(content);
-    lv_label_set_text(mod_lbl, state->bt_module_present
-                       ? "BT Module: Detected"
-                       : "BT Module: Not detected");
-    ui_theme_style_label(mod_lbl, &CYBERDECK_FONT_MD);
+    /* ---- Module status ---- */
+    ui_common_data_row(content, "BT MODULE:",
+                       state->bt_module_present ? "DETECTED" : "NOT DETECTED");
 
     if (state->bt_module_present) {
         /* Connection status */
-        lv_obj_t *conn_lbl = lv_label_create(content);
-        lv_label_set_text(conn_lbl, state->bt_connected
-                           ? "Status: Connected"
-                           : "Status: Disconnected");
-        ui_theme_style_label_dim(conn_lbl, &CYBERDECK_FONT_SM);
+        ui_common_data_row(content, "STATUS:",
+                           state->bt_connected ? "CONNECTED" : "DISCONNECTED");
 
+        /* Connected device name */
         if (state->bt_connected && state->bt_device_name[0] != '\0') {
-            char dev_str[64];
-            snprintf(dev_str, sizeof(dev_str), "Device: %s", state->bt_device_name);
-            lv_obj_t *dev_lbl = lv_label_create(content);
-            lv_label_set_text(dev_lbl, dev_str);
-            ui_theme_style_label_dim(dev_lbl, &CYBERDECK_FONT_SM);
+            ui_common_data_row(content, "DEVICE:", state->bt_device_name);
         }
-
-        ui_common_divider(content);
 
         /* Paired address from NVS */
         char paired[32] = {0};
         svc_settings_get_bt_paired(paired, sizeof(paired));
-        if (paired[0] != '\0') {
-            char pa_str[64];
-            snprintf(pa_str, sizeof(pa_str), "Paired: %s", paired);
-            lv_obj_t *pa_lbl = lv_label_create(content);
-            lv_label_set_text(pa_lbl, pa_str);
-            ui_theme_style_label_dim(pa_lbl, &CYBERDECK_FONT_SM);
-        } else {
-            lv_obj_t *pa_lbl = lv_label_create(content);
-            lv_label_set_text(pa_lbl, "No paired device");
-            ui_theme_style_label_dim(pa_lbl, &CYBERDECK_FONT_SM);
-        }
-    } else {
-        ui_common_divider(content);
+        ui_common_data_row(content, "PAIRED ADDR:",
+                           paired[0] != '\0' ? paired : "(none)");
 
-        lv_obj_t *hint = lv_label_create(content);
-        lv_label_set_text(hint,
-            "Connect a Bluetooth Classic module\n"
-            "(BM62, RN52, etc.) to UART1\n"
-            "GPIO 15 (TX) / GPIO 16 (RX)\n"
-            "at 115200 baud.");
-        lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(hint, LV_PCT(100));
-        ui_theme_style_label_dim(hint, &CYBERDECK_FONT_SM);
+    } else {
+        /* Section gap: module status → wiring instructions */
+        ui_common_section_gap(content);
+
+        /* Wiring instructions */
+        lv_obj_t *hint_key = lv_label_create(content);
+        lv_label_set_text(hint_key, "UART1 WIRING:");
+        ui_theme_style_label_dim(hint_key, &CYBERDECK_FONT_SM);
+
+        const char *wiring[] = {
+            "TX → GPIO 15",
+            "RX → GPIO 16",
+            "BAUD: 115200",
+            "Modules: BM62, RN52, etc.",
+        };
+        for (int i = 0; i < 4; i++) {
+            lv_obj_t *lbl = lv_label_create(content);
+            lv_label_set_text(lbl, wiring[i]);
+            ui_theme_style_label(lbl, &CYBERDECK_FONT_MD);
+        }
     }
 
     ESP_LOGI(TAG, "BT settings shown (module=%s)",

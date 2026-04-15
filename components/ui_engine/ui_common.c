@@ -43,10 +43,9 @@ lv_obj_t *ui_common_content_area(lv_obj_t *parent)
     lv_obj_set_style_border_width(cont, 0, 0);
     lv_obj_set_style_radius(cont, 0, 0);
     lv_obj_set_style_pad_all(cont, 16, 0);
-    lv_obj_set_style_pad_top(cont, 8, 0);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(cont, 12, 0);
+    lv_obj_set_style_pad_row(cont, 14, 0);
 
     /* Allow children (e.g. focused-state button outline) to draw outside
      * the container's content box without being clipped. */
@@ -78,18 +77,25 @@ lv_obj_t *ui_common_list(lv_obj_t *parent)
 lv_obj_t *ui_common_list_add(lv_obj_t *list, const char *text,
                               uint32_t index, ui_list_cb_t cb, void *data)
 {
+    const cyberdeck_theme_t *t = ui_theme_get();
+
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
     ui_theme_style_list_item(row);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Text color on the ROW so child labels inherit it on both normal and pressed.
+     * Child labels must NOT set an explicit text_color — they inherit from the row. */
+    lv_obj_set_style_text_color(row, t->text, 0);
+    lv_obj_set_style_text_color(row, t->bg_dark, LV_STATE_PRESSED);
+
     lv_obj_t *label = lv_label_create(row);
     lv_label_set_text(label, text ? text : "");
-    ui_theme_style_label(label, &CYBERDECK_FONT_MD);
+    /* Font only — no explicit color so inheritance from row works */
+    lv_obj_set_style_text_font(label, &CYBERDECK_FONT_MD, 0);
 
     if (cb) {
-        /* Allocate context — LVGL doesn't free user_data, but these live for the screen's lifetime */
         list_item_ctx_t *ctx = lv_mem_alloc(sizeof(list_item_ctx_t));
         if (ctx) {
             ctx->cb = cb;
@@ -99,8 +105,6 @@ lv_obj_t *ui_common_list_add(lv_obj_t *list, const char *text,
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
             lv_obj_add_event_cb(row, list_item_click_cb, LV_EVENT_CLICKED, ctx);
 
-            /* Press feedback: invert colors */
-            const cyberdeck_theme_t *t = ui_theme_get();
             lv_obj_set_style_bg_color(row, t->primary, LV_STATE_PRESSED);
             lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
         }
@@ -113,6 +117,8 @@ lv_obj_t *ui_common_list_add_two_line(lv_obj_t *list, const char *primary,
                                        const char *secondary, uint32_t index,
                                        ui_list_cb_t cb, void *data)
 {
+    const cyberdeck_theme_t *t = ui_theme_get();
+
     lv_obj_t *row = lv_obj_create(list);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
@@ -121,13 +127,19 @@ lv_obj_t *ui_common_list_add_two_line(lv_obj_t *list, const char *primary,
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(row, 4, 0);
 
+    /* Color on the row so children inherit on both states */
+    lv_obj_set_style_text_color(row, t->text, 0);
+    lv_obj_set_style_text_color(row, t->bg_dark, LV_STATE_PRESSED);
+
     lv_obj_t *lbl1 = lv_label_create(row);
     lv_label_set_text(lbl1, primary ? primary : "");
-    ui_theme_style_label(lbl1, &CYBERDECK_FONT_MD);
+    lv_obj_set_style_text_font(lbl1, &CYBERDECK_FONT_MD, 0);
 
     lv_obj_t *lbl2 = lv_label_create(row);
     lv_label_set_text(lbl2, secondary ? secondary : "");
-    ui_theme_style_label_dim(lbl2, &CYBERDECK_FONT_SM);
+    lv_obj_set_style_text_font(lbl2, &CYBERDECK_FONT_SM, 0);
+    /* Dim secondary via opacity so color inheritance still works on press */
+    lv_obj_set_style_text_opa(lbl2, LV_OPA_60, 0);
 
     if (cb) {
         list_item_ctx_t *ctx = lv_mem_alloc(sizeof(list_item_ctx_t));
@@ -139,7 +151,6 @@ lv_obj_t *ui_common_list_add_two_line(lv_obj_t *list, const char *primary,
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
             lv_obj_add_event_cb(row, list_item_click_cb, LV_EVENT_CLICKED, ctx);
 
-            const cyberdeck_theme_t *t = ui_theme_get();
             lv_obj_set_style_bg_color(row, t->primary, LV_STATE_PRESSED);
             lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
         }
@@ -294,4 +305,92 @@ lv_obj_t *ui_common_divider(lv_obj_t *parent)
     lv_obj_set_style_pad_all(line, 0, 0);
     lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
     return line;
+}
+
+/* ========== Data display row (dim label + primary value) ========== */
+
+lv_obj_t *ui_common_data_row(lv_obj_t *parent, const char *label, const char *value)
+{
+    lv_obj_t *cont = lv_obj_create(parent);
+    lv_obj_set_width(cont, LV_SIZE_CONTENT);
+    lv_obj_set_height(cont, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_style_pad_all(cont, 0, 0);
+    lv_obj_set_style_pad_row(cont, 2, 0);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(cont);
+    lv_label_set_text(lbl, label ? label : "");
+    ui_theme_style_label_dim(lbl, &CYBERDECK_FONT_SM);
+
+    lv_obj_t *val = lv_label_create(cont);
+    lv_label_set_text(val, value ? value : "--");
+    ui_theme_style_label(val, &CYBERDECK_FONT_MD);
+
+    return val;  /* caller can save this to update the value later */
+}
+
+/* ========== Section gap (fixed-height gap between logical sections) ========== */
+
+lv_obj_t *ui_common_section_gap(lv_obj_t *parent)
+{
+    lv_obj_t *gap = lv_obj_create(parent);
+    lv_obj_set_size(gap, LV_PCT(100), 18);
+    lv_obj_set_style_bg_opa(gap, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(gap, 0, 0);
+    lv_obj_set_style_pad_all(gap, 0, 0);
+    lv_obj_clear_flag(gap, LV_OBJ_FLAG_SCROLLABLE);
+    return gap;
+}
+
+/* ========== Spacer (absorbs remaining flex space, pushes siblings down) ========== */
+
+lv_obj_t *ui_common_spacer(lv_obj_t *parent)
+{
+    lv_obj_t *spacer = lv_obj_create(parent);
+    lv_obj_set_size(spacer, 0, 0);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(spacer, 0, 0);
+    lv_obj_set_style_min_height(spacer, 0, 0);
+    lv_obj_set_style_pad_all(spacer, 0, 0);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_clear_flag(spacer, LV_OBJ_FLAG_SCROLLABLE);
+    return spacer;
+}
+
+/* ========== Action row (right-aligned row for [secondary][primary] buttons) ========== */
+
+lv_obj_t *ui_common_action_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    return row;
+}
+
+/* ========== Style a button as solid primary (main CTA) ========== */
+
+void ui_common_btn_style_primary(lv_obj_t *btn)
+{
+    const cyberdeck_theme_t *t = ui_theme_get();
+    lv_obj_set_style_bg_color(btn, t->primary, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if (lbl) lv_obj_set_style_text_color(lbl, t->bg_dark, 0);
+    lv_obj_set_style_bg_color(btn, t->primary_dim, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    if (lbl) lv_obj_set_style_text_color(lbl, t->bg_dark, LV_STATE_PRESSED);
 }
