@@ -305,7 +305,7 @@ static void populate_scan_results(wifi_scr_state_t *s,
         /* SSID label: font only, inherits color from row */
         char ssid_display[40];
         snprintf(ssid_display, sizeof(ssid_display),
-                 is_current ? "> %s" : "  %s", ssid);
+                 is_current ? "* %s" : "  %s", ssid);
         lv_obj_t *ssid_lbl = lv_label_create(row);
         lv_label_set_text(ssid_lbl, ssid_display);
         lv_obj_set_style_text_font(ssid_lbl, &CYBERDECK_FONT_MD, 0);

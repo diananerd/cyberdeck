@@ -71,7 +71,7 @@ static void sync_btn_cb(lv_event_t *e)
     if (svc_time_sync() == ESP_OK) {
         ui_effect_toast("SNTP sync started", 1500);
     } else {
-        ui_effect_toast("Sync failed — check WiFi", 2000);
+        ui_effect_toast("Sync failed - check WiFi", 2000);
     }
 }
 

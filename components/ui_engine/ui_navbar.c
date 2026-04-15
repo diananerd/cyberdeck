@@ -55,12 +55,12 @@ static void draw_triangle(lv_obj_t *canvas, lv_color_t bg, lv_color_t fg)
     ld.round_start = 1;
     ld.round_end   = 1;
 
-    /* Left-pointing ◀: taller — narrow margins top/bottom for more visual weight */
+    /* Left-pointing ◀: base pulled inward to be slightly narrower than tall */
     lv_point_t pts[4] = {
-        {ICON_SZ - 4, 2         },
+        {ICON_SZ - 9, 2         },
         {3,           ICON_SZ/2 },
-        {ICON_SZ - 4, ICON_SZ-3},
-        {ICON_SZ - 4, 2         },
+        {ICON_SZ - 9, ICON_SZ-3},
+        {ICON_SZ - 9, 2         },
     };
     lv_canvas_draw_line(canvas, pts, 4, &ld);
 }
