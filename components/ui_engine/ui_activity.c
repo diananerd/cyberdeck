@@ -159,3 +159,40 @@ void ui_activity_set_state(void *state)
     if (depth == 0) return;
     stack[depth - 1].state = state;
 }
+
+void ui_activity_recreate_all(void)
+{
+    /* Recreate each activity in-place so layouts adapt to new display dimensions.
+     * Called with LVGL mutex held (from EVT_DISPLAY_ROTATED handler). */
+    for (int i = 0; i < depth; i++) {
+        activity_t *a = &stack[i];
+        if (!a->screen || !a->cbs.on_create) continue;
+
+        /* Let the app clean up its state */
+        if (a->cbs.on_destroy) {
+            a->cbs.on_destroy(a->screen, a->state);
+        }
+        a->state = NULL;
+
+        /* Remove all children (layout objects), keep screen itself */
+        lv_obj_clean(a->screen);
+
+        /* Re-apply base screen styling */
+        const cyberdeck_theme_t *t = ui_theme_get();
+        lv_obj_set_style_bg_color(a->screen, t->bg_dark, 0);
+        lv_obj_set_style_bg_opa(a->screen, LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_top(a->screen, UI_STATUSBAR_HEIGHT + 2, 0);
+
+        /* Recreate layout with current display dimensions */
+        a->cbs.on_create(a->screen, NULL);
+
+        ESP_LOGD(TAG, "Recreated activity app=%d scr=%d", a->app_id, a->screen_id);
+    }
+
+    /* Reload the top screen */
+    if (depth > 0) {
+        lv_scr_load(stack[depth - 1].screen);
+    }
+
+    ESP_LOGI(TAG, "All %d activities recreated for rotation", depth);
+}

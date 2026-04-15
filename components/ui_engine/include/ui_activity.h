@@ -81,6 +81,15 @@ uint8_t ui_activity_depth(void);
  */
 void ui_activity_set_state(void *state);
 
+/**
+ * @brief Recreate all activities in the stack in-place.
+ *        For each entry: calls on_destroy (if set), clears screen children,
+ *        re-applies base styling, then calls on_create again with NULL intent.
+ *        Use this after a display rotation so all layouts adapt to the new dimensions.
+ *        Must be called with the LVGL mutex held.
+ */
+void ui_activity_recreate_all(void);
+
 #ifdef __cplusplus
 }
 #endif

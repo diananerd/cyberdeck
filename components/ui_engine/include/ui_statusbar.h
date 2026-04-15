@@ -47,6 +47,12 @@ void ui_statusbar_set_audio(bool playing);
 void ui_statusbar_set_sdcard(bool inserted);
 
 /**
+ * @brief Show/hide Bluetooth indicator.
+ * @param connected true = primary color, false = dim
+ */
+void ui_statusbar_set_bluetooth(bool connected);
+
+/**
  * @brief Set the title text (app name) in the center of the status bar.
  * @param title NULL or "" to clear
  */

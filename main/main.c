@@ -82,6 +82,21 @@ static void on_gesture_event(void *arg, esp_event_base_t base,
     }
 }
 
+/* ---------- Display rotation handler ---------- */
+
+static void on_display_rotated(void *arg, esp_event_base_t base,
+                               int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id;
+    uint8_t rotation = data ? *(uint8_t *)data : 0;
+    ESP_LOGI(TAG, "EVT_DISPLAY_ROTATED (%s) -> recreating all activities",
+             rotation ? "portrait" : "landscape");
+    if (ui_lock(500)) {
+        ui_activity_recreate_all();
+        ui_unlock();
+    }
+}
+
 /* ---------- Launcher app grid ---------- */
 
 typedef struct {
@@ -108,19 +123,16 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
     (void)intent_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    /* Read rotation setting: 0=landscape, 1=portrait */
-    uint8_t rotation = 0;
-    svc_settings_get_rotation(&rotation);
-    uint8_t cols = (rotation == 0) ? 5 : 3;
-    uint8_t rows = (LAUNCHER_APP_COUNT + cols - 1) / cols;  /* ceil */
-
     /*
-     * Compute square card size from the shorter axis.
-     * Use actual LVGL screen dimensions (accounts for rotation).
+     * Derive grid columns from the actual display width reported by LVGL.
+     * This is rotation-agnostic: landscape (800px) → 5 cols, portrait (480px) → 3 cols.
+     * No need to read the rotation setting here.
      */
     const lv_coord_t gap = 16;
     lv_disp_t *disp = lv_disp_get_default();
     const lv_coord_t avail_w = lv_disp_get_hor_res(disp);
+    uint8_t cols = (avail_w >= 600) ? 5 : 3;
+    uint8_t rows = (LAUNCHER_APP_COUNT + cols - 1) / cols;  /* ceil */
     const lv_coord_t avail_h = lv_disp_get_ver_res(disp) - UI_STATUSBAR_HEIGHT;
     lv_coord_t card_from_w = (avail_w - gap * (cols + 1)) / cols;
     lv_coord_t card_from_h = (avail_h - gap * (rows + 1)) / rows;
@@ -244,6 +256,7 @@ void app_main(void)
     if (ui_lock(1000)) {
         uint8_t saved_rotation = 0;
         svc_settings_get_rotation(&saved_rotation);
+        saved_rotation = 1;  /* TEMP: force portrait until Settings UI exists */
         ui_engine_set_rotation(saved_rotation);
         ESP_LOGI(TAG, "Rotation: %s", saved_rotation ? "portrait" : "landscape");
 
@@ -261,7 +274,7 @@ void app_main(void)
         ui_statusbar_set_time(0, 0, 0);
         ui_statusbar_set_wifi(false, 0);
         ui_statusbar_set_battery(0, false);
-        ui_statusbar_set_sdcard(true);  /* TODO: set from hal_sdcard_mount result */
+        ui_statusbar_set_sdcard(false);  /* TODO: set from hal_sdcard_mount result */
 
         ui_unlock();
     }
@@ -284,6 +297,9 @@ void app_main(void)
     svc_event_register(EVT_GESTURE_BACK, on_gesture_event, NULL);
     svc_event_register(EVT_GESTURE_LOCK, on_gesture_event, NULL);
     ESP_LOGI(TAG, "Gestures OK");
+
+    /* Register display rotation handler (recreates all activity layouts) */
+    svc_event_register(EVT_DISPLAY_ROTATED, on_display_rotated, NULL);
 
     /* 10. Battery ADC + monitor task */
     if (hal_battery_init() == ESP_OK) {
