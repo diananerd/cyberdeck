@@ -242,8 +242,8 @@ static void security_on_create(lv_obj_t *screen, void *intent_data)
 
     for (int i = 0; i < PIN_LEN; i++) {
         s->dots[i] = lv_label_create(dot_row);
-        lv_label_set_text(s->dots[i], "-");  /* en-dash */
-        lv_obj_set_style_text_color(s->dots[i], t->primary_dim, 0);
+        lv_label_set_text(s->dots[i], pin_en ? LV_SYMBOL_BULLET : "-");
+        lv_obj_set_style_text_color(s->dots[i], pin_en ? t->primary : t->primary_dim, 0);
         lv_obj_set_style_text_font(s->dots[i], &CYBERDECK_FONT_XL, 0);
     }
 
