@@ -42,6 +42,11 @@ void ui_statusbar_set_battery(uint8_t pct, bool charging);
 void ui_statusbar_set_audio(bool playing);
 
 /**
+ * @brief Show/hide SD card indicator.
+ */
+void ui_statusbar_set_sdcard(bool inserted);
+
+/**
  * @brief Set the title text (app name) in the center of the status bar.
  * @param title NULL or "" to clear
  */

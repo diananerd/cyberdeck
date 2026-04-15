@@ -14,9 +14,8 @@ static lv_obj_t *bar_obj     = NULL;
 static lv_obj_t *lbl_time    = NULL;
 static lv_obj_t *lbl_title   = NULL;
 
-/* WiFi indicator (icon + 4 signal bars) */
+/* WiFi signal bars (4 filled rectangles of increasing height) */
 static lv_obj_t *wifi_cont   = NULL;
-static lv_obj_t *wifi_icon   = NULL;
 static lv_obj_t *wifi_bars[4] = {NULL};
 
 /* Battery icon (outline body + fill + % label inside + bolt) */
@@ -25,6 +24,9 @@ static lv_obj_t *batt_fill   = NULL;
 static lv_obj_t *batt_tip    = NULL;
 static lv_obj_t *lbl_batt_pct = NULL;
 static lv_obj_t *batt_bolt   = NULL;   /* lightning bolt symbol (DC/charging) */
+
+/* SD card indicator */
+static lv_obj_t *lbl_sdcard  = NULL;
 
 /* Audio indicator (3 equalizer bars) */
 static lv_obj_t *audio_cont  = NULL;
@@ -66,29 +68,21 @@ void ui_statusbar_init(void)
     lv_obj_clear_flag(bar_obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_layout(bar_obj, 0, 0); /* no layout */
 
-    /* ---- WiFi icon + signal bars — far left ---- */
+    /* ---- WiFi signal bars — far left ---- */
     wifi_cont = lv_obj_create(bar_obj);
-    lv_obj_set_size(wifi_cont, 46, 24);
+    lv_obj_set_size(wifi_cont, 26, 24);
     lv_obj_set_style_bg_opa(wifi_cont, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(wifi_cont, 0, 0);
     lv_obj_set_style_pad_all(wifi_cont, 0, 0);
     lv_obj_clear_flag(wifi_cont, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(wifi_cont, LV_ALIGN_LEFT_MID, 4, 0);
 
-    /* WiFi icon (Font Awesome) */
-    wifi_icon = lv_label_create(wifi_cont);
-    lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(wifi_icon, t->text_dim, 0);
-    lv_obj_set_style_text_font(wifi_icon, &lv_font_montserrat_14, 0);
-    lv_obj_align(wifi_icon, LV_ALIGN_LEFT_MID, 0, 0);
-
     /* 4 filled bars: widths 4px, gap 2px, heights 6/10/16/22 */
     const lv_coord_t bw = 4, bg = 2;
     const lv_coord_t bh[] = {6, 10, 16, 22};
-    const lv_coord_t bars_x0 = 18; /* offset after icon */
     for (int i = 0; i < 4; i++) {
         wifi_bars[i] = make_rect(wifi_cont, bw, bh[i], t->text_dim);
-        lv_obj_align(wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, bars_x0 + i * (bw + bg), 0);
+        lv_obj_align(wifi_bars[i], LV_ALIGN_BOTTOM_LEFT, i * (bw + bg), 0);
     }
 
     /* ---- Battery icon — left, after WiFi ---- */
@@ -151,6 +145,13 @@ void ui_statusbar_init(void)
     audio_bar3 = make_rect(audio_cont, 4, 8, t->primary);
     lv_obj_align(audio_bar3, LV_ALIGN_BOTTOM_LEFT, 12, 0);
 
+    /* ---- SD card indicator — left of time ---- */
+    lbl_sdcard = lv_label_create(bar_obj);
+    lv_label_set_text(lbl_sdcard, LV_SYMBOL_SD_CARD);
+    lv_obj_set_style_text_color(lbl_sdcard, t->text_dim, 0);  /* dim = no SD */
+    lv_obj_set_style_text_font(lbl_sdcard, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_sdcard, LV_ALIGN_RIGHT_MID, -100, 0);
+
     /* ---- Time — far right ---- */
     lbl_time = lv_label_create(bar_obj);
     lv_label_set_text(lbl_time, "00:00:00");
@@ -187,7 +188,6 @@ void ui_statusbar_set_wifi(bool connected, int8_t rssi)
         lv_color_t c = (i < bars) ? t->primary : t->text_dim;
         lv_obj_set_style_bg_color(wifi_bars[i], c, 0);
     }
-    lv_obj_set_style_text_color(wifi_icon, connected ? t->primary : t->text_dim, 0);
 }
 
 void ui_statusbar_set_battery(uint8_t pct, bool charging)
@@ -244,6 +244,13 @@ void ui_statusbar_set_audio(bool playing)
     } else {
         lv_obj_add_flag(audio_cont, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+void ui_statusbar_set_sdcard(bool inserted)
+{
+    if (!lbl_sdcard) return;
+    const cyberdeck_theme_t *t = ui_theme_get();
+    lv_obj_set_style_text_color(lbl_sdcard, inserted ? t->text : t->text_dim, 0);
 }
 
 void ui_statusbar_set_title(const char *title)

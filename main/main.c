@@ -261,6 +261,7 @@ void app_main(void)
         ui_statusbar_set_time(0, 0, 0);
         ui_statusbar_set_wifi(false, 0);
         ui_statusbar_set_battery(0, false);
+        ui_statusbar_set_sdcard(true);  /* TODO: set from hal_sdcard_mount result */
 
         ui_unlock();
     }
