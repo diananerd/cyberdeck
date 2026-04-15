@@ -1,9 +1,6 @@
 /*
  * CyberDeck — Settings > Time
  * SNTP sync status, current time, timezone offset.
- *
- * Auto-syncs on create if WiFi is connected and time is not synced.
- * Layout: data rows + timezone stepper + [Sync][Save TZ] action row.
  */
 
 #include "app_settings.h"
@@ -22,8 +19,8 @@ static const char *TAG = "settings_time";
 
 typedef struct {
     int8_t      tz_offset;
-    lv_obj_t   *tz_val;        /* data-row value label for timezone */
-    lv_obj_t   *time_lbl;      /* large clock label — updated every second */
+    lv_obj_t   *tz_val;
+    lv_obj_t   *time_lbl;
     lv_timer_t *clock_timer;
 } time_state_t;
 
@@ -75,14 +72,14 @@ static void sync_btn_cb(lv_event_t *e)
     }
 }
 
-static void time_on_create(lv_obj_t *screen, void *intent_data)
+/* D1: returns state* */
+static void *time_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     time_state_t *s = (time_state_t *)lv_mem_alloc(sizeof(time_state_t));
-    if (!s) return;
-    ui_activity_set_state(s);
+    if (!s) return NULL;
 
     int8_t saved_tz = 0;
     svc_settings_get_tz_offset(&saved_tz);
@@ -92,7 +89,6 @@ static void time_on_create(lv_obj_t *screen, void *intent_data)
 
     lv_obj_t *content = ui_common_content_area(screen);
 
-    /* ---- Current time (large, primary) ---- */
     uint8_t h = 0, m = 0, sec = 0;
     svc_time_get_hms(&h, &m, &sec);
     char time_str[16];
@@ -107,20 +103,15 @@ static void time_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_set_style_text_font(s->time_lbl, &CYBERDECK_FONT_XL, 0);
     lv_obj_set_style_text_color(s->time_lbl, t->primary, 0);
 
-    /* Live clock — update every second like the statusbar */
     s->clock_timer = lv_timer_create(clock_tick_cb, 1000, s);
 
-    /* Section gap: clock → sync status */
     ui_common_section_gap(content);
 
-    /* ---- Sync status ---- */
     ui_common_data_row(content, "SNTP SYNC:",
                        svc_time_is_synced() ? "SYNCHRONIZED" : "NOT SYNCHRONIZED");
 
-    /* Section gap: sync status → timezone stepper */
     ui_common_section_gap(content);
 
-    /* ---- Timezone stepper ---- */
     lv_obj_t *tz_key = lv_label_create(content);
     lv_label_set_text(tz_key, "TIMEZONE:");
     ui_theme_style_label_dim(tz_key, &CYBERDECK_FONT_SM);
@@ -148,13 +139,11 @@ static void time_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_t *plus_btn = ui_common_btn(tz_row, "  +  ");
     lv_obj_add_event_cb(plus_btn, tz_plus_cb, LV_EVENT_CLICKED, s);
 
-    /* ---- Auto-sync if WiFi connected and not yet synced ---- */
     if (!svc_time_is_synced() && svc_wifi_is_connected()) {
         svc_time_sync();
         ESP_LOGI(TAG, "Auto-SNTP sync triggered");
     }
 
-    /* ---- Spacer + action row ---- */
     ui_common_spacer(content);
 
     lv_obj_t *btn_row = ui_common_action_row(content);
@@ -165,6 +154,8 @@ static void time_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_t *save_btn = ui_common_btn(btn_row, "Save TZ");
     ui_common_btn_style_primary(save_btn);
     lv_obj_add_event_cb(save_btn, save_btn_cb, LV_EVENT_CLICKED, s);
+
+    return s;
 }
 
 static void time_on_destroy(lv_obj_t *screen, void *state)

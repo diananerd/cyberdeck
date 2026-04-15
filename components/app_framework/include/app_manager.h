@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include "esp_err.h"
 #include "ui_activity.h"
+#include "os_core.h"  /* app_id_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,7 +28,7 @@ esp_err_t app_manager_init(void);
  * Use this from non-LVGL contexts (event handlers, tasks).
  * From inside LVGL callbacks use ui_intent_navigate() directly.
  */
-void app_manager_launch(uint8_t app_id, void *data, size_t data_size);
+void app_manager_launch(app_id_t app_id, void *data, size_t data_size);
 
 /** Pop the top activity (go back). Takes LVGL mutex. */
 void app_manager_go_back(void);

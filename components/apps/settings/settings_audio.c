@@ -25,24 +25,22 @@ static void slider_cb(lv_event_t *e)
     if (!s) return;
     int32_t val = lv_slider_get_value(s->slider);
 
-    /* Update display */
     char buf[8];
     snprintf(buf, sizeof(buf), "%ld%%", (long)val);
     lv_label_set_text(s->vol_val, buf);
 
-    /* Auto-save */
     svc_settings_set_volume((uint8_t)val);
     ESP_LOGI(TAG, "Volume: %ld%%", (long)val);
 }
 
-static void audio_on_create(lv_obj_t *screen, void *intent_data)
+/* D1: returns state* */
+static void *audio_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     audio_state_t *s = (audio_state_t *)lv_mem_alloc(sizeof(audio_state_t));
-    if (!s) return;
-    ui_activity_set_state(s);
+    if (!s) return NULL;
 
     uint8_t cur_vol = 50;
     svc_settings_get_volume(&cur_vol);
@@ -51,12 +49,10 @@ static void audio_on_create(lv_obj_t *screen, void *intent_data)
 
     lv_obj_t *content = ui_common_content_area(screen);
 
-    /* ---- Volume data row ---- */
     char buf[8];
     snprintf(buf, sizeof(buf), "%d%%", cur_vol);
     s->vol_val = ui_common_data_row(content, "MASTER VOLUME:", buf);
 
-    /* ---- Slider ---- */
     s->slider = lv_slider_create(content);
     lv_obj_set_width(s->slider, LV_PCT(100));
     lv_slider_set_range(s->slider, 0, 100);
@@ -72,6 +68,8 @@ static void audio_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_set_style_radius(s->slider, 2, LV_PART_KNOB);
 
     lv_obj_add_event_cb(s->slider, slider_cb, LV_EVENT_VALUE_CHANGED, s);
+
+    return s;
 }
 
 static void audio_on_destroy(lv_obj_t *screen, void *state)

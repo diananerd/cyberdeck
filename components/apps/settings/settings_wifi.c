@@ -9,9 +9,10 @@
  * Connect sub-screen: SSID + password form with keyboard shown immediately.
  *
  * Thread-safety:
- *   EVT_WIFI_SCAN_DONE fires on the event-loop task → must lock LVGL.
+ *   B4: scan_done_handler delivered in LVGL task via os_event_subscribe_ui —
+ *       no manual ui_lock needed. Global pointer guard kept for the
+ *       lv_async_call race: event may be queued before on_destroy clears state.
  *   Button callbacks fire on the LVGL task → no lock needed.
- *   g_wifi_scr_state is NULL while the screen is not active.
  */
 
 #include "app_settings.h"
@@ -25,7 +26,7 @@
 #include "ui_keyboard.h"
 #include "svc_settings.h"
 #include "svc_wifi.h"
-#include "svc_event.h"
+#include "os_event.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_wifi_types.h"
@@ -58,7 +59,8 @@ static const char *authmode_str(wifi_auth_mode_t m)
 
 /* ================================================================
  * WiFi Connect sub-screen
- * intent_data: heap-allocated char[33] with the target SSID.
+ * args->data: heap-allocated char[33] with the target SSID.
+ * owned=true → OS frees data after on_create returns; no manual free needed.
  * ================================================================ */
 
 typedef struct {
@@ -109,22 +111,18 @@ static void pass_ta_clicked_cb(lv_event_t *e)
     ui_keyboard_show(ta);
 }
 
-static void connect_on_create(lv_obj_t *screen, void *intent_data)
+/* D1: returns state* */
+static void *connect_on_create(lv_obj_t *screen, const view_args_t *args)
 {
     const cyberdeck_theme_t *t = ui_theme_get();
 
     connect_state_t *s = (connect_state_t *)lv_mem_alloc(sizeof(connect_state_t));
-    if (!s) {
-        if (intent_data) free(intent_data);
-        return;
-    }
+    if (!s) return NULL;
     memset(s, 0, sizeof(*s));
-    ui_activity_set_state(s);
 
-    if (intent_data) {
-        strncpy(s->ssid, (char *)intent_data, sizeof(s->ssid) - 1);
-        free(intent_data);
-    }
+    /* D6: SSID comes via args->data; owned=true so OS frees it — no manual free */
+    if (args && args->data)
+        strncpy(s->ssid, (const char *)args->data, sizeof(s->ssid) - 1);
 
     ui_statusbar_set_title("SETTINGS");
 
@@ -163,6 +161,8 @@ static void connect_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_t *conn_btn = ui_common_btn(btn_row, "Connect");
     ui_common_btn_style_primary(conn_btn);
     lv_obj_add_event_cb(conn_btn, connect_btn_cb, LV_EVENT_CLICKED, s);
+
+    return s;
 }
 
 static void connect_on_resume(lv_obj_t *screen, void *state)
@@ -196,8 +196,11 @@ typedef struct {
     lv_obj_t    *scan_list;        /* container for scan results              */
     lv_timer_t  *scan_timer;       /* periodic auto-scan timer                */
     char         forget_ssid[33];  /* SSID to clear on Forget tap             */
+    event_sub_t  scan_sub;         /* B4: subscription handle                 */
 } wifi_scr_state_t;
 
+/* Global pointer guard — needed for lv_async_call race in scan_done_handler.
+ * Event may be queued before on_destroy frees the state. */
 static wifi_scr_state_t *g_wifi_scr_state = NULL;
 
 /* ---- AP tap ---- */
@@ -214,8 +217,10 @@ static void ap_tap_cb(lv_event_t *e)
     strncpy(ssid_copy, ctx->ssid, 32);
     ssid_copy[32] = '\0';
 
-    ui_activity_push(APP_ID_SETTINGS, SETTINGS_SCR_WIFI + 100,
-                     &s_connect_cbs, ssid_copy);
+    /* D6: owned=true — OS calls free(ssid_copy) after connect_on_create returns */
+    view_args_t args = { .data = ssid_copy, .size = 33, .owned = true };
+    os_view_push(APP_ID_SETTINGS, SETTINGS_SCR_WIFI + 100,
+                 &s_connect_cbs, &args);
 }
 
 /* ---- Disconnect ---- */
@@ -324,26 +329,22 @@ static void populate_scan_results(wifi_scr_state_t *s,
     }
 }
 
-/* ---- Scan done event handler (event-loop task) ---- */
+/* ---- Scan done event handler (B4: delivered in LVGL task by os_event_subscribe_ui) ---- */
 
 static void scan_done_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
 {
-    (void)arg; (void)base; (void)id; (void)data;
+    (void)base; (void)id; (void)data;
+    /* Handler executes in LVGL task — no manual lock needed */
+    wifi_scr_state_t *s = (wifi_scr_state_t *)arg;
+    /* Guard: screen may have been destroyed while event was queued */
+    if (!s || s != g_wifi_scr_state) return;
 
     wifi_ap_record_t results[WIFI_SCAN_MAX];
     uint16_t count = WIFI_SCAN_MAX;
     svc_wifi_get_scan_results(results, &count);
     ESP_LOGI(TAG, "Scan done: %d APs", count);
-
-    if (!g_wifi_scr_state) return;
-
-    if (ui_lock(200)) {
-        if (g_wifi_scr_state) {
-            populate_scan_results(g_wifi_scr_state, results, count);
-        }
-        ui_unlock();
-    }
+    populate_scan_results(s, results, count);
 }
 
 /* ---- Auto-scan timer callback (LVGL task) ---- */
@@ -356,20 +357,23 @@ static void auto_scan_timer_cb(lv_timer_t *timer)
     svc_wifi_start_scan();
 }
 
-/* ---- Activity callbacks ---- */
+/* ---- Activity callbacks (D1) ---- */
 
-static void wifi_on_create(lv_obj_t *screen, void *intent_data)
+/* D1: returns state* */
+static void *wifi_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
 
     wifi_scr_state_t *s =
         (wifi_scr_state_t *)lv_mem_alloc(sizeof(wifi_scr_state_t));
-    if (!s) return;
+    if (!s) return NULL;
     memset(s, 0, sizeof(*s));
-    ui_activity_set_state(s);
+    s->scan_sub = EVENT_SUB_INVALID;
     g_wifi_scr_state = s;
 
-    svc_event_register(EVT_WIFI_SCAN_DONE, scan_done_handler, NULL);
+    /* B4: os_event_subscribe_ui — delivers in LVGL task, no manual lock */
+    s->scan_sub = os_event_subscribe_ui(APP_ID_SETTINGS, EVT_WIFI_SCAN_DONE,
+                                        scan_done_handler, s);
 
     ui_statusbar_set_title("SETTINGS");
     lv_obj_t *content = ui_common_content_area(screen);
@@ -469,6 +473,7 @@ static void wifi_on_create(lv_obj_t *screen, void *intent_data)
     s->scan_timer = lv_timer_create(auto_scan_timer_cb, WIFI_SCAN_INTERVAL_MS, s);
 
     ESP_LOGI(TAG, "WiFi screen created, auto-scan started");
+    return s;
 }
 
 static void wifi_on_resume(lv_obj_t *screen, void *state)
@@ -491,11 +496,12 @@ static void wifi_on_destroy(lv_obj_t *screen, void *state)
 {
     (void)screen;
     wifi_scr_state_t *s = (wifi_scr_state_t *)state;
-    svc_event_unregister(EVT_WIFI_SCAN_DONE, scan_done_handler);
+    /* Clear guard BEFORE unsubscribe — prevents queued handler from using freed state */
+    g_wifi_scr_state = NULL;
+    os_event_unsubscribe(s->scan_sub);
     if (s && s->scan_timer) {
         lv_timer_del(s->scan_timer);
     }
-    g_wifi_scr_state = NULL;
     lv_mem_free(state);
     ESP_LOGI(TAG, "WiFi screen destroyed");
 }

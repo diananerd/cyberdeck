@@ -1,6 +1,10 @@
 /*
  * CyberDeck — Activity stack manager
- * Manages a stack of up to 4 activities with lifecycle callbacks.
+ * Manages a stack of up to 8 activities with lifecycle callbacks.
+ *
+ * D1: on_create returns void* state (replaces ui_activity_set_state).
+ * D3: stack max=8, push fails instead of evicting when full.
+ * D6: view_args_t passed to on_create; owned data freed by OS after on_create.
  */
 
 #include "ui_activity.h"
@@ -21,8 +25,6 @@ static bool       s_nav_lock = false;
 
 static void apply_screen_padding(lv_obj_t *scr)
 {
-    /* Leave room for statusbar (top) and navbar (right in landscape, bottom in portrait).
-     * Uses 2px gap between content and the bar so borders don't overlap content. */
     lv_disp_t *d = lv_disp_get_default();
     bool portrait = lv_disp_get_hor_res(d) < lv_disp_get_ver_res(d);
 
@@ -57,7 +59,7 @@ static void destroy_entry(activity_t *a)
     lv_obj_del(a->screen);
     a->screen = NULL;
     a->state = NULL;
-    ESP_LOGD(TAG, "Destroyed activity app=%d scr=%d", a->app_id, a->screen_id);
+    ESP_LOGD(TAG, "Destroyed activity app=%d scr=%d", (int)a->app_id, a->screen_id);
 }
 
 static void pause_top(void)
@@ -87,30 +89,26 @@ void ui_activity_init(void)
 {
     memset(stack, 0, sizeof(stack));
     depth = 0;
-    ESP_LOGI(TAG, "Activity system initialized");
+    ESP_LOGI(TAG, "Activity system initialized (max=%d)", ACTIVITY_STACK_MAX);
 }
 
-bool ui_activity_push(uint8_t app_id, uint8_t screen_id,
-                      const activity_cbs_t *cbs, void *intent_data)
+bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
+                      const activity_cbs_t *cbs, const view_args_t *args)
 {
     if (!cbs || !cbs->on_create) {
         ESP_LOGE(TAG, "Cannot push activity without on_create callback");
         return false;
     }
 
+    /* D3: fail instead of silently evicting when stack is full */
+    if (depth >= ACTIVITY_STACK_MAX) {
+        ESP_LOGE(TAG, "Activity stack full (max=%d) — push rejected for app=%d",
+                 ACTIVITY_STACK_MAX, (int)app_id);
+        return false;
+    }
+
     /* Pause current top */
     pause_top();
-
-    /* If stack is full, destroy entry [1] and shift down */
-    if (depth >= ACTIVITY_STACK_MAX) {
-        destroy_entry(&stack[1]);
-        /* Shift entries [2..depth-1] down by one */
-        for (int i = 1; i < depth - 1; i++) {
-            stack[i] = stack[i + 1];
-        }
-        depth--;
-        ESP_LOGW(TAG, "Stack full, evicted entry [1]");
-    }
 
     /* Create new screen */
     lv_obj_t *scr = create_screen();
@@ -124,13 +122,19 @@ bool ui_activity_push(uint8_t app_id, uint8_t screen_id,
 
     depth++;
 
-    /* Call on_create */
-    a->cbs.on_create(scr, intent_data);
+    /* D1: on_create returns state* — OS stores it directly */
+    a->state = a->cbs.on_create(scr, args);
+
+    /* D6: if args are owned, free the data buffer now */
+    if (args && args->owned && args->data) {
+        free(args->data);
+    }
 
     /* Show it */
     lv_scr_load(scr);
 
-    ESP_LOGI(TAG, "Pushed activity app=%d scr=%d (depth=%d)", app_id, screen_id, depth);
+    ESP_LOGI(TAG, "Pushed activity app=%d scr=%d (depth=%d)",
+             (int)app_id, screen_id, depth);
     return true;
 }
 
@@ -141,23 +145,16 @@ bool ui_activity_pop(void)
         return false;
     }
 
-    /* Copy old top so we can destroy it after loading the new screen.
-     * This prevents a flash-of-empty-screen glitch. */
     activity_t old_top = stack[depth - 1];
 
-    /* Reduce depth and resume the now-top activity first */
     depth--;
-    resume_top();   /* lv_scr_load(stack[depth-1].screen) */
+    resume_top();
 
-    /* Destroy the old screen now that it's no longer active.
-     * Synchronous lv_obj_del stops LVGL from dispatching further events on it,
-     * preventing use-after-free if called from within an event callback. */
     if (old_top.cbs.on_destroy) {
         old_top.cbs.on_destroy(old_top.screen, old_top.state);
     }
     lv_obj_del(old_top.screen);
 
-    /* Clear the vacated slot */
     memset(&stack[depth], 0, sizeof(activity_t));
 
     ESP_LOGI(TAG, "Popped, new depth=%d", depth);
@@ -180,19 +177,14 @@ void ui_activity_pop_to_home(void)
         return;
     }
 
-    /* Switch to the launcher screen FIRST so we never call lv_obj_del on
-     * the currently active screen (which would leave disp->act_scr dangling
-     * and crash with LoadProhibited on the next LVGL tick). */
     lv_obj_clear_flag(stack[0].screen, LV_OBJ_FLAG_HIDDEN);
     lv_scr_load(stack[0].screen);
 
-    /* Destroy from top down — they are no longer active */
     while (depth > 1) {
         destroy_entry(&stack[depth - 1]);
         depth--;
     }
 
-    /* Fire on_resume for the launcher */
     if (stack[0].cbs.on_resume) {
         stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
     }
@@ -211,42 +203,30 @@ uint8_t ui_activity_depth(void)
     return depth;
 }
 
-void ui_activity_set_state(void *state)
-{
-    if (depth == 0) return;
-    stack[depth - 1].state = state;
-}
-
 void ui_activity_recreate_all(void)
 {
-    /* Recreate each activity in-place so layouts adapt to new display dimensions.
-     * Called with LVGL mutex held (from EVT_DISPLAY_ROTATED handler). */
     for (int i = 0; i < depth; i++) {
         activity_t *a = &stack[i];
         if (!a->screen || !a->cbs.on_create) continue;
 
-        /* Let the app clean up its state */
         if (a->cbs.on_destroy) {
             a->cbs.on_destroy(a->screen, a->state);
         }
         a->state = NULL;
 
-        /* Remove all children (layout objects), keep screen itself */
         lv_obj_clean(a->screen);
 
-        /* Re-apply base screen styling */
         const cyberdeck_theme_t *t = ui_theme_get();
         lv_obj_set_style_bg_color(a->screen, t->bg_dark, 0);
         lv_obj_set_style_bg_opa(a->screen, LV_OPA_COVER, 0);
         apply_screen_padding(a->screen);
 
-        /* Recreate layout with current display dimensions */
-        a->cbs.on_create(a->screen, NULL);
+        /* D1: on_create returns new state* */
+        a->state = a->cbs.on_create(a->screen, NULL);
 
-        ESP_LOGD(TAG, "Recreated activity app=%d scr=%d", a->app_id, a->screen_id);
+        ESP_LOGD(TAG, "Recreated activity app=%d scr=%d", (int)a->app_id, a->screen_id);
     }
 
-    /* Reload the top screen */
     if (depth > 0) {
         lv_scr_load(stack[depth - 1].screen);
     }

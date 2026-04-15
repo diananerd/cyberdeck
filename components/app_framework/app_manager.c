@@ -23,12 +23,19 @@ static bool manager_navigate_fn(const intent_t *intent)
 {
     const app_entry_t *app = app_registry_get(intent->app_id);
     if (!app) {
-        ESP_LOGW(TAG, "App %d not registered — showing toast", intent->app_id);
+        ESP_LOGW(TAG, "App %d not registered — showing toast", (int)intent->app_id);
         ui_effect_toast("Coming soon...", 1500);
         return false;
     }
+
+    /* Wrap legacy intent data into view_args_t (not owned: caller manages lifetime) */
+    view_args_t args = {
+        .data  = intent->data,
+        .size  = intent->data_size,
+        .owned = false,
+    };
     return ui_activity_push(intent->app_id, intent->screen_id,
-                            &app->cbs, intent->data);
+                            &app->cbs, intent->data ? &args : NULL);
 }
 
 /* ---------- Public API ---------- */
@@ -40,11 +47,11 @@ esp_err_t app_manager_init(void)
     return ESP_OK;
 }
 
-void app_manager_launch(uint8_t app_id, void *data, size_t data_size)
+void app_manager_launch(app_id_t app_id, void *data, size_t data_size)
 {
     if (ui_lock(500)) {
         intent_t intent = {
-            .app_id    = app_id,
+            .app_id    = (uint8_t)app_id,
             .screen_id = 0,
             .data      = data,
             .data_size = data_size,
@@ -56,7 +63,7 @@ void app_manager_launch(uint8_t app_id, void *data, size_t data_size)
 
 void app_manager_go_back(void)
 {
-    if (s_locked) return;   /* don't allow back-swipe to bypass lockscreen */
+    if (s_locked) return;
     if (ui_lock(500)) {
         ui_activity_pop();
         ui_unlock();
@@ -65,7 +72,7 @@ void app_manager_go_back(void)
 
 void app_manager_go_home(void)
 {
-    if (s_locked) return;   /* don't allow home-swipe to bypass lockscreen */
+    if (s_locked) return;
     if (ui_lock(500)) {
         ui_activity_pop_to_home();
         ui_unlock();
@@ -78,7 +85,6 @@ void app_manager_lock(void)
         ESP_LOGW(TAG, "No lockscreen registered");
         return;
     }
-    /* Lock navigation BEFORE pushing so no race can bypass it */
     s_locked = true;
     ui_activity_set_nav_lock(true);
     if (ui_lock(500)) {

@@ -1,12 +1,12 @@
 /*
  * CyberDeck — Launcher home screen
- * Reads app list from the app registry, sorts alphabetically, and shows a
+ *
+ * Reads app list via os_app_enumerate (C4), sorts alphabetically, and shows a
  * flex-wrap grid of app cards.  Tapping a card navigates if on_create is
  * registered, otherwise shows a "Coming soon" toast.
  *
- * app_launcher_register() also registers stub entries for all built-in apps
- * that don't yet have a full implementation, so the launcher always shows the
- * full grid even before every app is wired up.
+ * app_launcher_register() registers the launcher, lockscreen, and all built-in
+ * stub entries so the full grid appears even before every app is wired up (C3).
  */
 
 #include "app_launcher.h"
@@ -25,7 +25,7 @@ static const char *TAG = "launcher";
 /* ---- Card click context ---- */
 
 typedef struct {
-    uint8_t app_id;
+    app_id_t app_id;
 } card_ctx_t;
 
 static void card_click_cb(lv_event_t *e)
@@ -36,7 +36,7 @@ static void card_click_cb(lv_event_t *e)
         return;
     }
 
-    ESP_LOGI(TAG, "Tapped app_id=%d", ctx->app_id);
+    ESP_LOGI(TAG, "Tapped app_id=%u", (unsigned)ctx->app_id);
 
     if (!app_registry_get(ctx->app_id)) {
         ui_effect_toast("Coming soon...", 1500);
@@ -44,7 +44,7 @@ static void card_click_cb(lv_event_t *e)
     }
 
     intent_t intent = {
-        .app_id    = ctx->app_id,
+        .app_id    = (uint8_t)ctx->app_id,
         .screen_id = 0,
         .data      = NULL,
         .data_size = 0,
@@ -52,31 +52,50 @@ static void card_click_cb(lv_event_t *e)
     ui_intent_navigate(&intent);
 }
 
-/* ---- Activity callbacks ---- */
+/* ---- os_app_enumerate callback ---- */
 
-static void launcher_on_create(lv_obj_t *screen, void *intent_data)
+typedef struct {
+    app_id_t    app_id;
+    const char *name;
+    const char *icon;
+} app_info_t;
+
+typedef struct {
+    app_info_t *apps;
+    uint8_t    *count;
+    uint8_t     max;
+} collect_ctx_t;
+
+static void collect_app_cb(const app_entry_t *e, void *ctx)
 {
-    (void)intent_data;
+    collect_ctx_t *c = (collect_ctx_t *)ctx;
+    /* Skip the launcher itself */
+    if (e->manifest.id == APP_ID_LAUNCHER) return;
+    if (!e->manifest.name)                 return;
+    if (*c->count >= c->max)               return;
+
+    uint8_t i = *c->count;
+    c->apps[i].app_id = e->manifest.id;
+    c->apps[i].name   = e->manifest.name;
+    c->apps[i].icon   = e->manifest.icon ? e->manifest.icon : "?";
+    (*c->count)++;
+}
+
+/* ---- Activity callbacks (D1) ---- */
+
+/* D1: returns NULL (no persistent state needed) */
+static void *launcher_on_create(lv_obj_t *screen, const view_args_t *args)
+{
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    /* ---- Collect apps from registry (skip id=0, the launcher itself) ---- */
-    typedef struct {
-        uint8_t     app_id;
-        const char *name;
-        const char *icon;
-    } app_info_t;
-
-    app_info_t apps[APP_ID_COUNT];
+    /* ---- Collect apps from registry via os_app_enumerate (C4) ---- */
+#define LAUNCHER_APP_MAX 32
+    app_info_t apps[LAUNCHER_APP_MAX];
     uint8_t    app_count = 0;
 
-    for (uint8_t id = 1; id < APP_ID_COUNT; id++) {
-        const app_entry_t *e = app_registry_get_raw(id);
-        if (!e || !e->name) continue;
-        apps[app_count].app_id = id;
-        apps[app_count].name   = e->name;
-        apps[app_count].icon   = e->icon ? e->icon : "?";
-        app_count++;
-    }
+    collect_ctx_t cctx = { .apps = apps, .count = &app_count, .max = LAUNCHER_APP_MAX };
+    os_app_enumerate(collect_app_cb, &cctx);
 
     /* ---- Sort alphabetically (insertion sort, small N) ---- */
     for (uint8_t i = 1; i < app_count; i++) {
@@ -89,7 +108,7 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
         apps[j + 1] = key;
     }
 
-    /* ---- Grid sizing — use screen content area (accounts for statusbar + navbar padding) ---- */
+    /* ---- Grid sizing ---- */
     const lv_coord_t gap     = 16;
     lv_coord_t       avail_w = lv_obj_get_content_width(screen);
     lv_coord_t       avail_h = lv_obj_get_content_height(screen);
@@ -146,10 +165,9 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
         lv_obj_set_style_bg_opa(card, LV_OPA_COVER, LV_STATE_PRESSED);
         lv_obj_set_style_border_color(card, t->primary, LV_STATE_PRESSED);
 
-        /* Dim unimplemented apps */
+        /* Dim unimplemented (stub) apps */
         bool implemented = (app_registry_get(apps[i].app_id) != NULL);
         lv_color_t icon_color = implemented ? t->primary : t->primary_dim;
-        lv_color_t text_color = implemented ? t->text_dim : t->text_dim;
 
         lv_obj_t *icon_lbl = lv_label_create(card);
         lv_label_set_text(icon_lbl, apps[i].icon);
@@ -159,7 +177,7 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
 
         lv_obj_t *name_lbl = lv_label_create(card);
         lv_label_set_text(name_lbl, apps[i].name);
-        lv_obj_set_style_text_color(name_lbl, text_color, 0);
+        lv_obj_set_style_text_color(name_lbl, t->text_dim, 0);
         lv_obj_set_style_text_font(name_lbl, &CYBERDECK_FONT_SM, 0);
         lv_obj_set_style_text_color(name_lbl, t->bg_dark, LV_STATE_PRESSED);
 
@@ -173,6 +191,7 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
     ui_statusbar_set_title("CYBERDECK");
     ESP_LOGI(TAG, "Created (%dx%d, card=%dpx, apps=%d)",
              cols, rows, (int)card_sz, app_count);
+    return NULL;
 }
 
 static void launcher_on_resume(lv_obj_t *screen, void *state)
@@ -198,24 +217,51 @@ const activity_cbs_t *app_launcher_get_cbs(void)
 
 esp_err_t app_launcher_register(void)
 {
-    /* Register the launcher itself */
-    static const app_entry_t launcher_entry = {
-        .app_id = APP_ID_LAUNCHER,
-        .name   = "Launcher",
-        .icon   = NULL,
-        .cbs    = {
-            .on_create  = launcher_on_create,
-            .on_resume  = launcher_on_resume,
-            .on_pause   = NULL,
-            .on_destroy = NULL,
-        },
+    /* C3: register the launcher itself via os_app_register */
+    static const app_manifest_t launcher_manifest = {
+        .id          = APP_ID_LAUNCHER,
+        .name        = "Launcher",
+        .icon        = NULL,
+        .type        = APP_TYPE_BUILTIN,
+        .permissions = 0,
+        .storage_dir = NULL,
     };
-    app_registry_register(&launcher_entry);
+    os_app_register(&launcher_manifest, NULL, &s_launcher_cbs);
+
+    /* C3: register built-in stub apps ("coming soon") so the launcher grid
+     *     shows the full expected set even when apps aren't wired up yet. */
+    static const struct {
+        app_id_t    id;
+        const char *name;
+        const char *icon;
+    } stubs[] = {
+        { APP_ID_BOOKS,    "BOOKS",    "Bk" },
+        { APP_ID_NOTES,    "NOTES",    "N"  },
+        { APP_ID_TASKS,    "TASKS",    "Tk" },
+        { APP_ID_MUSIC,    "MUSIC",    "M"  },
+        { APP_ID_PODCASTS, "PODCASTS", "Pd" },
+        { APP_ID_CALC,     "CALC",     "="  },
+        { APP_ID_BLUESKY,  "BLUESKY",  "@"  },
+        { APP_ID_FILES,    "FILES",    "Fl" },
+    };
+
+    for (int i = 0; i < (int)(sizeof(stubs) / sizeof(stubs[0])); i++) {
+        app_manifest_t m = {
+            .id          = stubs[i].id,
+            .name        = stubs[i].name,
+            .icon        = stubs[i].icon,
+            .type        = APP_TYPE_BUILTIN,
+            .permissions = 0,
+            .storage_dir = NULL,
+        };
+        /* NULL cbs = stub (no on_create) → launcher shows "Coming soon" on tap */
+        os_app_register(&m, NULL, NULL);
+    }
 
     /* Register lockscreen with app_manager */
     extern void launcher_lockscreen_register(void);
     launcher_lockscreen_register();
 
-    ESP_LOGI(TAG, "Launcher registered");
+    ESP_LOGI(TAG, "Launcher registered (%d stubs)", (int)(sizeof(stubs) / sizeof(stubs[0])));
     return ESP_OK;
 }

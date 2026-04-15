@@ -148,14 +148,13 @@ static void style_keyboard(lv_obj_t *kb)
 
 /* ---- Activity on_create ---- */
 
-static void lockscreen_on_create(lv_obj_t *screen, void *intent_data)
+static void *lockscreen_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     lock_state_t *s = (lock_state_t *)calloc(1, sizeof(lock_state_t));
-    if (!s) return;
-    ui_activity_set_state(s);
+    if (!s) return NULL;
 
     /* Full screen: remove the padding added by the activity stack,
      * then hide system bars so we own the entire display. */
@@ -236,6 +235,7 @@ static void lockscreen_on_create(lv_obj_t *screen, void *intent_data)
      * Called here too because recreate_all() invokes on_destroy (clear_lock)
      * followed immediately by on_create — the lock must be restored. */
     app_manager_set_lock();
+    return s;
 }
 
 static void lockscreen_on_destroy(lv_obj_t *screen, void *state)

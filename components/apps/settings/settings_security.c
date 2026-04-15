@@ -197,14 +197,13 @@ static void style_keyboard(lv_obj_t *kb)
     lv_obj_set_style_text_color(kb, t->bg_dark, LV_PART_ITEMS | LV_STATE_PRESSED);
 }
 
-static void security_on_create(lv_obj_t *screen, void *intent_data)
+static void *security_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     sec_state_t *s = (sec_state_t *)calloc(1, sizeof(sec_state_t));
-    if (!s) return;
-    ui_activity_set_state(s);
+    if (!s) return NULL;
     s->state = SEC_STATE_IDLE;
 
     bool pin_en = false;
@@ -283,6 +282,7 @@ static void security_on_create(lv_obj_t *screen, void *intent_data)
     lv_obj_add_flag(s->kb, LV_OBJ_FLAG_HIDDEN);
     style_keyboard(s->kb);
     lv_obj_add_event_cb(s->kb, sec_kb_event_cb, LV_EVENT_ALL, s);
+    return s;
 }
 
 static void security_on_destroy(lv_obj_t *screen, void *state)

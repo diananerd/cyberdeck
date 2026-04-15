@@ -656,28 +656,42 @@ A4  — os_poller                            ✅  os_core/os_poller.c + os_polle
   Tick del poller = 100ms; intervalos: battery=30s, sd_poll=5s.
 - El retry-loop de ui_lock en sd_poll_task se simplificó con `UI_LOCKED_SECTION`.
 
-### Fase 3 — Registro Dinámico y Ciclo de Vida  ← SIGUIENTE (breaking change grande)
+### Fase 3 — Registro Dinámico y Ciclo de Vida
 
-### Fase 3 — Registro Dinamico y Ciclo de Vida (breaking change grande)
+**COMPLETADA** (2026-04-15) — build limpio, 0 warnings.
 
 ```
-C1  — tipos manifest/ops
-D1  — nueva firma on_create
+C1  — tipos manifest/ops                    ✅  app_registry.h (app_manifest_t, app_ops_t, app_type_t)
+C2  — lista dinámica                        ✅  app_registry.c (malloc/realloc, os_app_register, os_app_enumerate)
+C3  — migrar builtins al nuevo registro     ✅  app_settings.c, app_launcher.c usan os_app_register
+C4  — launcher usa os_app_enumerate         ✅  app_launcher.c: collect_app_cb + os_app_enumerate
+D1  — nueva firma on_create (void*)         ✅  ui_activity.h/c: on_create retorna state*, ui_activity_set_state eliminado
+D2  — migrar todos los views                ✅  settings_audio, bluetooth, about, time, storage,
+                                               display, security, wifi, app_launcher, launcher_lockscreen,
+                                               app_settings — todos retornan state* correctamente
+D3  — stack max 4→8                         ✅  ACTIVITY_STACK_MAX=8, falla en overflow (no evicción silenciosa)
+D4  — os_view_push / os_view_pop            ✅  os_nav.h/c: wrappers sobre ui_activity_push/pop
+D5  — migrar navegación en settings         ✅  app_settings.c item_click_cb usa os_view_push
+D6  — view_args_t struct                    ✅  ui_activity.h: {data, size, owned}; owned=true → OS hace free
+B4  — migrar handlers de eventos a _ui      ✅  settings_storage.c, settings_wifi.c: os_event_subscribe_ui
 ```
 
-Luego (paralelo):
-```
-C2  — lista dinamica
-D2  — migrar views (11 archivos)
-D6  — view_args_t
-```
+**Notas:**
+- `g_wifi_scr_state` y `g_storage_scr_state` se mantienen como guards para la race de lv_async_call:
+  el evento puede quedar encolado antes de que on_destroy libere el estado. La guard se limpia
+  ANTES de unsubscribe y free. El handler verifica `s == g_*_state` antes de tocar el estado.
+- Los stubs (Books, Notes, Tasks, Music, Podcasts, Calc, Bluesky, Files) se registran en
+  `app_launcher_register()` con cbs=NULL. El launcher los muestra con color dim y toast "Coming soon".
+- `app_manager_launch` migrado a `app_id_t` (uint16_t); `intent_t.app_id` sigue siendo uint8_t
+  (cast al navegar desde launcher — todos los IDs actuales caben en uint8_t).
+- E1/E2/E3 (os_settings API) diferidos a Fase 5: requieren mapeo completo de claves NVS y
+  decisión sobre namespacing. El acceso actual a svc_settings sigue funcionando sin cambio.
 
-Luego:
+**E1/E2/E3 — DIFERIDOS a Fase 5:**
 ```
-C3, C4  — migrar builtin + launcher
-D3, D4, D5  — stack x8, os_view API, migrar navegacion
-E1, E2, E3  — os_settings API y migracion
-B4  — migrar handlers de eventos
+E1  — os_settings_* API                    ⏳  Requiere mapeo de todas las claves NVS por app
+E2  — migrar settings app al nuevo API     ⏳  Depende de E1
+E3  — namespace "sys" para settings OS     ⏳  Depende de E1
 ```
 
 ### Fase 4 — Storage y Apps Dinamicas

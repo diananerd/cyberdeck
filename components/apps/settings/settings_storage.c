@@ -3,13 +3,11 @@
  *
  * Shows SD card status and space breakdown.
  * Subscribes to EVT_SDCARD_MOUNTED / EVT_SDCARD_UNMOUNTED so the UI
- * updates in real-time when the card is inserted or removed while the
- * screen is open — same pattern as settings_wifi.c.
+ * updates in real-time when the card is inserted or removed.
  *
- * Thread-safety:
- *   SD events fire on the event-loop task → must lock LVGL.
- *   Button callbacks fire on the LVGL task → no lock needed.
- *   g_storage_scr_state is NULL while the screen is not active.
+ * B4: uses os_event_subscribe_ui — handler runs in LVGL task, no manual lock.
+ *     Global pointer guard kept for async safety (format_done_async races).
+ * D1: on_create returns state*.
  */
 
 #include "app_settings.h"
@@ -21,7 +19,7 @@
 #include "ui_effect.h"
 #include "hal_sdcard.h"
 #include "app_state.h"
-#include "svc_event.h"
+#include "os_event.h"
 #include "os_task.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -35,9 +33,12 @@ static const char *TAG = "settings_storage";
  * ================================================================ */
 
 typedef struct {
-    lv_obj_t *content;  /* content area — cleaned + rebuilt on every refresh */
+    lv_obj_t   *content;     /* content area — cleaned + rebuilt on every refresh */
+    event_sub_t sub_mounted;
+    event_sub_t sub_unmounted;
 } storage_scr_state_t;
 
+/* Global pointer guard — needed by format_done_async to detect stale state */
 static storage_scr_state_t *g_storage_scr_state = NULL;
 
 /* ================================================================
@@ -56,8 +57,8 @@ static void format_kb(char *buf, size_t n, uint32_t kb)
  * Content builder — called on create, resume, and SD events
  * ================================================================ */
 
-static void mount_btn_cb(lv_event_t *e);   /* forward declaration */
-static void format_btn_cb(lv_event_t *e);  /* forward declaration */
+static void mount_btn_cb(lv_event_t *e);
+static void format_btn_cb(lv_event_t *e);
 
 static void build_content(storage_scr_state_t *s)
 {
@@ -65,7 +66,6 @@ static void build_content(storage_scr_state_t *s)
 
     bool mounted = hal_sdcard_is_mounted();
 
-    /* ---- Status row ---- */
     lv_obj_t *status_val = ui_common_data_row(s->content, "STATUS:",
                                                mounted ? "MOUNTED" : "NOT MOUNTED");
     if (!mounted) {
@@ -76,8 +76,6 @@ static void build_content(storage_scr_state_t *s)
     if (mounted) {
         ui_common_data_row(s->content, "MOUNT POINT:", HAL_SDCARD_MOUNT_POINT);
 
-        /* Space info is pre-fetched by sd_poll_task (Core 0) and cached in
-         * app_state so we never call statvfs from the LVGL task. */
         const cyberdeck_state_t *st = app_state_get();
         uint32_t total_kb = st->sd_total_kb;
         uint32_t used_kb  = st->sd_used_kb;
@@ -106,13 +104,11 @@ static void build_content(storage_scr_state_t *s)
         ui_theme_style_label_dim(hint, &CYBERDECK_FONT_SM);
     }
 
-    /* ---- Spacer + action buttons ---- */
     ui_common_spacer(s->content);
 
     lv_obj_t *btn_row = ui_common_action_row(s->content);
 
     if (mounted) {
-        /* [UNMOUNT] secondary  [FORMAT] primary */
         lv_obj_t *unmount_btn = ui_common_btn(btn_row, "UNMOUNT");
         lv_obj_add_event_cb(unmount_btn, mount_btn_cb, LV_EVENT_CLICKED, s);
 
@@ -160,7 +156,7 @@ typedef struct {
     storage_scr_state_t *scr_state;
 } format_result_t;
 
-/* Called on the LVGL task via lv_async_call — safe to touch widgets */
+/* Called on the LVGL task via lv_async_call */
 static void format_done_async(void *param)
 {
     format_result_t *fr = (format_result_t *)param;
@@ -172,14 +168,13 @@ static void format_done_async(void *param)
         ui_effect_toast("Format failed", 2000);
     }
 
+    /* Guard: screen may have been destroyed while format was running */
     if (fr->scr_state && g_storage_scr_state == fr->scr_state)
         build_content(fr->scr_state);
 
     lv_mem_free(fr);
 }
 
-/* Runs on a dedicated FreeRTOS task so the LVGL task stays free
- * to render the progress animation during the blocking format. */
 static void format_task(void *arg)
 {
     format_result_t *fr = (format_result_t *)arg;
@@ -224,40 +219,41 @@ static void format_btn_cb(lv_event_t *e)
 }
 
 /* ================================================================
- * SD card event handlers (event-loop task)
+ * SD card event handlers (B4: delivered in LVGL task by os_event_subscribe_ui)
  * ================================================================ */
 
 static void sdcard_event_handler(void *arg, esp_event_base_t base,
                                   int32_t id, void *data)
 {
-    (void)arg; (void)base; (void)id; (void)data;
-
-    if (!g_storage_scr_state) return;
-
-    if (ui_lock(200)) {
-        if (g_storage_scr_state)
-            build_content(g_storage_scr_state);
-        ui_unlock();
-    }
+    (void)base; (void)id; (void)data;
+    /* Handler executes in LVGL task — no manual lock needed */
+    storage_scr_state_t *s = (storage_scr_state_t *)arg;
+    if (s && s == g_storage_scr_state)
+        build_content(s);
 }
 
 /* ================================================================
- * Activity callbacks
+ * Activity callbacks (D1)
  * ================================================================ */
 
-static void storage_on_create(lv_obj_t *screen, void *intent_data)
+static void *storage_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
 
     storage_scr_state_t *s =
         (storage_scr_state_t *)lv_mem_alloc(sizeof(storage_scr_state_t));
-    if (!s) return;
-    s->content = NULL;
-    ui_activity_set_state(s);
+    if (!s) return NULL;
+    s->content      = NULL;
+    s->sub_mounted   = EVENT_SUB_INVALID;
+    s->sub_unmounted = EVENT_SUB_INVALID;
+
     g_storage_scr_state = s;
 
-    svc_event_register(EVT_SDCARD_MOUNTED,   sdcard_event_handler, NULL);
-    svc_event_register(EVT_SDCARD_UNMOUNTED, sdcard_event_handler, NULL);
+    /* B4: os_event_subscribe_ui — delivers in LVGL task, no manual lock */
+    s->sub_mounted   = os_event_subscribe_ui(APP_ID_SETTINGS, EVT_SDCARD_MOUNTED,
+                                              sdcard_event_handler, s);
+    s->sub_unmounted = os_event_subscribe_ui(APP_ID_SETTINGS, EVT_SDCARD_UNMOUNTED,
+                                              sdcard_event_handler, s);
 
     ui_statusbar_set_title("SETTINGS");
     s->content = ui_common_content_area(screen);
@@ -265,6 +261,7 @@ static void storage_on_create(lv_obj_t *screen, void *intent_data)
     build_content(s);
 
     ESP_LOGI(TAG, "Storage screen created");
+    return s;
 }
 
 static void storage_on_resume(lv_obj_t *screen, void *state)
@@ -272,17 +269,17 @@ static void storage_on_resume(lv_obj_t *screen, void *state)
     (void)screen;
     storage_scr_state_t *s = (storage_scr_state_t *)state;
     if (!s) return;
-    /* Refresh in case card state changed while the screen was paused */
     build_content(s);
 }
 
 static void storage_on_destroy(lv_obj_t *screen, void *state)
 {
     (void)screen;
-    g_storage_scr_state = NULL;
-    svc_event_unregister(EVT_SDCARD_MOUNTED,   sdcard_event_handler);
-    svc_event_unregister(EVT_SDCARD_UNMOUNTED, sdcard_event_handler);
-    lv_mem_free(state);
+    storage_scr_state_t *s = (storage_scr_state_t *)state;
+    g_storage_scr_state = NULL;  /* clear guard before unsubscribe */
+    os_event_unsubscribe(s->sub_mounted);
+    os_event_unsubscribe(s->sub_unmounted);
+    lv_mem_free(s);
     ESP_LOGI(TAG, "Storage screen destroyed");
 }
 

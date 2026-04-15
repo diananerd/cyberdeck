@@ -113,9 +113,9 @@ static lv_obj_t *section_label(lv_obj_t *content, const char *text)
 
 /* ---- Activity on_create ---- */
 
-static void display_on_create(lv_obj_t *screen, void *intent_data)
+static void *display_on_create(lv_obj_t *screen, const view_args_t *args)
 {
-    (void)intent_data;
+    (void)args;
     const cyberdeck_theme_t *t = ui_theme_get();
     cyberdeck_theme_id_t cur_theme = ui_theme_get_id();
     uint8_t cur_rotation = 0;
@@ -228,6 +228,7 @@ static void display_on_create(lv_obj_t *screen, void *intent_data)
     }
 
     ESP_LOGI(TAG, "Display settings created");
+    return NULL;
 }
 
 const activity_cbs_t settings_display_cbs = {

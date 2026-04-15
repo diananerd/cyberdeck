@@ -7,6 +7,8 @@
 
 #include "esp_err.h"
 #include "ui_activity.h"
+#include "os_nav.h"       /* os_view_push/pop for sub-screens (D5) */
+#include "app_registry.h" /* APP_PERM_*, os_app_register (C1/C3) */
 
 #ifdef __cplusplus
 extern "C" {
