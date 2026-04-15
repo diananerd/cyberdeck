@@ -128,7 +128,6 @@ static void gesture_cb(hal_gesture_type_t gesture)
     switch (gesture) {
     case HAL_GESTURE_HOME: svc_event_post(EVT_GESTURE_HOME, NULL, 0); break;
     case HAL_GESTURE_BACK: svc_event_post(EVT_GESTURE_BACK, NULL, 0); break;
-    case HAL_GESTURE_LOCK: svc_event_post(EVT_GESTURE_LOCK, NULL, 0); break;
     }
 }
 
@@ -144,10 +143,6 @@ static void on_gesture_event(void *arg, esp_event_base_t base,
     case EVT_GESTURE_BACK:
         ESP_LOGI(TAG, "BACK gesture");
         app_manager_go_back();
-        break;
-    case EVT_GESTURE_LOCK:
-        ESP_LOGI(TAG, "LOCK gesture");
-        app_manager_lock();
         break;
     default:
         break;
@@ -337,7 +332,6 @@ void app_main(void)
     }
     svc_event_register(EVT_GESTURE_HOME, on_gesture_event, NULL);
     svc_event_register(EVT_GESTURE_BACK, on_gesture_event, NULL);
-    svc_event_register(EVT_GESTURE_LOCK, on_gesture_event, NULL);
     svc_event_register(EVT_DISPLAY_ROTATED, on_display_rotated, NULL);
     svc_event_register(EVT_NAV_PROCESSES, on_nav_processes, NULL);
     ESP_LOGI(TAG, "Gestures + nav OK");

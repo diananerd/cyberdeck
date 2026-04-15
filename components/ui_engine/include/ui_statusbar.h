@@ -63,6 +63,12 @@ void ui_statusbar_set_title(const char *title);
  */
 void ui_statusbar_refresh_theme(void);
 
+/**
+ * @brief Show or hide the status bar (e.g. for full-screen activities).
+ *        Must be called with the LVGL mutex held.
+ */
+void ui_statusbar_set_visible(bool visible);
+
 #ifdef __cplusplus
 }
 #endif

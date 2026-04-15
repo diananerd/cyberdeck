@@ -11,7 +11,6 @@ extern "C" {
 typedef enum {
     HAL_GESTURE_HOME = 0,   /* Swipe down from top edge */
     HAL_GESTURE_BACK,       /* Swipe right from left edge */
-    HAL_GESTURE_LOCK,       /* Long press in status bar area */
 } hal_gesture_type_t;
 
 /**

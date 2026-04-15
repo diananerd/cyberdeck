@@ -19,10 +19,24 @@ typedef struct {
 
 /**
  * @brief Navigate to a new activity described by the intent.
- *        Looks up the app in the registry and pushes its activity.
+ *        Resolves app_id via the registered navigate_fn (set by app_manager_init).
  *        Must be called with the LVGL mutex held.
  */
 void ui_intent_navigate(const intent_t *intent);
+
+/**
+ * @brief Callback type for navigation resolution.
+ *        Set by app_manager to decouple ui_engine from app_framework.
+ *        Called with the LVGL mutex already held.
+ * @return true if navigation succeeded
+ */
+typedef bool (*ui_intent_navigate_fn_t)(const intent_t *intent);
+
+/**
+ * @brief Register the navigation resolution callback.
+ *        Called once during app_manager_init().
+ */
+void ui_intent_set_navigate_fn(ui_intent_navigate_fn_t fn);
 
 /**
  * @brief Go back one screen (pop top activity).

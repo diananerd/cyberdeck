@@ -220,6 +220,13 @@ void ui_navbar_adapt(void)
     ESP_LOGI(TAG, "Navbar adapted to new orientation");
 }
 
+void ui_navbar_set_visible(bool visible)
+{
+    if (!s_navbar) return;
+    if (visible) lv_obj_clear_flag(s_navbar, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(s_navbar,   LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_navbar_refresh_theme(void)
 {
     if (!s_navbar) return;

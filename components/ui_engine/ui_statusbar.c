@@ -412,6 +412,13 @@ void ui_statusbar_set_bluetooth(bool connected)
                                 connected ? t->primary : t->text_dim, 0);
 }
 
+void ui_statusbar_set_visible(bool visible)
+{
+    if (!bar_obj) return;
+    if (visible) lv_obj_clear_flag(bar_obj, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(bar_obj,   LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_statusbar_refresh_theme(void)
 {
     if (!bar_obj) return;

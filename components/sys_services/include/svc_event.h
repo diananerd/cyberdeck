@@ -47,7 +47,6 @@ typedef enum {
     /* Gestures */
     EVT_GESTURE_HOME,           /* data: NULL */
     EVT_GESTURE_BACK,           /* data: NULL */
-    EVT_GESTURE_LOCK,           /* data: NULL */
 
     /* Display */
     EVT_DISPLAY_ROTATED,        /* data: uint8_t* rotation (0=landscape, 1=portrait) */

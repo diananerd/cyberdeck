@@ -61,8 +61,17 @@ bool ui_activity_pop(void);
 
 /**
  * @brief Pop all activities except the bottom one (go home).
+ *        No-op while nav lock is active (see ui_activity_set_nav_lock).
  */
 void ui_activity_pop_to_home(void);
+
+/**
+ * @brief Lock / unlock navigation gestures and the HOME button.
+ *        While locked, pop_to_home() is a no-op so the lockscreen
+ *        cannot be bypassed by a HOME swipe or navbar tap.
+ *        Does NOT affect ui_activity_pop() so the PIN entry can still dismiss itself.
+ */
+void ui_activity_set_nav_lock(bool locked);
 
 /**
  * @brief Get the current (top) activity.

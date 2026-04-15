@@ -14,7 +14,8 @@
 static const char *TAG = "activity";
 
 static activity_t stack[ACTIVITY_STACK_MAX];
-static uint8_t    depth = 0;
+static uint8_t    depth      = 0;
+static bool       s_nav_lock = false;
 
 /* ---------- Internal helpers ---------- */
 
@@ -148,7 +149,9 @@ bool ui_activity_pop(void)
     depth--;
     resume_top();   /* lv_scr_load(stack[depth-1].screen) */
 
-    /* Now it's safe to destroy the old screen (no longer active) */
+    /* Destroy the old screen now that it's no longer active.
+     * Synchronous lv_obj_del stops LVGL from dispatching further events on it,
+     * preventing use-after-free if called from within an event callback. */
     if (old_top.cbs.on_destroy) {
         old_top.cbs.on_destroy(old_top.screen, old_top.state);
     }
@@ -161,14 +164,40 @@ bool ui_activity_pop(void)
     return true;
 }
 
+void ui_activity_set_nav_lock(bool locked)
+{
+    s_nav_lock = locked;
+    ESP_LOGI(TAG, "Nav lock: %s", locked ? "ON" : "OFF");
+}
+
 void ui_activity_pop_to_home(void)
 {
+    if (s_nav_lock) {
+        ESP_LOGD(TAG, "pop_to_home blocked (nav_lock)");
+        return;
+    }
+    if (depth <= 1) {
+        return;
+    }
+
+    /* Switch to the launcher screen FIRST so we never call lv_obj_del on
+     * the currently active screen (which would leave disp->act_scr dangling
+     * and crash with LoadProhibited on the next LVGL tick). */
+    lv_obj_clear_flag(stack[0].screen, LV_OBJ_FLAG_HIDDEN);
+    lv_scr_load(stack[0].screen);
+
+    /* Destroy from top down — they are no longer active */
     while (depth > 1) {
         destroy_entry(&stack[depth - 1]);
         depth--;
     }
-    resume_top();
-    ESP_LOGI(TAG, "Popped to home");
+
+    /* Fire on_resume for the launcher */
+    if (stack[0].cbs.on_resume) {
+        stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
+    }
+
+    ESP_LOGI(TAG, "Popped to home, final depth=%d", depth);
 }
 
 const activity_t *ui_activity_current(void)
