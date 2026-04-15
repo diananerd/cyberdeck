@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "os_task.h"
 #include "ui_engine.h"
 
 static const char *TAG = "ui_engine";
@@ -245,11 +246,18 @@ esp_err_t ui_engine_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
     ESP_LOGI(TAG, "Creating LVGL task (stack=%d, prio=%d, core=%d)",
              UI_ENGINE_TASK_STACK_SIZE, UI_ENGINE_TASK_PRIORITY, UI_ENGINE_TASK_CORE);
 
-    BaseType_t core = (UI_ENGINE_TASK_CORE < 0) ? tskNO_AFFINITY : UI_ENGINE_TASK_CORE;
-    BaseType_t ret = xTaskCreatePinnedToCore(lvgl_task, "lvgl", UI_ENGINE_TASK_STACK_SIZE, NULL,
-                                              UI_ENGINE_TASK_PRIORITY, &lvgl_task_handle, core);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create LVGL task");
+    os_task_config_t cfg = {
+        .name       = "lvgl",
+        .fn         = lvgl_task,
+        .arg        = NULL,
+        .stack_size = UI_ENGINE_TASK_STACK_SIZE,
+        .priority   = UI_ENGINE_TASK_PRIORITY,
+        .core       = UI_ENGINE_TASK_CORE,
+        .owner      = OS_OWNER_SYSTEM,
+    };
+    esp_err_t ret = os_task_create(&cfg, &lvgl_task_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create LVGL task: %s", esp_err_to_name(ret));
         return ESP_FAIL;
     }
 

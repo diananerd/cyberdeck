@@ -629,21 +629,34 @@ I2  — settings_common.h                   ✅  components/apps/settings/settin
 - Los dirs de SD mount (F1) son distintos a los que crea `hal_sdcard_format()` (/apps /books /music /system). mount crea los del OS; format recrea los de la app. Podría unificarse en Fase 4 (F2).
 - `settings_common.h` incluye todos los headers UI+services; cada settings_*.c puede incluirlo en lugar de 8-10 includes individuales. Migración de callers queda para I2 follow-up en Fase 5.
 
-### Fase 2 — Task Factory y Event Bus  ← SIGUIENTE
+### Fase 2 — Task Factory y Event Bus
+
+**COMPLETADA** (2026-04-15) — build limpio, 0 warnings.
 
 ```
-A2  — os_task_create
-A5  — os_defer / os_ui_post
-B1  — event subscribe con owner
+A2  — os_task_create / os_task_destroy     ✅  os_core/os_task.c + os_task.h
+A5  — os_defer / os_ui_post                ✅  os_core/os_defer.c + os_defer.h
+B1  — os_event_subscribe con owner         ✅  os_core/os_event.c + os_event.h
+B2  — os_event_subscribe_ui                ✅  incluido en os_event.c (shim → lv_async_call)
+B3  — os_event_unsubscribe_all             ✅  incluido en os_event.c
+A3  — migrar tasks al factory              ✅  svc_battery, svc_time, svc_downloader,
+                                               svc_ota, ui_engine (lvgl_task),
+                                               settings_storage (sd_format)
+A4  — os_poller                            ✅  os_core/os_poller.c + os_poller.h
+                                               battery_task y sd_poll_task → pollers
 ```
 
-Luego (paralelo entre si, dependen de Fase 2):
-```
-A3  — migrar tasks al factory (un commit por servicio)
-A4  — os_poller
-B2  — os_event_subscribe_ui
-B3  — os_event_unsubscribe_all
-```
+**Notas:**
+- `app_registry.h` ahora incluye `os_core.h` y delega los `APP_ID_*` ahí. Elimina redefinición.
+- Dependencias entre componentes: `os_core → {freertos, esp_event, esp_timer, lvgl, sys_services}`.
+  `sys_services/ui_engine/settings/app_framework → os_core`. ESP-IDF maneja el ciclo sin problemas.
+- `os_event_subscribe_ui` usa un shim que copia puntero a event_data (no el buffer).
+  Para eventos con structs grandes sería necesario pasar el tamaño. Anotado como deuda técnica.
+- `os_poller_start()` se llama en app_main después de registrar battery y sd pollers.
+  Tick del poller = 100ms; intervalos: battery=30s, sd_poll=5s.
+- El retry-loop de ui_lock en sd_poll_task se simplificó con `UI_LOCKED_SECTION`.
+
+### Fase 3 — Registro Dinámico y Ciclo de Vida  ← SIGUIENTE (breaking change grande)
 
 ### Fase 3 — Registro Dinamico y Ciclo de Vida (breaking change grande)
 

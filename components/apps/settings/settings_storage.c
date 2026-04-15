@@ -22,6 +22,7 @@
 #include "hal_sdcard.h"
 #include "app_state.h"
 #include "svc_event.h"
+#include "os_task.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -198,7 +199,16 @@ static void do_format(bool confirmed, void *ctx)
 
     ui_effect_progress_show("FORMATTING SD CARD...", false, NULL, NULL);
 
-    if (xTaskCreate(format_task, "sd_format", 4096, fr, 5, NULL) != pdPASS) {
+    os_task_config_t cfg = {
+        .name       = "sd_format",
+        .fn         = format_task,
+        .arg        = fr,
+        .stack_size = 4096,
+        .priority   = OS_PRIO_MEDIUM,
+        .core       = OS_CORE_BG,
+        .owner      = APP_ID_SETTINGS,
+    };
+    if (os_task_create(&cfg, NULL) != ESP_OK) {
         lv_mem_free(fr);
         ui_effect_progress_hide();
         ui_effect_toast("Format failed", 2000);

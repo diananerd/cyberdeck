@@ -6,6 +6,7 @@
 #include "svc_ota.h"
 #include "svc_event.h"
 #include "svc_settings.h"
+#include "os_task.h"
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
 #include "esp_log.h"
@@ -102,13 +103,21 @@ esp_err_t svc_ota_start(const char *url)
 
     s_in_progress = true;
 
-    BaseType_t ret = xTaskCreatePinnedToCore(
-        ota_task, "ota_task", OTA_TASK_STACK,
-        NULL, 3, NULL, 0);
-    if (ret != pdPASS) {
+    os_task_config_t cfg = {
+        .name       = "ota_task",
+        .fn         = ota_task,
+        .arg        = NULL,
+        .stack_size = OTA_TASK_STACK,
+        .priority   = OS_PRIO_HIGH,
+        .core       = OS_CORE_BG,
+        .owner      = OS_OWNER_SYSTEM,
+        .stack_in_psram = false,
+    };
+    esp_err_t ret = os_task_create(&cfg, NULL);
+    if (ret != ESP_OK) {
         s_in_progress = false;
-        ESP_LOGE(TAG, "Failed to create OTA task");
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "Failed to create OTA task: %s", esp_err_to_name(ret));
+        return ret;
     }
 
     return ESP_OK;

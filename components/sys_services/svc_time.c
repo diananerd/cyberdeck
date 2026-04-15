@@ -9,6 +9,7 @@
 #include "hal_rtc.h"
 #include "ui_statusbar.h"
 #include "ui_engine.h"
+#include "os_task.h"
 #include "esp_sntp.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -86,10 +87,18 @@ esp_err_t svc_time_init(void)
     svc_event_register(EVT_WIFI_CONNECTED, on_wifi_connected, NULL);
 
     /* Start status bar update task */
-    BaseType_t ret = xTaskCreatePinnedToCore(time_update_task, "time_upd",
-                                              TIME_TASK_STACK, NULL, 2, NULL, 0);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create time update task!");
+    os_task_config_t cfg = {
+        .name       = "time_upd",
+        .fn         = time_update_task,
+        .arg        = NULL,
+        .stack_size = TIME_TASK_STACK,
+        .priority   = OS_PRIO_LOW,
+        .core       = OS_CORE_BG,
+        .owner      = OS_OWNER_SYSTEM,
+    };
+    esp_err_t ret = os_task_create(&cfg, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create time update task: %s", esp_err_to_name(ret));
     }
 
     ESP_LOGI(TAG, "Time service initialized (TZ: %s)", tz_str);

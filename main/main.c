@@ -33,6 +33,7 @@
 #include "svc_time.h"
 #include "svc_downloader.h"
 #include "svc_ota.h"
+#include "os_poller.h"
 
 /* App Framework */
 #include "app_registry.h"
@@ -186,70 +187,49 @@ static void on_nav_processes(void *arg, esp_event_base_t base,
 }
 
 /* ================================================================
- * SD card background polling
+ * SD card hot-plug polling (poller function, runs in os_poller_task)
  * ================================================================ */
 
-static void sd_poll_task(void *arg)
+static bool s_sd_poll_last_mounted = false;
+
+static void poll_sd(void *arg)
 {
     (void)arg;
-    /* Wait for system to settle before first poll */
-    vTaskDelay(pdMS_TO_TICKS(8000));
 
-    bool last_mounted = hal_sdcard_is_mounted();
+    /* hal_sdcard_is_mounted() only tracks the software flag — it stays true
+     * even after a physical removal.  Use hal_sdcard_probe() to verify the
+     * card is actually accessible, then attempt a mount if it isn't. */
+    bool mounted = hal_sdcard_probe();
 
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));   /* poll every 5s */
+    if (!mounted) {
+        if (hal_sdcard_is_mounted()) {
+            hal_sdcard_unmount();
+        }
+        if (hal_sdcard_mount() == ESP_OK) {
+            mounted = true;
+            ESP_LOGI(TAG, "sd_poll: card mounted");
+        }
+    }
 
-        /* hal_sdcard_is_mounted() only tracks the software flag — it stays true
-         * even after a physical removal.  Use hal_sdcard_probe() to verify the
-         * card is actually accessible, then attempt a mount if it isn't. */
-        bool mounted = hal_sdcard_probe();
+    if (mounted != s_sd_poll_last_mounted) {
+        s_sd_poll_last_mounted = mounted;
+        app_state_update_sd(mounted);
 
-        if (!mounted) {
-            if (hal_sdcard_is_mounted()) {
-                /* Card was physically removed — clean up the mount */
-                hal_sdcard_unmount();
-            }
-            /* Try to mount in case a card was inserted since last check */
-            if (hal_sdcard_mount() == ESP_OK) {
-                mounted = true;
-                ESP_LOGI(TAG, "sd_poll: card mounted");
+        if (mounted) {
+            uint32_t total_kb = 0, used_kb = 0;
+            esp_err_t space_ret = hal_sdcard_get_space(&total_kb, &used_kb);
+            ESP_LOGI(TAG, "sd_poll space: ret=%s total=%lu used=%lu",
+                     esp_err_to_name(space_ret),
+                     (unsigned long)total_kb, (unsigned long)used_kb);
+            if (space_ret == ESP_OK) {
+                app_state_update_sd_space(total_kb, used_kb);
             }
         }
 
-        if (mounted != last_mounted) {
-            last_mounted = mounted;
-            app_state_update_sd(mounted);
+        UI_LOCKED_SECTION(500, { ui_statusbar_set_sdcard(mounted); });
 
-            /* Fetch space info here (Core 0, no LVGL lock) so the UI can
-             * read it from app_state without touching the filesystem. */
-            if (mounted) {
-                uint32_t total_kb = 0, used_kb = 0;
-                esp_err_t space_ret = hal_sdcard_get_space(&total_kb, &used_kb);
-                ESP_LOGI(TAG, "sd_poll space: ret=%s total=%lu used=%lu",
-                         esp_err_to_name(space_ret),
-                         (unsigned long)total_kb, (unsigned long)used_kb);
-                if (space_ret == ESP_OK) {
-                    app_state_update_sd_space(total_kb, used_kb);
-                }
-            }
-
-            /* Update statusbar directly — more reliable than bouncing through
-             * the event loop where ui_lock() can silently time out. */
-            for (int retry = 0; retry < 5; retry++) {
-                if (ui_lock(500)) {
-                    ui_statusbar_set_sdcard(mounted);
-                    ui_unlock();
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(200));
-            }
-
-            /* Also post event for any other listeners */
-            svc_event_post(mounted ? EVT_SDCARD_MOUNTED : EVT_SDCARD_UNMOUNTED,
-                           NULL, 0);
-            ESP_LOGI(TAG, "sd_poll: SD %s", mounted ? "mounted" : "unmounted");
-        }
+        svc_event_post(mounted ? EVT_SDCARD_MOUNTED : EVT_SDCARD_UNMOUNTED, NULL, 0);
+        ESP_LOGI(TAG, "sd_poll: SD %s", mounted ? "mounted" : "unmounted");
     }
 }
 
@@ -380,8 +360,11 @@ void app_main(void)
     } else {
         ESP_LOGW(TAG, "SD card not available (continuing)");
     }
-    /* Background SD card poll task (low priority, checks every 5s) */
-    xTaskCreate(sd_poll_task, "sd_poll", 4096, NULL, 2, NULL);
+    /* Register SD hot-plug and battery pollers, then start the shared poller task */
+    s_sd_poll_last_mounted = hal_sdcard_is_mounted();
+    os_poller_register("sd_poll", poll_sd, NULL, 5000, OS_OWNER_SYSTEM);
+    /* battery poller already registered in svc_battery_start() */
+    os_poller_start();
 
     /* 15. Time service */
     ESP_ERROR_CHECK(svc_time_init());

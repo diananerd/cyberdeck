@@ -9,6 +9,6 @@ idf_component_register(
          "settings_bluetooth.c"
          "settings_audio.c"
     INCLUDE_DIRS "include"
-    REQUIRES app_framework ui_engine sys_services board
+    REQUIRES app_framework ui_engine sys_services board os_core
     PRIV_REQUIRES esp_app_format
 )

@@ -5,6 +5,7 @@
 
 #include "svc_downloader.h"
 #include "svc_event.h"
+#include "os_task.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -217,12 +218,19 @@ esp_err_t svc_downloader_init(void)
     s_queue = xQueueCreate(DL_QUEUE_DEPTH, sizeof(dl_request_t));
     if (!s_queue) return ESP_ERR_NO_MEM;
 
-    BaseType_t ret = xTaskCreatePinnedToCore(
-        downloader_task, "downloader", DL_TASK_STACK,
-        NULL, 2, NULL, 0);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create downloader task");
-        return ESP_FAIL;
+    os_task_config_t cfg = {
+        .name       = "downloader",
+        .fn         = downloader_task,
+        .arg        = NULL,
+        .stack_size = DL_TASK_STACK,
+        .priority   = OS_PRIO_HIGH,
+        .core       = OS_CORE_BG,
+        .owner      = OS_OWNER_SYSTEM,
+    };
+    esp_err_t ret = os_task_create(&cfg, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create downloader task: %s", esp_err_to_name(ret));
+        return ret;
     }
 
     ESP_LOGI(TAG, "Downloader initialized");

@@ -7,23 +7,14 @@
 
 #include <stdint.h>
 #include "ui_activity.h"
+#include "os_core.h"   /* app_id_t, APP_ID_* constants */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ---- App IDs ---- */
-#define APP_ID_LAUNCHER  0
-#define APP_ID_BOOKS     1
-#define APP_ID_NOTES     2
-#define APP_ID_TASKS     3
-#define APP_ID_MUSIC     4
-#define APP_ID_PODCASTS  5
-#define APP_ID_CALC      6
-#define APP_ID_BLUESKY   7
-#define APP_ID_FILES     8
-#define APP_ID_SETTINGS  9
-#define APP_ID_COUNT     10
+/* ---- App IDs (legacy numeric aliases for count — IDs are in os_core.h) ---- */
+#define APP_ID_COUNT  10
 
 /** One entry per registered app. */
 typedef struct {

@@ -9,6 +9,6 @@ idf_component_register(
          "ui_keyboard.c"
          "ui_navbar.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_lcd lvgl__lvgl sys_services
+    REQUIRES esp_lcd lvgl__lvgl sys_services os_core
     PRIV_REQUIRES esp_timer
 )

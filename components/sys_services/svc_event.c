@@ -12,6 +12,9 @@ ESP_EVENT_DEFINE_BASE(CYBERDECK_EVENT);
 
 static esp_event_loop_handle_t s_loop = NULL;
 
+/* Getter interno para os_event.c — no exponer en el header público. */
+esp_event_loop_handle_t svc_event_get_loop(void) { return s_loop; }
+
 esp_err_t svc_event_init(void)
 {
     if (s_loop != NULL) {
