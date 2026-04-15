@@ -165,29 +165,39 @@ void ui_effect_confirm(const char *title, const char *msg,
 
     /* ---- Title polygon (only when title provided) ---- */
     if (title && title[0]) {
+        /* Measure text so the polygon is only as wide as needed.
+         * Canvas width = left_pad + text + right_pad + DLG_TITLE_H (diagonal) */
+        const lv_coord_t title_pad = 12;
+        lv_point_t txt_size = {0, 0};
+        lv_coord_t max_txt_w = DLG_W - DLG_TITLE_H - title_pad * 2;
+        lv_txt_get_size(&txt_size, title, &CYBERDECK_FONT_SM, 0, 0,
+                        max_txt_w, LV_TEXT_FLAG_NONE);
+        lv_coord_t tc_w = txt_size.x + title_pad * 2 + DLG_TITLE_H;
+        if (tc_w > DLG_W) tc_w = DLG_W;
+
         lv_color_t *tbuf = (lv_color_t *)lv_mem_alloc(
-                               DLG_W * DLG_TITLE_H * sizeof(lv_color_t));
+                               tc_w * DLG_TITLE_H * sizeof(lv_color_t));
         if (tbuf) {
             confirm_st.title_buf = tbuf;
 
             lv_obj_t *tc = lv_canvas_create(dialog);
-            lv_canvas_set_buffer(tc, tbuf, DLG_W, DLG_TITLE_H,
+            lv_canvas_set_buffer(tc, tbuf, tc_w, DLG_TITLE_H,
                                  LV_IMG_CF_TRUE_COLOR);
-            lv_obj_set_size(tc, DLG_W, DLG_TITLE_H);
+            lv_obj_set_size(tc, tc_w, DLG_TITLE_H);
             lv_obj_clear_flag(tc, LV_OBJ_FLAG_CLICKABLE);
 
             /* Clear to dialog background */
             lv_canvas_fill_bg(tc, t->bg_dark, LV_OPA_COVER);
 
-            /* Parallelogram — same geometry as statusbar title, but dim fill:
-             *   A(0,0) ─────────────────── B(W-1, 0)
-             *   |                         ╱  45° diagonal
-             *   D(0,H-1) ────── C(W-H, H-1)          */
+            /* Parallelogram — left edge vertical, right edge 45° ascending:
+             *   A(0,0) ─────────── B(W-1, 0)
+             *   |                 ╱  45° diagonal
+             *   D(0,H-1) ── C(W-H, H-1)          */
             lv_point_t pts[4] = {
-                {0,           0            },
-                {DLG_W - 1,   0            },
-                {DLG_W - DLG_TITLE_H, DLG_TITLE_H - 1},
-                {0,           DLG_TITLE_H - 1},
+                {0,              0              },
+                {tc_w - 1,       0              },
+                {tc_w - DLG_TITLE_H, DLG_TITLE_H - 1},
+                {0,              DLG_TITLE_H - 1},
             };
             lv_draw_rect_dsc_t poly_dsc;
             lv_draw_rect_dsc_init(&poly_dsc);
@@ -197,7 +207,7 @@ void ui_effect_confirm(const char *title, const char *msg,
             poly_dsc.radius       = 0;
             lv_canvas_draw_polygon(tc, pts, 4, &poly_dsc);
 
-            /* Title text: primary color on dim fill, FONT_SM, bold-by-offset */
+            /* Title text: FONT_SM, bold-by-offset (+1 px right) */
             lv_draw_label_dsc_t txt_dsc;
             lv_draw_label_dsc_init(&txt_dsc);
             txt_dsc.color = t->text;
@@ -205,9 +215,8 @@ void ui_effect_confirm(const char *title, const char *msg,
             lv_coord_t ty = (DLG_TITLE_H -
                              (lv_coord_t)CYBERDECK_FONT_SM.line_height) / 2;
             if (ty < 0) ty = 0;
-            lv_coord_t max_w = (DLG_W - 1 - DLG_TITLE_H / 2) - 12 - 4;
-            lv_canvas_draw_text(tc, 12, ty, max_w, &txt_dsc, title);
-            lv_canvas_draw_text(tc, 13, ty, max_w - 1, &txt_dsc, title);
+            lv_canvas_draw_text(tc, title_pad,     ty, txt_size.x + 2, &txt_dsc, title);
+            lv_canvas_draw_text(tc, title_pad + 1, ty, txt_size.x + 1, &txt_dsc, title);
         }
     }
 
