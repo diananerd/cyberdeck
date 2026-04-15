@@ -116,9 +116,11 @@ bool hal_sdcard_is_mounted(void)
 
 bool hal_sdcard_probe(void)
 {
-    if (!s_mounted) return false;
-    uint64_t bytes_total, bytes_free;
-    return (esp_vfs_fat_info(HAL_SDCARD_MOUNT_POINT, &bytes_total, &bytes_free) == ESP_OK);
+    if (!s_mounted || !s_card) return false;
+    /* Send CMD13 (SEND_STATUS) — lightweight SPI transaction that always
+     * hits the hardware. Returns error immediately if card is physically
+     * absent, bypassing any FATFS caching. */
+    return (sdmmc_get_status(s_card) == ESP_OK);
 }
 
 esp_err_t hal_sdcard_get_space(uint32_t *total_kb, uint32_t *used_kb)
