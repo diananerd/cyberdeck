@@ -43,6 +43,37 @@ void ui_effect_confirm(const char *title, const char *msg,
  */
 void ui_effect_loading(bool show);
 
+/* ---- Progress overlay ---- */
+
+/**
+ * @brief Callback invoked when the user presses CANCEL on the progress overlay.
+ */
+typedef void (*ui_progress_cancel_cb_t)(void *ctx);
+
+/**
+ * @brief Show a progress/loader overlay.
+ *        Indeterminate by default (animated zebra ribbon).
+ *        Call ui_effect_progress_set() to switch to a determinate bar.
+ *
+ * @param msg         Optional status text (NULL = no label). ALL CAPS.
+ * @param cancellable Show a CANCEL button when true.
+ * @param cancel_cb   Invoked if the user taps CANCEL (ignored when !cancellable).
+ * @param ctx         User data forwarded to cancel_cb.
+ */
+void ui_effect_progress_show(const char *msg, bool cancellable,
+                             ui_progress_cancel_cb_t cancel_cb, void *ctx);
+
+/**
+ * @brief Update the progress value.
+ * @param pct  0–100 for a determinate bar; negative for indeterminate animation.
+ */
+void ui_effect_progress_set(int8_t pct);
+
+/**
+ * @brief Hide and destroy the progress overlay.
+ */
+void ui_effect_progress_hide(void);
+
 #ifdef __cplusplus
 }
 #endif

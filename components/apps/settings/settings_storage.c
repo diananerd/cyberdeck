@@ -23,6 +23,8 @@
 #include "app_state.h"
 #include "svc_event.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 
 static const char *TAG = "settings_storage";
@@ -151,22 +153,56 @@ static void mount_btn_cb(lv_event_t *e)
     build_content(s);
 }
 
-static void do_format(bool confirmed, void *ctx)
+/* Context passed from do_format → format_task → format_done_async */
+typedef struct {
+    esp_err_t            result;
+    storage_scr_state_t *scr_state;
+} format_result_t;
+
+/* Called on the LVGL task via lv_async_call — safe to touch widgets */
+static void format_done_async(void *param)
 {
-    if (!confirmed) return;
-    storage_scr_state_t *s = (storage_scr_state_t *)ctx;
+    format_result_t *fr = (format_result_t *)param;
+    ui_effect_progress_hide();
 
-    ui_effect_loading(true);
-    esp_err_t ret = hal_sdcard_format();
-    ui_effect_loading(false);
-
-    if (ret == ESP_OK) {
+    if (fr->result == ESP_OK) {
         ui_effect_toast("Format complete", 1500);
     } else {
         ui_effect_toast("Format failed", 2000);
     }
 
-    if (s) build_content(s);
+    if (fr->scr_state && g_storage_scr_state == fr->scr_state)
+        build_content(fr->scr_state);
+
+    lv_mem_free(fr);
+}
+
+/* Runs on a dedicated FreeRTOS task so the LVGL task stays free
+ * to render the progress animation during the blocking format. */
+static void format_task(void *arg)
+{
+    format_result_t *fr = (format_result_t *)arg;
+    fr->result = hal_sdcard_format();
+    lv_async_call(format_done_async, fr);
+    vTaskDelete(NULL);
+}
+
+static void do_format(bool confirmed, void *ctx)
+{
+    if (!confirmed) return;
+
+    format_result_t *fr = (format_result_t *)lv_mem_alloc(sizeof(format_result_t));
+    if (!fr) return;
+    fr->result    = ESP_FAIL;
+    fr->scr_state = (storage_scr_state_t *)ctx;
+
+    ui_effect_progress_show("FORMATTING SD CARD...", false, NULL, NULL);
+
+    if (xTaskCreate(format_task, "sd_format", 4096, fr, 5, NULL) != pdPASS) {
+        lv_mem_free(fr);
+        ui_effect_progress_hide();
+        ui_effect_toast("Format failed", 2000);
+    }
 }
 
 static void format_btn_cb(lv_event_t *e)

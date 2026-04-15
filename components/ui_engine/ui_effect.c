@@ -327,3 +327,230 @@ void ui_effect_loading(bool show)
 
     ESP_LOGD(TAG, "Loading overlay shown");
 }
+
+/* ========== Progress overlay ========== */
+
+/* Geometry */
+#define PROG_BAR_H      20    /* bar height in px                           */
+#define PROG_STRIPE_W   12    /* width of one colored stripe (and one gap)  */
+#define PROG_ANIM_STEP   2    /* px to advance per timer tick               */
+#define PROG_ANIM_MS    40    /* animation timer interval (ms)              */
+
+typedef struct {
+    lv_obj_t                  *overlay;    /* backdrop — delete to dismiss  */
+    lv_obj_t                  *bar_canvas; /* animated bar                  */
+    lv_color_t                *bar_buf;    /* pixel buffer for canvas       */
+    lv_timer_t                *anim_timer;
+    lv_coord_t                 bar_w;      /* canvas width                  */
+    int16_t                    stripe_off; /* current ribbon offset (px)    */
+    int8_t                     pct;        /* -1 = indeterminate, 0-100     */
+    ui_progress_cancel_cb_t    cancel_cb;
+    void                      *cancel_ctx;
+} progress_state_t;
+
+static progress_state_t prog_st = { 0 };
+
+/* ---- Draw the bar into its canvas ---- */
+static void progress_draw(void)
+{
+    if (!prog_st.bar_canvas || !prog_st.bar_buf) return;
+
+    const cyberdeck_theme_t *t = ui_theme_get();
+    lv_coord_t W = prog_st.bar_w;
+    lv_coord_t H = PROG_BAR_H;
+
+    /* Background */
+    lv_canvas_fill_bg(prog_st.bar_canvas, t->bg_card, LV_OPA_COVER);
+
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_color     = t->primary;
+    dsc.bg_opa       = LV_OPA_COVER;
+    dsc.border_width = 0;
+    dsc.radius       = 0;
+
+    if (prog_st.pct < 0) {
+        /* Indeterminate — zebra ribbon: diagonal stripes at 45°, moving left.
+         * Stripe i occupies top x [sx, sx+S), bottom x [sx+H, sx+S+H).
+         * We iterate from before the left edge to beyond the right. */
+        int period = PROG_STRIPE_W * 2;
+        int off    = prog_st.stripe_off % period;
+        for (int sx = -period + off; sx < W + H; sx += period) {
+            lv_point_t pts[4] = {
+                {(lv_coord_t)sx,               0},
+                {(lv_coord_t)(sx + PROG_STRIPE_W),     0},
+                {(lv_coord_t)(sx + PROG_STRIPE_W + H), H},
+                {(lv_coord_t)(sx + H),                 H},
+            };
+            lv_canvas_draw_polygon(prog_st.bar_canvas, pts, 4, &dsc);
+        }
+    } else {
+        /* Determinate — solid filled bar proportional to pct */
+        lv_coord_t filled = (lv_coord_t)((W * (int32_t)prog_st.pct) / 100);
+        if (filled > 0) {
+            lv_point_t pts[4] = {
+                {0,      0}, {filled, 0},
+                {filled, H}, {0,      H},
+            };
+            lv_canvas_draw_polygon(prog_st.bar_canvas, pts, 4, &dsc);
+        }
+    }
+}
+
+/* ---- Animation tick ---- */
+static void progress_anim_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!prog_st.bar_canvas) return;
+    prog_st.stripe_off = (prog_st.stripe_off + PROG_ANIM_STEP) %
+                         (PROG_STRIPE_W * 2);
+    progress_draw();
+    lv_obj_invalidate(prog_st.bar_canvas);
+}
+
+/* ---- Cancel button ---- */
+static void progress_cancel_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_progress_cancel_cb_t cb  = prog_st.cancel_cb;
+    void                   *ctx = prog_st.cancel_ctx;
+    ui_effect_progress_hide();
+    if (cb) cb(ctx);
+}
+
+/* ---- Public API ---- */
+
+void ui_effect_progress_show(const char *msg, bool cancellable,
+                             ui_progress_cancel_cb_t cancel_cb, void *ctx)
+{
+    ui_effect_progress_hide();   /* dismiss any existing instance */
+
+    const cyberdeck_theme_t *t = ui_theme_get();
+    lv_coord_t dlg_x = effect_portrait() ? 0 : -(UI_NAVBAR_THICK / 2);
+
+    /* ---- Semi-transparent backdrop ---- */
+    lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(backdrop, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(backdrop, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(backdrop, 0, 0);
+    lv_obj_set_style_radius(backdrop, 0, 0);
+    lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* ---- Dialog box ---- */
+    lv_obj_t *box = lv_obj_create(backdrop);
+    lv_obj_set_size(box, DLG_W, LV_SIZE_CONTENT);
+    lv_obj_align(box, LV_ALIGN_CENTER, dlg_x, 0);
+    lv_obj_set_style_bg_color(box, t->bg_dark, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(box, t->primary_dim, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_radius(box, 2, 0);
+    lv_obj_set_style_pad_all(box, DLG_BODY_PAD, 0);
+    lv_obj_set_style_pad_row(box, DLG_ROW_GAP, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* ---- Optional message label ---- */
+    if (msg && msg[0]) {
+        lv_obj_t *lbl = lv_label_create(box);
+        lv_label_set_text(lbl, msg);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(lbl, LV_PCT(100));
+        ui_theme_style_label_dim(lbl, &CYBERDECK_FONT_SM);
+    }
+
+    /* ---- Progress bar (canvas) ---- */
+    lv_coord_t bar_w = DLG_W - DLG_BODY_PAD * 2;
+
+    /* Wrapper provides the 1 px border around the canvas */
+    lv_obj_t *bar_wrap = lv_obj_create(box);
+    lv_obj_set_width(bar_wrap, LV_PCT(100));
+    lv_obj_set_height(bar_wrap, PROG_BAR_H + 2);
+    lv_obj_set_style_bg_opa(bar_wrap, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(bar_wrap, t->primary_dim, 0);
+    lv_obj_set_style_border_width(bar_wrap, 1, 0);
+    lv_obj_set_style_pad_all(bar_wrap, 0, 0);
+    lv_obj_set_style_radius(bar_wrap, 0, 0);
+    lv_obj_clear_flag(bar_wrap, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_color_t *bbuf = (lv_color_t *)lv_mem_alloc(
+                           bar_w * PROG_BAR_H * sizeof(lv_color_t));
+
+    lv_obj_t *canvas = NULL;
+    if (bbuf) {
+        canvas = lv_canvas_create(bar_wrap);
+        lv_canvas_set_buffer(canvas, bbuf, bar_w, PROG_BAR_H,
+                             LV_IMG_CF_TRUE_COLOR);
+        lv_obj_set_size(canvas, bar_w, PROG_BAR_H);
+        lv_obj_align(canvas, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_clear_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    prog_st.bar_canvas = canvas;
+    prog_st.bar_buf    = bbuf;
+    prog_st.bar_w      = bar_w;
+    prog_st.stripe_off = 0;
+    prog_st.pct        = -1;       /* start indeterminate */
+    prog_st.cancel_cb  = cancel_cb;
+    prog_st.cancel_ctx = ctx;
+    prog_st.overlay    = backdrop;
+
+    progress_draw();
+
+    /* Start animation timer (only makes sense when LVGL task is free) */
+    prog_st.anim_timer = lv_timer_create(progress_anim_cb, PROG_ANIM_MS, NULL);
+
+    /* ---- Optional CANCEL button ---- */
+    if (cancellable) {
+        lv_obj_t *gap = lv_obj_create(box);
+        lv_obj_set_size(gap, LV_PCT(100), DLG_BTN_GAP);
+        lv_obj_set_style_bg_opa(gap, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(gap, 0, 0);
+        lv_obj_set_style_pad_all(gap, 0, 0);
+        lv_obj_clear_flag(gap, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *btn_row = ui_common_action_row(box);
+        lv_obj_t *btn_cancel = ui_common_btn(btn_row, "CANCEL");
+        lv_obj_add_event_cb(btn_cancel, progress_cancel_btn_cb,
+                            LV_EVENT_CLICKED, NULL);
+    }
+
+    ESP_LOGD(TAG, "Progress overlay shown (msg=%s cancellable=%d)",
+             msg ? msg : "", cancellable);
+}
+
+void ui_effect_progress_set(int8_t pct)
+{
+    prog_st.pct = pct;
+    /* Switch between indeterminate ↔ determinate */
+    if (pct < 0 && !prog_st.anim_timer) {
+        prog_st.anim_timer = lv_timer_create(progress_anim_cb, PROG_ANIM_MS, NULL);
+    } else if (pct >= 0 && prog_st.anim_timer) {
+        lv_timer_del(prog_st.anim_timer);
+        prog_st.anim_timer = NULL;
+    }
+    progress_draw();
+    if (prog_st.bar_canvas) lv_obj_invalidate(prog_st.bar_canvas);
+}
+
+void ui_effect_progress_hide(void)
+{
+    if (prog_st.anim_timer) {
+        lv_timer_del(prog_st.anim_timer);
+        prog_st.anim_timer = NULL;
+    }
+    if (prog_st.bar_buf) {
+        lv_mem_free(prog_st.bar_buf);
+        prog_st.bar_buf = NULL;
+    }
+    if (prog_st.overlay) {
+        lv_obj_del(prog_st.overlay);
+        prog_st.overlay = NULL;
+    }
+    memset(&prog_st, 0, sizeof(prog_st));
+    ESP_LOGD(TAG, "Progress overlay hidden");
+}
