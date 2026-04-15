@@ -636,18 +636,38 @@ Pendiente: verificación en hardware de Fase 6.
 
 ---
 
-### 🔲 Fase 7a — Infraestructura OS (no disruptiva)
+### 🔲 Fase 7 — SDK Refactor (sprint completo, una sola sesión)
 
-No rompe nada existente. Infraestructura nueva en paralelo.
+> **Una sola sesión de trabajo. Build limpio al final o no se commitea.**
+> La infraestructura sin la migración de firma es media casa inútil.
+> La migración de firma sin la infraestructura no compila.
+> Se hacen juntas.
 
-| ID | Descripción | Archivo nuevo |
-|----|-------------|---------------|
+| ID | Descripción | Archivo |
+|----|-------------|---------|
 | I1 | `os_process.h/.c` — registry de procesos activos | `os_core/` |
 | I2 | `os_service.h/.c` — registry de servicios de core | `os_core/` |
 | I3 | `svc_monitor.h/.c` — snapshot + doble buffer + eventos | `sys_services/` |
-| I4 | Servicios auto-registran en `os_service`: wifi, battery, time, ota, downloader, poller | múltiples |
-| I5 | Nuevos `EVT_APP_LAUNCHED`, `EVT_APP_TERMINATED`, `EVT_MONITOR_UPDATED` en `os_core.h` | `os_core.h` |
-| I6 | `svc_monitor_init(2000)` en `app_main()` | `main.c` |
+| I4 | Servicios auto-registran en `os_service` (wifi, battery, time, ota, downloader, poller) | múltiples |
+| I5 | Nuevos `EVT_APP_LAUNCHED`, `EVT_APP_TERMINATED`, `EVT_MONITOR_UPDATED` | `os_core.h` |
+| J1 | `os_app_storage.h/.c` — sandbox FS + open/close/path | `os_core/` |
+| J2 | `os_db.h/.c` — SQLite migrations | `os_core/` |
+| J3 | Cambiar `view_cbs_t`: add `void *app_data` en 4 callbacks | `ui_activity.h` |
+| J4 | Cambiar `app_ops_t`: `on_launch(id, args, storage*)` retorna `app_data*` | `app_registry.h` |
+| J5 | `ui_activity.c`: pasar `app_data` del proceso a cada view callback | `ui_activity.c` |
+| J6 | `app_manager.c`: `os_process_start/stop` en navigate_fn y close hook | `app_manager.c` |
+| J7 | Migrar Launcher | `app_launcher.c` |
+| J8 | Migrar Lockscreen | `launcher_lockscreen.c` |
+| J9 | Migrar Settings main | `app_settings.c` |
+| J10 | Migrar sub-screens de Settings (8 pantallas) | `settings_*.c` |
+| J11 | Migrar Task Manager / Processes | `app_taskman.c` |
+| K1 | App Processes: pantalla Overview (event-driven, svc_monitor) | `processes_overview.c` |
+| K2 | App Processes: pantalla App Detail | `processes_app_detail.c` |
+| K3 | App Processes: pantalla Sys View (dev mode) | `processes_sysview.c` |
+| K4 | Renombrar `app_taskman` → `app_processes` | — |
+| — | `svc_monitor_init()` en `app_main()` | `main.c` |
+| — | Build clean — 0 errores, 0 warnings | — |
+| — | Verificar en hardware | HW |
 
 **I1 — `os_process.h` draft:**
 
@@ -681,43 +701,15 @@ uint8_t       os_process_list(os_process_t *buf, uint8_t max);
 
 ---
 
-### 🔲 Fase 7b — Migración de firma (ruptura total)
-
-> **Sesión dedicada.** Cambiar firma en TODO de una vez — nunca gradualmente.
-> Target: 0 errores, 0 warnings antes de commitear.
-
-| ID | Descripción | Archivos afectados |
-|----|-------------|--------------------|
-| J1 | `os_app_storage.h/.c` — sandbox FS | `os_core/` |
-| J2 | `os_db.h/.c` — SQLite migrations | `os_core/` |
-| J3 | Cambiar `view_cbs_t`: add `void *app_data` en 4 callbacks | `ui_activity.h` |
-| J4 | Cambiar `app_ops_t`: `on_launch(id, args, storage*)` retorna `app_data*` | `app_registry.h` |
-| J5 | `ui_activity.c`: pasar `app_data` del proceso a cada view callback | `ui_activity.c` |
-| J6 | `app_manager.c`: `os_process_start` en navigate_fn, `os_process_stop` en close hook | `app_manager.c` |
-| J7 | Migrar Launcher | `app_launcher.c` |
-| J8 | Migrar Lockscreen | `launcher_lockscreen.c` |
-| J9 | Migrar Settings main | `app_settings.c` |
-| J10 | Migrar sub-screens de Settings (8 pantallas) | `settings_*.c` |
-| J11 | Migrar Task Manager | `app_taskman.c` |
-| J12 | Build clean — 0 errores, 0 warnings | — |
-
-Orden sugerido J7→J11: empezar por las apps más simples (Launcher, TaskMan) antes de Settings.
-
----
-
-### 🔲 Fase 7c — Processes app completa + servicios
-
-| ID | Descripción |
-|----|-------------|
-| K1 | App Processes: pantalla Overview (event-driven, sin polling timer) |
-| K2 | App Processes: pantalla App Detail (raise/kill) |
-| K3 | App Processes: pantalla Sys View (dev mode) |
-| K4 | Renombrar `app_taskman` → `app_processes`, actualizar registry |
-| K5 | Verificar en hardware: kill app → tasks muertos, memoria liberada |
-
----
-
 ### 🔲 Fase 7d — Apps con storage real
+
+*(disponible una vez que Fase 7 esté completa y en hardware)
+
+---
+
+### 🔲 Fase 8 — Apps con storage real
+
+*(disponible una vez que Fase 7 esté en hardware)*
 
 | ID | App | DB Schema |
 |----|-----|-----------|
@@ -990,36 +982,26 @@ esp_err_t app_notes_register(void)
 - [ ] Flash + verificar que KILL en Processes mata tasks y libera memoria
 - [ ] Commit de Fase 6
 
-### Fase 7a — infraestructura OS
+### Fase 7 — SDK Refactor (sprint completo)
 
 - [ ] I1: `os_process.h/.c`
 - [ ] I2: `os_service.h/.c`
 - [ ] I3: `svc_monitor.h/.c` + doble buffer + eventos
 - [ ] I4: auto-registro de servicios (wifi, battery, time, ota, downloader, poller)
 - [ ] I5: nuevos eventos en `os_core.h`
-- [ ] I6: `svc_monitor_init()` en `app_main()`
-- [ ] Build clean, commit
-
-### Fase 7b — migración de firma
-
 - [ ] J1: `os_app_storage.h/.c`
 - [ ] J2: `os_db.h/.c`
 - [ ] J3–J4: cambiar firmas `view_cbs_t` + `app_ops_t`
 - [ ] J5–J6: `ui_activity.c` + `app_manager.c`
-- [ ] J7–J11: migrar todas las apps (Launcher, Lockscreen, Settings x8, TaskMan)
-- [ ] J12: build clean — 0 errores, 0 warnings
-- [ ] Commit
-
-### Fase 7c — Processes app completa
-
-- [ ] K1: Overview screen (event-driven)
-- [ ] K2: App Detail screen
-- [ ] K3: Sys View (dev mode)
+- [ ] J7–J11: migrar apps (Launcher, Lockscreen, Settings x8, TaskMan/Processes)
+- [ ] K1–K3: pantallas Overview, App Detail, Sys View
 - [ ] K4: renombrar taskman → processes
-- [ ] K5: verificar en hardware
+- [ ] `svc_monitor_init()` en `app_main()`
+- [ ] Build clean — 0 errores, 0 warnings
+- [ ] Verificar en hardware
 - [ ] Commit
 
-### Fase 7d — apps con storage
+### Fase 8 — Apps con storage real
 
 - [ ] L1: Notes
 - [ ] L2: Tasks
