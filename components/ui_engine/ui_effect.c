@@ -9,8 +9,12 @@
 #include "esp_log.h"
 #include <string.h>
 
-/* Horizontal offset to center elements within the non-navbar content area */
-#define CONTENT_OFFSET_X   (-(UI_NAVBAR_THICK / 2))
+/* Orientation helper — true when display is taller than wide */
+static bool effect_portrait(void)
+{
+    lv_disp_t *d = lv_disp_get_default();
+    return lv_disp_get_hor_res(d) < lv_disp_get_ver_res(d);
+}
 
 static const char *TAG = "ui_effect";
 
@@ -40,10 +44,20 @@ void ui_effect_toast(const char *msg, uint16_t ms)
 
     const cyberdeck_theme_t *t = ui_theme_get();
 
+    /* Orientation-aware positioning:
+     * Landscape: navbar on right  → shift toast left by half its width so it
+     *            centres in the content area (screen_w - UI_NAVBAR_THICK).
+     * Portrait:  navbar on bottom → no x shift; push toast above the navbar. */
+    lv_disp_t *disp = lv_disp_get_default();
+    lv_coord_t sw = lv_disp_get_hor_res(disp);
+    bool portrait = effect_portrait();
+    lv_coord_t x_off = portrait ? 0 : -(UI_NAVBAR_THICK / 2);
+    lv_coord_t y_off = portrait ? -(UI_NAVBAR_THICK + 20) : -20;
+
     /* Toast container */
     toast_obj = lv_obj_create(lv_layer_top());
     lv_obj_set_size(toast_obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_align(toast_obj, LV_ALIGN_BOTTOM_MID, CONTENT_OFFSET_X, -30);
+    lv_obj_align(toast_obj, LV_ALIGN_BOTTOM_MID, x_off, y_off);
     lv_obj_set_style_bg_color(toast_obj, t->bg_card, 0);
     lv_obj_set_style_bg_opa(toast_obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(toast_obj, t->primary, 0);
@@ -58,9 +72,8 @@ void ui_effect_toast(const char *msg, uint16_t ms)
     lv_label_set_text(label, msg);
     lv_obj_set_style_text_color(label, t->text, 0);
     lv_obj_set_style_text_font(label, &CYBERDECK_FONT_SM, 0);
-    /* Keep within content area (screen width minus navbar) */
-    lv_disp_t *disp = lv_disp_get_default();
-    lv_coord_t max_w = lv_disp_get_hor_res(disp) - UI_NAVBAR_THICK - 40;
+    /* Max width = usable content area minus some margin */
+    lv_coord_t max_w = (portrait ? sw : sw - UI_NAVBAR_THICK) - 40;
     lv_obj_set_style_max_width(label, max_w, 0);
 
     /* Auto-dismiss timer */
@@ -118,7 +131,8 @@ void ui_effect_confirm(const char *title, const char *msg,
     /* Dialog box */
     lv_obj_t *dialog = lv_obj_create(backdrop);
     lv_obj_set_size(dialog, 350, LV_SIZE_CONTENT);
-    lv_obj_align(dialog, LV_ALIGN_CENTER, CONTENT_OFFSET_X, 0);
+    lv_coord_t dlg_x = effect_portrait() ? 0 : -(UI_NAVBAR_THICK / 2);
+    lv_obj_align(dialog, LV_ALIGN_CENTER, dlg_x, 0);
     lv_obj_set_style_bg_color(dialog, t->bg_dark, 0);
     lv_obj_set_style_bg_opa(dialog, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(dialog, t->primary, 0);
@@ -232,7 +246,8 @@ void ui_effect_loading(bool show)
     lv_label_set_text(cursor, "_");
     lv_obj_set_style_text_color(cursor, t->primary, 0);
     lv_obj_set_style_text_font(cursor, &CYBERDECK_FONT_XL, 0);
-    lv_obj_align(cursor, LV_ALIGN_CENTER, CONTENT_OFFSET_X, 0);
+    lv_coord_t cur_x = effect_portrait() ? 0 : -(UI_NAVBAR_THICK / 2);
+    lv_obj_align(cursor, LV_ALIGN_CENTER, cur_x, 0);
 
     /* Blink at 500ms interval */
     loading_timer = lv_timer_create(loading_blink_cb, 500, cursor);
