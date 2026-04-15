@@ -200,9 +200,16 @@ static void sd_poll_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));   /* poll every 5s */
 
-        bool mounted = hal_sdcard_is_mounted();
+        /* hal_sdcard_is_mounted() only tracks the software flag — it stays true
+         * even after a physical removal.  Use hal_sdcard_probe() to verify the
+         * card is actually accessible, then attempt a mount if it isn't. */
+        bool mounted = hal_sdcard_probe();
 
         if (!mounted) {
+            if (hal_sdcard_is_mounted()) {
+                /* Card was physically removed — clean up the mount */
+                hal_sdcard_unmount();
+            }
             /* Try to mount in case a card was inserted since last check */
             if (hal_sdcard_mount() == ESP_OK) {
                 mounted = true;
@@ -214,7 +221,18 @@ static void sd_poll_task(void *arg)
             last_mounted = mounted;
             app_state_update_sd(mounted);
 
-            if (!mounted) hal_sdcard_unmount();
+            /* Fetch space info here (Core 0, no LVGL lock) so the UI can
+             * read it from app_state without touching the filesystem. */
+            if (mounted) {
+                uint32_t total_kb = 0, used_kb = 0;
+                esp_err_t space_ret = hal_sdcard_get_space(&total_kb, &used_kb);
+                ESP_LOGI(TAG, "sd_poll space: ret=%s total=%lu used=%lu",
+                         esp_err_to_name(space_ret),
+                         (unsigned long)total_kb, (unsigned long)used_kb);
+                if (space_ret == ESP_OK) {
+                    app_state_update_sd_space(total_kb, used_kb);
+                }
+            }
 
             /* Update statusbar directly — more reliable than bouncing through
              * the event loop where ui_lock() can silently time out. */
@@ -349,6 +367,14 @@ void app_main(void)
     svc_event_register(EVT_SDCARD_MOUNTED,   on_sdcard_mounted,   NULL);
     svc_event_register(EVT_SDCARD_UNMOUNTED, on_sdcard_unmounted, NULL);
     if (hal_sdcard_mount() == ESP_OK) {
+        app_state_update_sd(true);
+        uint32_t total_kb = 0, used_kb = 0;
+        esp_err_t space_ret = hal_sdcard_get_space(&total_kb, &used_kb);
+        ESP_LOGI(TAG, "SD space: ret=%s total=%lu used=%lu",
+                 esp_err_to_name(space_ret), (unsigned long)total_kb, (unsigned long)used_kb);
+        if (space_ret == ESP_OK) {
+            app_state_update_sd_space(total_kb, used_kb);
+        }
         svc_event_post(EVT_SDCARD_MOUNTED, NULL, 0);
         ESP_LOGI(TAG, "SD card mounted");
     } else {
@@ -379,11 +405,6 @@ void app_main(void)
     svc_wifi_auto_connect();
     ESP_LOGI(TAG, "WiFi init OK (auto-connecting)");
 
-    /* Boot complete toast */
-    if (ui_lock(100)) {
-        ui_effect_toast("BOOT OK - Phase 4", 2000);
-        ui_unlock();
-    }
 
     ESP_LOGI(TAG, "Boot complete");
 

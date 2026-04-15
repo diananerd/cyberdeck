@@ -27,6 +27,8 @@ typedef struct {
     uint32_t audio_pos_ms;
     uint32_t audio_dur_ms;
     bool     sd_mounted;
+    uint32_t sd_total_kb;
+    uint32_t sd_used_kb;
 } cyberdeck_state_t;
 
 void                     app_state_init(void);
@@ -34,6 +36,7 @@ const cyberdeck_state_t *app_state_get(void);
 void                     app_state_update_wifi(bool connected, const char *ssid, int8_t rssi);
 void                     app_state_update_battery(uint8_t pct);
 void                     app_state_update_sd(bool mounted);
+void                     app_state_update_sd_space(uint32_t total_kb, uint32_t used_kb);
 void                     app_state_set_bt(bool present, bool connected, const char *name);
 
 #ifdef __cplusplus

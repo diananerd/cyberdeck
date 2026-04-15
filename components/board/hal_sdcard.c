@@ -10,7 +10,6 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "esp_log.h"
-#include <sys/statvfs.h>
 
 static const char *TAG = "hal_sdcard";
 
@@ -115,18 +114,22 @@ bool hal_sdcard_is_mounted(void)
     return s_mounted;
 }
 
+bool hal_sdcard_probe(void)
+{
+    if (!s_mounted) return false;
+    uint64_t bytes_total, bytes_free;
+    return (esp_vfs_fat_info(HAL_SDCARD_MOUNT_POINT, &bytes_total, &bytes_free) == ESP_OK);
+}
+
 esp_err_t hal_sdcard_get_space(uint32_t *total_kb, uint32_t *used_kb)
 {
     if (!s_mounted || !total_kb || !used_kb) return ESP_ERR_INVALID_STATE;
 
-    struct statvfs stat;
-    if (statvfs(HAL_SDCARD_MOUNT_POINT, &stat) != 0) {
-        return ESP_FAIL;
-    }
+    uint64_t bytes_total, bytes_free;
+    esp_err_t ret = esp_vfs_fat_info(HAL_SDCARD_MOUNT_POINT, &bytes_total, &bytes_free);
+    if (ret != ESP_OK) return ret;
 
-    uint64_t total = (uint64_t)stat.f_blocks * stat.f_frsize / 1024;
-    uint64_t free  = (uint64_t)stat.f_bfree  * stat.f_frsize / 1024;
-    *total_kb = (uint32_t)total;
-    *used_kb  = (uint32_t)(total - free);
+    *total_kb = (uint32_t)(bytes_total / 1024);
+    *used_kb  = (uint32_t)((bytes_total - bytes_free) / 1024);
     return ESP_OK;
 }

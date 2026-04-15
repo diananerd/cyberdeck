@@ -36,6 +36,16 @@ void app_state_update_battery(uint8_t pct)
 void app_state_update_sd(bool mounted)
 {
     s_state.sd_mounted = mounted;
+    if (!mounted) {
+        s_state.sd_total_kb = 0;
+        s_state.sd_used_kb  = 0;
+    }
+}
+
+void app_state_update_sd_space(uint32_t total_kb, uint32_t used_kb)
+{
+    s_state.sd_total_kb = total_kb;
+    s_state.sd_used_kb  = used_kb;
 }
 
 void app_state_set_bt(bool present, bool connected, const char *name)
