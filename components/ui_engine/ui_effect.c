@@ -44,20 +44,19 @@ void ui_effect_toast(const char *msg, uint16_t ms)
 
     const cyberdeck_theme_t *t = ui_theme_get();
 
-    /* Orientation-aware positioning:
-     * Landscape: navbar on right  → shift toast left by half its width so it
-     *            centres in the content area (screen_w - UI_NAVBAR_THICK).
-     * Portrait:  navbar on bottom → no x shift; push toast above the navbar. */
+    /* Centre toast in the content area (excluding navbar):
+     * Landscape: navbar on right  → shift left by half its thickness
+     * Portrait:  navbar on bottom → shift up by half its thickness */
     lv_disp_t *disp = lv_disp_get_default();
     lv_coord_t sw = lv_disp_get_hor_res(disp);
     bool portrait = effect_portrait();
-    lv_coord_t x_off = portrait ? 0 : -(UI_NAVBAR_THICK / 2);
-    lv_coord_t y_off = portrait ? -(UI_NAVBAR_THICK + 20) : -20;
+    lv_coord_t x_off = portrait ? 0                   : -(UI_NAVBAR_THICK / 2);
+    lv_coord_t y_off = portrait ? -(UI_NAVBAR_THICK / 2) : 0;
 
     /* Toast container */
     toast_obj = lv_obj_create(lv_layer_top());
     lv_obj_set_size(toast_obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_align(toast_obj, LV_ALIGN_BOTTOM_MID, x_off, y_off);
+    lv_obj_align(toast_obj, LV_ALIGN_CENTER, x_off, y_off);
     lv_obj_set_style_bg_color(toast_obj, t->bg_card, 0);
     lv_obj_set_style_bg_opa(toast_obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(toast_obj, t->primary, 0);
