@@ -170,7 +170,7 @@ static void launcher_on_create(lv_obj_t *screen, void *intent_data)
         }
     }
 
-    ui_statusbar_set_title("S3 CYBER-DECK");
+    ui_statusbar_set_title("S3 CYBERDECK");
     ESP_LOGI(TAG, "Created (%dx%d, card=%dpx, apps=%d)",
              cols, rows, (int)card_sz, app_count);
 }
@@ -179,7 +179,7 @@ static void launcher_on_resume(lv_obj_t *screen, void *state)
 {
     (void)screen;
     (void)state;
-    ui_statusbar_set_title("S3 CYBER-DECK");
+    ui_statusbar_set_title("S3 CYBERDECK");
 }
 
 static const activity_cbs_t s_launcher_cbs = {
