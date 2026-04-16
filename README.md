@@ -2,6 +2,8 @@
 
 ESP32-S3 firmware for the [Waveshare ESP32-S3-Touch-LCD-4.3](https://www.waveshare.com/esp32-s3-touch-lcd-4.3.htm) board — an OS-like launcher with a terminal-aesthetic UI built on ESP-IDF and LVGL 8.
 
+The long-term goal is a fully self-contained handheld OS that runs apps written in **Deck**, a purpose-built embedded DSL that lives on the SD card and runs on a sandboxed interpreter — no recompilation, no flashing.
+
 **Version:** 0.1.0 · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD
 
 ---
@@ -88,6 +90,26 @@ Navigation uses a **push/pop activity stack** (max 4 levels). The launcher is al
 | Launcher | Done |
 | Settings (WiFi, Display, Time, Storage, Security, Audio, About) | Done |
 | Books, Notes, Tasks, Music, Podcasts, Calculator, Bluesky, Files | Planned |
+| Bitchat, Meshtastic, Mail | Planned |
+
+---
+
+## Deck Language
+
+Apps in CyberDeck are designed to be written in **Deck** — a sandboxed, interpreted DSL that loads from the SD card without reflashing. Deck specs live in [`deck-lang/`](deck-lang/).
+
+| File | Contents |
+|---|---|
+| [`01-deck-lang.md`](deck-lang/01-deck-lang.md) | Core language — syntax, types, pattern matching, effects |
+| [`02-deck-app.md`](deck-lang/02-deck-app.md) | App model — `@app`, `@use`, `@on`, `@nav`, lifecycle annotations |
+| [`03-deck-os.md`](deck-lang/03-deck-os.md) | OS interface — bridge protocol, `.deck-os` surface file, sandboxing |
+| [`04-deck-runtime.md`](deck-lang/04-deck-runtime.md) | Interpreter internals — lexer, parser, evaluator, effect dispatcher |
+| [`05-deck-os-api.md`](deck-lang/05-deck-os-api.md) | High-level OS services — SQLite, NVS, FS, HTTP client, MQTT, OTA, crypto |
+| [`06-deck-native.md`](deck-lang/06-deck-native.md) | Native bindings — extending the runtime with C capabilities and events |
+| [`07-deck-bluesky.md`](deck-lang/07-deck-bluesky.md) | Annex A — complete Bluesky ATProto client in Deck |
+| [`08-deck-markdown.md`](deck-lang/08-deck-markdown.md) | Annex C — first-class Markdown rendering and editing capability |
+
+See also [`GROUND-STATE.md`](GROUND-STATE.md) for a full audit of the current C API surface and what needs to be built before Deck can run, and [`APPS.md`](APPS.md) for the planned app catalog.
 
 ---
 

@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CyberDeck — ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-LCD-4.3 board. A modular, OS-like UI application built with ESP-IDF (v6.0.0), LVGL 8.4.0, and FreeRTOS. 800x480 RGB LCD, GT911 touch, CH422G I/O expander, PCF85063A RTC, SD card, PSRAM, 8MB flash.
 
+The long-term goal is to run apps written in **Deck** — a purpose-built embedded DSL that loads from SD card and executes in a sandboxed interpreter without reflashing. All Deck language and runtime specs live in `deck-lang/`.
+
+### Key reference documents
+
+| File | What it is |
+|---|---|
+| `GROUND-STATE.md` | Full audit of the current C API surface: what's implemented, what leaks ESP-IDF types, what's missing before Deck can run |
+| `APPS.md` | Planned app catalog with storage model, services consumed, and screens for each app |
+| `deck-lang/01-deck-lang.md` | Deck core language spec — syntax, types, effects, pattern matching |
+| `deck-lang/02-deck-app.md` | Deck app model — `@app`, `@use`, `@on`, `@nav`, lifecycle |
+| `deck-lang/03-deck-os.md` | OS bridge protocol and `.deck-os` surface file format |
+| `deck-lang/04-deck-runtime.md` | Interpreter internals — lexer, parser, evaluator, effect dispatcher |
+| `deck-lang/05-deck-os-api.md` | High-level OS services exposed to Deck apps (SQLite, NVS, FS, HTTP, MQTT, OTA) |
+| `deck-lang/06-deck-native.md` | How to extend the runtime with C capabilities and events |
+| `deck-lang/07-deck-bluesky.md` | Reference Deck app: complete Bluesky ATProto client |
+| `deck-lang/08-deck-markdown.md` | Markdown as a first-class Deck capability |
+
+When working on anything related to how apps are structured, what services they consume, or what the interpreter needs from the OS — consult `GROUND-STATE.md` first.
+
 ## Build & Flash Commands
 
 ```bash
