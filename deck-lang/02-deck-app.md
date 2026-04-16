@@ -240,7 +240,7 @@ transition :update (reading: float)
       from *
       to   :idle
 
-  body = ...
+  content = ...
 ```
 
 The inline `@machine` inside a `@view` does not take a name. It is always accessed as `state` and `send()`.
@@ -375,8 +375,8 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
   on suspend   -> expr_or_do_block
   on resume    -> expr_or_do_block
 
-  body =
-    component_tree
+  content =
+    view_body
 ```
 
 ### 11.1 @shows and @hides
@@ -413,209 +413,366 @@ These hooks may use `!effect` capabilities declared in `@use`.
 
 ---
 
-## 12. View Body DSL
+## 12. View Body
 
-The body is a tree of components. Components are provided and rendered natively by the OS. Deck describes structure, data, and intent — the OS handles layout, fonts, colors, and animation. This means all apps look consistent on a given OS and require no rendering code.
+The `content =` of a view is a semantic description of what the user perceives and can do in that context. It does not describe how to render anything — that is the OS's responsibility. The OS uses the semantic structure to apply the appropriate pattern for the form factor (phone, smartwatch, voice, e-ink, terminal).
 
-### 12.1 Root and Layout
+### 12.1 Structural Primitives
 
-```
-screen                        -- required root container
-
-column                        -- children stacked vertically
-row                           -- children stacked horizontally
-center                        -- single child, centered in available space
-spacer                        -- flexible empty space
-divider                       -- horizontal rule
-
-scroll                        -- scrollable container
-  direction: :vertical | :horizontal     -- default :vertical
-  on refresh -> expr          -- enables pull-to-refresh; omit to disable
-  component_tree
-
-card                          -- visually grouped container (elevation/border)
-  component_tree
-```
-
-### 12.2 Text and Display
+**`list`** — collection of items of the same type.
 
 ```
-text str_expr
-  style: :heading | :subheading | :body | :caption | :code
-         :large | :small | :muted | :warning | :danger | :success
-         -- multiple styles: style: :large :muted
-
-reading                       -- labeled data value (sensor/metric display)
-  label:     str_expr
-  value:     any_expr
-  unit:      str_expr
-  alert:     when condition   -- OS highlights/pulses when true
-  available: when condition   -- hides component when false
-  accessibility: str_expr?    -- overrides default VoiceOver/TalkBack label
+list expr
+  empty ->
+    content               -- perceived state when expr is []
+  more:    bool_expr      -- signal that more items are available
+  on more -> action       -- how to load them; the OS exposes this per form factor
+  var ->
+    content               -- structure of each item
 ```
 
-### 12.3 Inputs
-
-All inputs dispatch `event.value` (the new value) to their `on change` handler. The current value is read from state — inputs are controlled components.
+**`item`** — standalone entity for detail views (the subject of the view is a single thing).
 
 ```
-input                         -- single-line text input
-  value:       str_expr
-  placeholder: str_expr
-  style:       :default | :search | :password | :email | :url | :numeric
-  max_length:  int?
-  enabled:     bool_expr      -- default true
-  on change -> expr_using_event_value
-
-textarea                      -- multi-line text input
-  value:       str_expr
-  placeholder: str_expr
-  max_length:  int?
-  lines:       int            -- initial height hint (default: 3)
-  on change -> expr_using_event_value
-
-toggle                        -- boolean switch
-  value:  bool_expr
-  label:  str_expr?
-  on change -> expr_using_event_value  -- event.value: bool
-
-slider                        -- continuous numeric input
-  value: float_expr
-  min:   float
-  max:   float
-  step:  float?               -- default: continuous
-  on change -> expr_using_event_value  -- event.value: float
-
-picker                        -- selection from discrete options
-  value:   any_expr
-  options: [(label: str, value: any)]
-  on change -> expr_using_event_value  -- event.value: selected value
+item ->
+  content
 ```
 
-**`event` binding**: Inside `on change ->`, `on press ->`, and similar handlers, `event` is an implicit binding with fields:
-- `event.value` — new value (for input, toggle, slider, picker)
-- `event.index` — zero-based index of selected item (for list item handlers)
-
-### 12.4 Actions
+**`group`** — named semantic grouping. The label communicates the group's purpose to the OS; together with the types and intents inside, the OS decides how to present it.
 
 ```
-button str_expr
-  -> :nav_route                               -- navigate
-  -> :nav_route with: param = expr            -- navigate with params
-  -> nav.back                                 -- go back
-  -> nav.root                                 -- go to root
-  -> expr                                     -- expression (send, call, do)
-  style:         :primary | :secondary | :danger | :ghost | :link
-  enabled:       bool_expr                    -- default true
-  confirm:       str_expr                     -- shows native confirmation dialog
-  confirm_label: str_expr                     -- default "Confirm"
-  cancel_label:  str_expr                     -- default "Cancel"
-  on confirm -> expr                          -- runs if user confirms
-  accessibility: str_expr?
-
-actions                       -- horizontal button group (OS decides layout)
-  button ...
-  button ...
+group "label"
+  content
 ```
 
-When `confirm:` is present: the OS intercepts the press, shows a native dialog with the given message, and only executes the action (or `on confirm`) if the user confirms. Without `on confirm`, the original `->` action runs on confirmation.
+Groups may nest. Depth communicates hierarchy.
 
-### 12.5 Lists and Collections
-
-```
-list source_expression
-  item variable_name ->
-    component_tree_using_variable
-  on refresh -> expr          -- pull-to-refresh on the list (alternative to scroll)
-  empty_state ->              -- shown when source_expression is []
-    component_tree
-```
-
-`source_expression` must be `[T]`.
-
-### 12.6 Media
+**`form`** — cohesive set of inputs that are filled and submitted together. Tells the OS that the input intents contained belong to a single interaction flow. The OS may present them as a flow, sequential conversation, or traditional form depending on form factor.
 
 ```
-image
-  src:      str_expr          -- URL (http/https) or local fs path
-  alt:      str_expr          -- required; used for accessibility
-  style:    :avatar | :thumbnail | :cover | :inline | :full_width
-  cache:    bool              -- default true; OS caches fetched images
-  fallback ->                 -- shown while loading or on error
-    component_tree
+form
+  on submit -> action
+  content               -- intents of type text, choice, range, password, pin, date...
 ```
 
-Images are fetched and cached by the OS renderer transparently. The app declares intent; the OS handles networking and caching. No `!http` effect is needed on the view — the OS renderer operates outside the app's effect scope.
-
-### 12.7 Data Visualization
+**`flow`** — multi-step flow with dependent steps, not necessarily linear. Combines a state machine (controlling the flow) with content and intents per state. Each `step` defines what the user perceives and can do when the machine is in that state.
 
 ```
-chart data_expression
-  style: :line | :bar | :area | :dot | :pie
-  label: str_expr?
+flow MachineName
+  step :state_name ->
+    content
+  step :state_name var ->   -- when the state has payload, var binds it
+    content
+```
+
+The OS does not need to know how many steps there are or in what order — the machine controls transitions. The OS only knows it is showing a step of a dependent flow and applies its progress/stepper/conversation patterns accordingly.
+
+Example — login flow with 2FA:
+
+```
+@machine LoginFlow
+  state :credentials
+  state :two_factor (email: str)
+  state :done       (handle: str)
+  state :failed     (message: str)
+  initial :credentials
+
+  transition :submit (handle: str, password: str)
+    from :credentials
+    to   :two_factor (email: auth.email_for(handle))
+
+  transition :verify (code: str)
+    from :two_factor _
+    to   :done (handle: auth.handle())
+
+  transition :error (message: str)
+    from *
+    to   :failed (message: message)
+
+  transition :retry
+    from :failed _
+    to   :credentials
+
+flow LoginFlow
+  step :credentials ->
+    text     :handle    hint: "Handle or email"   on -> send(:set_handle, v: event.value)
+    password :password  hint: "Password"           on -> send(:set_password, v: event.value)
+    trigger "Sign in" -> auth.login(...)
+
+  step :two_factor s ->
+    rich_text "Enter the code sent to {s.email}"
+    pin :code  length: 6  on -> send(:verify, code: event.value)
+
+  step :done s ->
+    rich_text "Welcome, {s.handle}!"
+    navigate "Continue" -> nav.root
+
+  step :failed e ->
+    error message: e.message
+    trigger "Try again" -> send(:retry)
+```
+
+---
+
+### 12.2 View State
+
+Semantic markers for the perceived state of the view. Used inside `match` arms over machine states. The OS maps them to its loading/error patterns for the device.
+
+```
+loading                     -- the system is working; the user is waiting
+error message: str_expr     -- something went wrong; the message is shown to the user
+```
+
+---
+
+### 12.3 Content
+
+Data expressions are placed directly in the body. The OS uses the Deck type to decide how to present each value.
+
+| Type | Presentation (examples) |
+|---|---|
+| `str` | Text |
+| `int`, `float` | Numeric value |
+| `bool` | Indicator / yes/no |
+| `Timestamp` | Formatted date/time, relative age |
+| `Duration` | Human-readable duration |
+| `@type` record | Structured presentation derived from field names and types |
+
+**Semantic wrappers** — when the type alone is not enough:
+
+```
+media expr
+  alt:  str_expr      -- required; accessibility label
+  hint: atom?         -- usage context: :avatar :cover :thumbnail :inline
+```
+
+`expr` is a URL (`str`) or binary (`[byte]`). The OS infers the medium (image, video, audio) from the content type. Images from URLs are cached by the OS renderer; no `!http` is needed in the view.
+
+```
+rich_text expr
+```
+
+`expr` is a `str` that may contain mentions, hashtags, links, or markup. The OS parses and renders according to the device (active links on screen, spoken annotations on voice).
+
+```
+status expr  label: str_expr
+```
+
+`expr` is `bool` or an atom representing a state the user must perceive: connected, active, paused, online, loading. `label` names the observed thing. The OS renders as a semantic indicator.
+
+```
+chart expr
+  label:   str_expr?
   x_label: str_expr?
   y_label: str_expr?
 ```
 
-`data_expression` must be `[float]` or `[(Timestamp, float)]`.
-
-### 12.8 Status and Feedback
+`expr` must be `[float]` or `[(Timestamp, float)]`. The OS decides the appropriate visualization for the device (line, bars, ASCII sparkline, spoken trend summary).
 
 ```
-spinner                       -- indefinite loading indicator
-
-banner str_expr
-  style: :info | :warning | :danger | :success
-
-status
-  icon:    :ok | :warning | :error | :loading | :info
-  message: str_expr
-  detail:  str_expr?
-
-alert
-  level:   :low | :medium | :high | :critical
-  title:   str_expr
-  message: str_expr?
-  value:   any_expr?
-  unit:    str_expr?
+progress value: float_expr  label: str_expr?
 ```
 
-### 12.9 Conditional and Iterative Rendering
+`value` is `0.0..1.0`. An in-progress operation with measurable progress.
+
+---
+
+### 12.4 Intents
+
+Intents declare what the user can do. Each has a semantic interaction type — not a widget type. The OS maps each type to the appropriate affordance for the form factor.
+
+---
+
+**`toggle`** — the user activates/deactivates a boolean state.
+```
+toggle name: atom  state: bool_expr  on -> action
+```
+`event.value: bool`. Uses: like, follow, mute, subscribe, enable setting.
+
+---
+
+**`range`** — the user controls a continuous numeric value within a range.
+```
+range name: atom  value: float_expr  min: float  max: float
+  step: float?
+  on -> action
+```
+`event.value: float`. Uses: volume, brightness, seek position, threshold.
+
+---
+
+**`choice`** — the user selects one option from a discrete set.
+```
+choice name: atom  value: expr  options: [(label: str, value: any)]
+  on -> action
+```
+`event.value: any`. Uses: theme, language, sort order, quality.
+
+---
+
+**`multiselect`** — the user selects one or more options from a set.
+```
+multiselect name: atom  value: [expr]  options: [(label: str, value: any)]
+  on -> action
+```
+`event.value: [any]`. Uses: filters, batch operations, multiple selection.
+
+---
+
+**`text`** — the user enters free text.
+```
+text name: atom  value: str?
+  hint:       str_expr?
+  max_length: int?
+  format:     atom?     -- :email :phone :numeric :url (hint to the OS, not strict validation)
+  on -> action
+```
+`event.value: str`. Uses: compose, edit name, enter URL.
+
+---
+
+**`password`** — the user enters text the OS must hide. Semantically distinct from `text`: the OS uses secure input, hides characters, may disable screenshots.
+```
+password name: atom  value: str?
+  hint: str_expr?
+  on -> action
+```
+`event.value: str`.
+
+---
+
+**`pin`** — the user enters a fixed-length numeric code. The OS may present a dedicated numpad, progress dots, voice entry with confirmation, or physical buttons.
+```
+pin name: atom  length: int
+  on -> action
+```
+`event.value: str` (digits as string). The handler is invoked when the user completes the `length` digits; not invoked on each digit.
+
+---
+
+**`date`** — the user selects a date/time. Produces a `Timestamp`, not a string. The OS decides the affordance: calendar, wheels, voice "pick a date", etc.
+```
+date name: atom  value: Timestamp?
+  hint: str_expr?
+  on -> action
+```
+`event.value: Timestamp`.
+
+---
+
+**`search`** — the user filters or queries content. Semantically distinct from `text`: the OS may offer autocomplete, history, voice search.
+```
+search name: atom  value: str?
+  hint: str_expr?
+  on -> action
+```
+`event.value: str`.
+
+---
+
+**`navigate`** — the user wants to go to a related context.
+```
+navigate label: str  -> :route [with: param = expr]
+navigate label: str  -> nav.back
+navigate label: str  -> nav.root
+```
+
+---
+
+**`trigger`** — the user initiates an action without navigation or confirmation.
+```
+trigger label: str  -> action
+```
+Uses: refresh, retry, sync, mark as read, play/pause.
+
+---
+
+**`confirm`** — the user initiates a significant or irreversible action. The OS interposes a confirmation; how depends on the form factor (dialog, voice confirmation, double-press).
+```
+confirm label: str  message: str_expr  -> action
+```
+Uses: delete, block, sign out, reset.
+
+---
+
+**`create`** — the user initiates creation of a new entity. Semantically distinct from `navigate`: the destination is a blank creation context.
+```
+create label: str  -> :route [with: param = expr]
+```
+Uses: compose post, add contact, new document.
+
+---
+
+**`share`** — the user shares content via the OS share mechanism.
+```
+share expr  label: str?
+```
+
+---
+
+### 12.5 Scope
+
+The position of a declaration in the content determines its scope:
+
+- **Context-level** — direct child of `content =` (not inside a `list` item or `group`): applies to the whole view. The OS places it as a primary action (FAB, voice command, toolbar, physical key).
+- **Item-level** — inside the body of a `list` item: applies to that specific item. The OS exposes it through item affordances (tap, swipe, long-press, contextual voice command).
+- **Group-level** — inside a `group`: scoped to that group's semantic context. The OS may collapse group intents behind a secondary action (overflow menu, "more options", voice "options for [label]").
+
+---
+
+### 12.6 Language Integration
+
+`match`, `let`, and `for` work naturally inside content:
 
 ```
-when condition
-  component_tree
+content =
+  match Timeline.state
+    | :loading   -> loading
+    | :error e   -> error message: e.message
+    | :loaded s  ->
+        list s.posts
+          more:    s.cursor is :some
+          on more -> Timeline.send(:paginate)
+          p ->
+            group "author"
+              media p.author.avatar  alt: p.author.handle  hint: :avatar
+              p.author.display_name
+              p.author.handle
+            rich_text p.text
+            p.created_at
+            group "reactions"
+              toggle :liked    state: p.liked_by_me    on -> interaction.toggle_like(p)
+              toggle :reposted state: p.reposted_by_me on -> interaction.toggle_repost(p)
+              navigate "Reply" -> :compose_reply with: post = p
+            group "options"
+              confirm "Report"     message: "Report this post?"         -> moderation.report_post(p)
+              confirm "Block user" message: "Block @{p.author.handle}?" -> moderation.block(p.author)
+    | _ -> unit
 
-when condition
-  component_tree_a
-else
-  component_tree_b
-
-for item_name in list_expression
-  component_tree_using_item_name
+  create "Compose" -> :compose     -- context-level; always available
 ```
 
-These are rendering constructs, not control flow. The interpreter re-evaluates them reactively. `for` over an empty list renders nothing.
+`for` iterates over any `[T]` and is equivalent to `list` without `more:` and `empty ->` semantics. Use `list` when the OS should treat the collection as a navigable, potentially paginated data set; use `for` for repeated inline content inside a larger structure.
 
-### 12.10 Accessibility
+---
 
-All components accept an optional `accessibility:` prop that overrides the default VoiceOver/TalkBack label:
-```
-reading
-  label: "Heart Rate"
-  value: hr
-  unit: "bpm"
-  accessibility: "Heart rate: {hr} beats per minute"
-```
+### 12.7 `event` Binding
 
-For `image`, `alt:` is mandatory and serves as the accessibility label.
+Inside `on ->` handlers of input intents, `event` is an implicit binding:
 
-For `button`, the label text is the default accessibility label. Override when the visual label is insufficient:
-```
-button "❤️"
-  accessibility: "Like this post"
-  -> toggle_like(p)
-```
+| Intent | `event.value` |
+|---|---|
+| `toggle` | `bool` |
+| `range` | `float` |
+| `choice` | `any` |
+| `multiselect` | `[any]` |
+| `text` | `str` |
+| `password` | `str` |
+| `pin` | `str` (digits; invoked on completion) |
+| `date` | `Timestamp` |
+| `search` | `str` |
+
+`navigate`, `trigger`, `confirm`, `create`, and `share` do not bind `event`.
 
 ---
 

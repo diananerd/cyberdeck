@@ -191,7 +191,7 @@ TransDecl       { event, params, from_state, from_binding?, to_state,
 StreamDecl      { name, source?, from?, operators: [StreamOp] }
 OnHookDecl      { event: str, body: Expr }
 ViewDecl        { name, shows?, hides?, params, machine?, listens,
-                  hooks: [(atom, Expr)], body: ComponentNode }
+                  hooks: [(atom, Expr)], content: Expr }
 NavDecl         { root, stack: [NavEntry], modal: [NavEntry],
                   tab: [TabEntry] }
 NavEntry        { route: atom, view: str, params: [(str, type_ann)] }
@@ -238,33 +238,50 @@ TypePat         { type_: TypeIdent, fields: [(str, str)] }
 TuplePat  ListPat  SomePat  NonePat  OkPat  ErrPat
 GuardPat        { base: Pattern, guard: Expr }
 
--- Component nodes
-ComponentNode   { type_: atom, props: [(str, PropValue)], children: [ComponentNode],
-                  action?: Action, on_change?: Expr, condition?: Expr,
-                  loop?: LoopSpec, confirm?: ConfirmSpec,
-                  on_refresh?: Expr,
-                  accessibility?: Expr, component_id: uint64 }
+-- View content nodes (produced by evaluating a view's content = body)
+-- The evaluator produces a [ViewContentNode] from the view content expression.
+-- Regular language constructs (match, let, for) are standard Expr nodes;
+-- the evaluator resolves them to [ViewContentNode] sequences at runtime.
+ViewContentNode
+  -- Structural primitives
+  = VCList        { source: Expr, empty?: [ViewContentNode], more?: Expr,
+                    on_more?: Expr, binding: str, body: [ViewContentNode] }
+  | VCItem        { body: [ViewContentNode] }
+  | VCGroup       { label: str, body: [ViewContentNode] }
+  | VCForm        { on_submit: Expr, body: [ViewContentNode] }
+  | VCFlow        { machine: TypeIdent, steps: [FlowStep] }
+  -- View state
+  | VCLoading     {}
+  | VCError       { message: Expr }
+  -- Data content
+  | VCData        { expr: Expr }               -- bare data expression in content position
+  | VCMedia       { expr: Expr, alt: Expr, hint?: atom }
+  | VCRichText    { expr: Expr }
+  | VCStatus      { expr: Expr, label: Expr }
+  | VCChart       { expr: Expr, label?: Expr, x_label?: Expr, y_label?: Expr }
+  | VCProgress    { value: Expr, label?: Expr }
+  -- Intents
+  | VCToggle      { name: atom, state: Expr, on_: Expr }
+  | VCRange       { name: atom, value: Expr, min: float, max: float, step?: float, on_: Expr }
+  | VCChoice      { name: atom, value: Expr, options: Expr, on_: Expr }
+  | VCMultiselect { name: atom, value: Expr, options: Expr, on_: Expr }
+  | VCText        { name: atom, value?: Expr, hint?: Expr, max_length?: int, format?: atom, on_: Expr }
+  | VCPassword    { name: atom, value?: Expr, hint?: Expr, on_: Expr }
+  | VCPin         { name: atom, length: int, on_: Expr }
+  | VCDate        { name: atom, value?: Expr, hint?: Expr, on_: Expr }
+  | VCSearch      { name: atom, value?: Expr, hint?: Expr, on_: Expr }
+  | VCNavigate    { label: Expr, target: NavTarget }
+  | VCTrigger     { label: Expr, action: Expr }
+  | VCConfirm     { label: Expr, message: Expr, action: Expr }
+  | VCCreate      { label: Expr, target: NavTarget }
+  | VCShare       { expr: Expr, label?: Expr }
 
--- PropValue: any value that can appear as a component property
-PropValue = PVExpr Expr         -- evaluated expression
-          | PVStyle [atom]      -- style: :heading :muted etc.
-          | PVAction Action     -- button action target
-          | PVBool Expr         -- enabled:, cache:, distinct: etc.
+FlowStep  { state: atom, binding?: str, body: [ViewContentNode] }
 
--- Action: what a button or event handler does
-Action  = NavPush   { route: atom, params: [(str, Expr)] }
-        | NavBack
-        | NavRoot
-        | NavReplace { route: atom, params: [(str, Expr)] }
-        | SendAction { machine?: str, event: atom, args: [(str, Expr)] }
-        | DoAction   { body: Expr }   -- arbitrary do-block or expression
-
--- LoopSpec: `for item in list` rendering loop
-LoopSpec  { binding: str, source: Expr }   -- `for binding in source`
-
--- ConfirmSpec: `confirm:` on a button
-ConfirmSpec { message: Expr, confirm_label: Expr?, cancel_label: Expr?,
-              on_confirm?: Expr }
+-- NavTarget: destination of a navigate or create intent
+NavTarget = NTRoute   { route: atom, params: [(str, Expr)] }
+          | NTBack
+          | NTRoot
 
 -- StreamOp: operators in a derived @stream declaration
 StreamOp  = FilterOp      { pred: Expr }               -- filter: x -> bool
@@ -280,7 +297,99 @@ StreamOp  = FilterOp      { pred: Expr }               -- filter: x -> bool
           | MergeOp         { sources: [str] }         -- merge (all same type)
 ```
 
-### 4.3 Operator Precedence (lowest to highest)
+### 4.3 DeckViewContent C API
+
+`DeckViewContent` is the opaque type passed to `deck_bridge_render()` (see `03-deck-os §7`). Bridge implementors traverse it using the accessors below.
+
+```c
+/* Opaque types */
+typedef struct DeckViewContent DeckViewContent;
+typedef struct DeckViewNode    DeckViewNode;
+
+/* Node type tag — mirrors ViewContentNode variants */
+typedef enum {
+  DVC_LIST, DVC_ITEM, DVC_GROUP, DVC_FORM, DVC_FLOW,
+  DVC_LOADING, DVC_ERROR,
+  DVC_DATA, DVC_MEDIA, DVC_RICH_TEXT, DVC_STATUS, DVC_CHART, DVC_PROGRESS,
+  DVC_TOGGLE, DVC_RANGE, DVC_CHOICE, DVC_MULTISELECT,
+  DVC_TEXT, DVC_PASSWORD, DVC_PIN, DVC_DATE, DVC_SEARCH,
+  DVC_NAVIGATE, DVC_TRIGGER, DVC_CONFIRM, DVC_CREATE, DVC_SHARE
+} DvcNodeType;
+
+/* Root — ordered list of top-level nodes */
+int           deck_content_count (DeckViewContent* c);
+DeckViewNode* deck_content_node  (DeckViewContent* c, int i);
+
+/* Every node */
+DvcNodeType   deck_node_type     (DeckViewNode* n);
+
+/* Children (VCList body, VCItem, VCGroup, VCForm, VCFlow active step) */
+int           deck_node_child_count  (DeckViewNode* n);
+DeckViewNode* deck_node_child        (DeckViewNode* n, int i);
+
+/* VCList: empty subtree, more flag */
+int           deck_node_empty_count  (DeckViewNode* n);
+DeckViewNode* deck_node_empty_child  (DeckViewNode* n, int i);
+bool          deck_node_more         (DeckViewNode* n);  /* evaluated more: value */
+
+/* VCGroup / VCStatus: label string */
+const char*   deck_node_label        (DeckViewNode* n);
+
+/* VCError: message string */
+const char*   deck_node_message      (DeckViewNode* n);
+
+/* Data content: evaluated value (VCData, VCMedia, VCRichText, VCStatus,
+   VCChart, VCProgress) */
+DeckValue*    deck_node_value        (DeckViewNode* n);
+
+/* VCMedia */
+const char*   deck_node_alt          (DeckViewNode* n);
+const char*   deck_node_hint         (DeckViewNode* n);  /* atom str or NULL */
+
+/* VCChart / VCProgress: optional label strings */
+const char*   deck_node_x_label      (DeckViewNode* n);  /* NULL if absent */
+const char*   deck_node_y_label      (DeckViewNode* n);  /* NULL if absent */
+
+/* Intents: name atom and current value */
+const char*   deck_node_name         (DeckViewNode* n);  /* intent name: atom */
+DeckValue*    deck_node_intent_value (DeckViewNode* n);  /* current value; NULL if none */
+
+/* VCRange */
+double        deck_node_min          (DeckViewNode* n);
+double        deck_node_max          (DeckViewNode* n);
+bool          deck_node_has_step     (DeckViewNode* n);
+double        deck_node_step         (DeckViewNode* n);
+
+/* VCPin */
+int           deck_node_pin_length   (DeckViewNode* n);
+
+/* VCText / VCPassword / VCSearch / VCDate: hint string */
+const char*   deck_node_hint_text    (DeckViewNode* n);  /* NULL if absent */
+
+/* VCChoice / VCMultiselect: options */
+int           deck_node_option_count (DeckViewNode* n);
+const char*   deck_node_option_label (DeckViewNode* n, int i);
+DeckValue*    deck_node_option_value (DeckViewNode* n, int i);
+
+/* VCNavigate / VCTrigger / VCConfirm / VCCreate: label */
+const char*   deck_node_text         (DeckViewNode* n);
+
+/* VCConfirm: confirmation message */
+const char*   deck_node_confirm_msg  (DeckViewNode* n);
+
+/* VCNavigate / VCCreate: route atom ("back" and "root" are special) */
+const char*   deck_node_route        (DeckViewNode* n);
+
+/* VCFlow: machine name, currently active state atom, active step children */
+const char*   deck_node_machine      (DeckViewNode* n);
+const char*   deck_node_flow_state   (DeckViewNode* n);
+```
+
+All `DeckViewContent*` and `DeckViewNode*` pointers are valid only for the duration of the `deck_bridge_render()` call. The bridge must copy any data it needs to retain.
+
+---
+
+### 4.4 Operator Precedence (lowest to highest)
 
 1. `or`
 2. `and`
@@ -429,10 +538,6 @@ Stage 11: CONFIG VALIDATION
 Stage 12: BIND
   Replace all VarExpr nodes with direct references to their definitions
   Replace all TypeVarExpr nodes with @type definitions
-  Assign component_id to every ComponentNode:
-    hash = FNV-1a 64-bit of "<file_path>:<line>:<col>"
-    This is stable across hot reloads as long as the component's source position
-    does not move. The bridge uses component_id for input routing and diff reconciliation.
   Instantiate app-level @machine instances in initial state
   Register @stream subscriptions with scheduler
   Register @task conditions with scheduler
@@ -566,14 +671,13 @@ Lookup: innermost to outermost. Not found: impossible after the Loader Bind stag
 
 **Recursion**: the evaluator uses an explicit call stack (not host language call stack). Direct and mutual recursion supported. Tail calls in `|>` chains and final match arms are trampolined. Stack depth limit configurable; default 512.
 
-**Component evaluation**: component expressions (screen, column, text, button, etc.) are evaluated in a restricted context that reads machine state, config, and stream data but cannot perform effects. The result is a `VComponent(ComponentTree)`.
+**View content evaluation**: the `content =` body of a `@view` is evaluated in a restricted context that reads machine state, config, and stream data but cannot perform effects. The result is a `[ViewContentNode]` list that the runtime serializes into a `DeckViewContent*` and passes to `deck_bridge_render()`. `match`, `let`, and `for` within content are evaluated normally; their results must be `ViewContentNode` values or lists thereof.
 
-**Component event handler evaluation** (`on_change`, `on press`, etc.): when the bridge delivers an input event (`deck_bridge_handle_input`), the evaluator invokes the relevant handler expression with the environment extended by an `event` binding:
+**Intent handler evaluation**: when the bridge delivers an intent event via `deck_bridge_handle_intent(view_name, intent_name, payload)`, the evaluator locates the `on ->` handler of the intent whose `name:` atom matches `intent_name` and invokes it with the environment extended by an `event` binding:
 ```
-event.value  -- the new value (for input, toggle, slider, picker)
-event.index  -- zero-based index of the selected/pressed item (for list item handlers)
+event.value  -- the new value; type depends on intent (see 02-deck-app §12.7)
 ```
-`event` is only in scope inside `on change ->` and `on press ->` handler expressions. Referencing `event` outside a handler expression is a load error.
+`event` is in scope only inside `on ->` handlers of input intents (`toggle`, `range`, `choice`, `multiselect`, `text`, `password`, `pin`, `date`, `search`). Non-input intents (`navigate`, `trigger`, `confirm`, `create`, `share`) do not bind `event`. Referencing `event` outside a handler is a load error.
 
 ---
 
@@ -755,14 +859,14 @@ The re-evaluation pipeline:
 ```
 send() → Evaluator → MACHINE_STATE_CHANGED → Condition Tracker
   → for each changed @shows/@hides condition → Navigation Manager
-  → Navigation Manager calls deck_bridge_render(view_name, delta) or nil
+  → Navigation Manager calls deck_bridge_render(view_name, content) or nil
 ```
 The Navigation Manager does **not** subscribe to `MACHINE_STATE_CHANGED` directly — it observes the results pushed by the Condition Tracker.
 
 Algorithm after any condition change:
 1. Determine desired visibility for every declared `@shows` view
 2. Compare to current display state
-3. For each change: call `deck_bridge_render` with new view or nil
+3. For each change: call `deck_bridge_render(view_name, content)` with the new view's evaluated content, or nil to hide
 
 **Priority rule**: At most one view occupies the root position at a time. If two or more `@shows` conditions are simultaneously true, the **last-declared view** (declaration order in `app.deck`) wins and becomes visible; others are hidden. The loader emits a warning when two `@shows` conditions can be simultaneously true — this is almost always a design mistake.
 
@@ -812,9 +916,10 @@ Triggered by:
 - View `on resume` lifecycle
 
 For each trigger:
-1. Evaluate view body in current context (machine state, config, streams, params)
-2. Structural diff against previous component tree
-3. Call `deck_bridge_render(view_name, delta)` — only changed subtrees
+1. Evaluate view `content =` body in current context (machine state, config, streams, params)
+2. Serialize result to `DeckViewContent*`
+3. Call `deck_bridge_render(view_name, content)` — full evaluated semantic content;
+   diffing against previous state is the bridge's responsibility
 
 ---
 
@@ -834,9 +939,9 @@ The interpreter uses reference counting. Reasons: predictable pause times (criti
 
 Atom strings are interned (one heap allocation per unique atom string). String comparisons for atoms are pointer equality. This is important for performance because pattern matching on atoms is the dominant branching operation.
 
-### 10.4 Component Trees
+### 10.4 View Content
 
-Component trees are allocated fresh on each render call, diffed against the previous tree, and the previous tree freed. The bridge receives only the delta. Previous tree retained until the bridge confirms rendering.
+A `DeckViewContent*` is allocated fresh on each render trigger by evaluating the view's `content =` body. It is serialized into the bridge-facing structure and passed to `deck_bridge_render()`. The previous content is freed after the call returns. The bridge owns no reference beyond the duration of the call — it must copy any data it needs to retain (see §4.3).
 
 ### 10.5 Stack
 
@@ -966,7 +1071,8 @@ scheduler.{h,c}
 
 nav_manager.{h,c}
   Input:  NavDecl, ViewDecl[], BridgeInterface*
-  Output: deck_bridge_render() calls, input routing
+  Output: deck_bridge_render() calls with DeckViewContent*,
+          deck_bridge_handle_intent() routing to on -> handlers
 ```
 
 **Dependency summary:**

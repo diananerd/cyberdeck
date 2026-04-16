@@ -622,7 +622,8 @@ The bridge is the only OS-specific code. Platform authors implement this interfa
    are mutually exclusive in one Deck call (see 01-deck-lang §6.6).
    The full normative DeckCapFn signature (with named args) is in
    06-deck-native §5.1. This interface is the abstract protocol layer;
-   the implementation uses the full signature. */
+   the implementation uses the full signature.
+   Rendering uses DeckViewContent (semantic structure) — see deck_bridge_render below. */
 DeckResult deck_bridge_call(
   const char*  capability,       /* e.g. "sensors.temperature" */
   const char*  method,           /* e.g. "read" */
@@ -667,17 +668,24 @@ void deck_bridge_app_ready();
 void deck_bridge_app_suspended();
 void deck_bridge_app_terminated(const char* reason);
 
-/* Rendering — ComponentNode is defined in 04-deck-runtime §4.2 (AST node types).
-   The bridge receives the diffed subtree, not the full tree on every call. */
+/* Rendering — DeckViewContent is defined in 04-deck-runtime §4.3.
+   The runtime calls deck_bridge_render whenever the evaluated semantic content
+   changes. The bridge receives the complete current content; diffing against
+   previous state is the bridge's responsibility. */
 void deck_bridge_render(
-  const char*    view_name,
-  ComponentNode* tree       /* opaque to this header; defined in runtime internals */
+  const char*      view_name,
+  DeckViewContent* content    /* opaque; traverse via deck_content_* accessors in 04-deck-runtime §4.3 */
 );
 
-void deck_bridge_handle_input(
-  uint64_t    component_id,
-  const char* event_type,   /* "change" | "press" | "confirm" | "scroll" */
-  DeckValue*  payload
+/* Intent event dispatched from the OS back to the interpreter.
+   intent_name is the name: atom declared on the intent in the view body.
+   payload carries event.value for input intents (toggle, range, choice,
+   multiselect, text, password, pin, date, search); NULL for intents that
+   do not produce a value (navigate, trigger, confirm, create, share). */
+void deck_bridge_handle_intent(
+  const char* view_name,
+  const char* intent_name,   /* matches the name: atom of the intent */
+  DeckValue*  payload        /* NULL when the intent type carries no event.value */
 );
 ```
 

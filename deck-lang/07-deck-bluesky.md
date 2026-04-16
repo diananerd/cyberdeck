@@ -887,38 +887,20 @@ fn get_list (m: {str: any}, k: str) -> [any] =
       | :unauthenticated (error: :some msg) -> send(:failed, message: msg)
       | _ -> unit
 
-  body =
-    screen
-      center
-        column
-          text "Bluesky"  style: :large :heading
-          spacer
-          match state
-            | :idle s ->
-                column
-                  when s.error is :some
-                    banner s.error.value  style: :danger
-                  text "Handle or email"  style: :caption :muted
-                  input
-                    value:       s.handle
-                    placeholder: "you.bsky.social"
-                    style:       :email
-                    on change -> send(:set_handle, v: event.value)
-                  text "Password"  style: :caption :muted
-                  input
-                    value:       s.password
-                    placeholder: "••••••••"
-                    style:       :password
-                    on change -> send(:set_password, v: event.value)
-                  spacer
-                  button "Sign in"
-                    -> do_login(s.handle, s.password)
-                    style: :primary
-                    enabled: not text.is_blank(s.handle) and not text.is_blank(s.password)
-            | :submitting ->
-                column
-                  spinner
-                  text "Signing in…"  style: :muted
+  content =
+    match state
+      | :submitting -> loading
+      | :idle s ->
+          match s.error
+            | :some msg -> error message: msg
+            | :none     -> unit
+          form
+            on submit -> do_login(s.handle, s.password)
+            text     :handle    value: s.handle    hint: "you.bsky.social"  format: :email
+              on -> send(:set_handle, v: event.value)
+            password :password  value: s.password  hint: "Password"
+              on -> send(:set_password, v: event.value)
+            trigger "Sign in" -> do_login(s.handle, s.password)
 
 fn do_login (handle: str, password: str) -> unit !api !nvs =
   match auth.login(handle, password)
@@ -942,32 +924,25 @@ fn do_login (handle: str, password: str) -> unit !api !nvs =
             load_timeline()
       | _ -> unit
 
-  body =
-    screen
-      match Timeline.state
-        | :empty | :loading -> center  spinner
-        | :error s ->
-            center
-              status  icon: :error  message: s.message
-              actions
-                button "Retry" -> do  Timeline.send(:load)  load_timeline()
+  content =
+    match Timeline.state
+      | :empty | :loading -> loading
+      | :error s ->
+          error message: s.message
+          trigger "Retry" -> do
+            Timeline.send(:load)
+            load_timeline()
+      | :loaded s | :refreshing s | :paginating s ->
+          list posts_to_show(s)
+            more:    s.cursor is :some
+            on more -> load_more(s)
+            p ->
+              post_card(p)
+          match Timeline.state
+            | :paginating _ -> loading
+            | _             -> unit
 
-        | :loaded s | :refreshing s | :paginating s ->
-            scroll
-              on refresh -> do  Timeline.send(:refresh)  refresh_timeline()
-              column
-                for p in posts_to_show(s)
-                  post_card(p)
-                when Timeline is :paginating _
-                  center  spinner
-                when Timeline is :loaded _ and s.cursor is :some
-                  button "Load more"  -> load_more(s)  style: :ghost
-
-      actions
-        button "✦"
-          -> :compose
-          style: :primary
-          accessibility: "New post"
+    create "New post" -> :compose
 
 fn posts_to_show (s: any) -> [Post] =
   match s
@@ -995,39 +970,19 @@ fn load_more (s: any) -> unit !api =
           | :ok page -> Timeline.send(:paginated, new_posts: page.posts, cursor: page.cursor)
     | _ -> unit
 
-fn post_card (p: Post) -> component =
-  card
-    row
-      image
-        src:   unwrap_opt_or(p.author.avatar, "")
-        alt:   "Avatar of {p.author.handle}"
-        style: :avatar
-        fallback ->
-          text (text.slice(unwrap_opt_or(p.author.display_name, p.author.handle), 0, 1))
-      column
-        row
-          text (unwrap_opt_or(p.author.display_name, p.author.handle))  style: :heading
-          text "@{p.author.handle}"  style: :muted :small
-          spacer
-          text time_ago.format(p.created_at)  style: :muted :small
-    text p.text
-    row
-      button "{p.reply_count} 💬"
-        -> :thread with: uri = p.uri
-        style: :ghost
-        accessibility: "{p.reply_count} replies"
-      button "{p.like_count} {match p.liked_by_me | true -> "❤️" | false -> "🤍"}"
-        -> toggle_like(p)
-        style: :ghost
-        accessibility: match p.liked_by_me
-          | true  -> "Unlike"
-          | false -> "Like"
-      button "{p.repost_count} 🔁"
-        -> toggle_repost(p)
-        style: :ghost
-        accessibility: match p.reposted_by_me
-          | true  -> "Undo repost"
-          | false -> "Repost"
+fn post_card (p: Post) =
+  group "author"
+    media unwrap_opt_or(p.author.avatar, "")
+      alt:  "Avatar of {p.author.handle}"
+      hint: :avatar
+    unwrap_opt_or(p.author.display_name, p.author.handle)
+    "@{p.author.handle}"
+    time_ago.format(p.created_at)
+  rich_text p.text
+  group "actions"
+    navigate "{p.reply_count} replies" -> :thread with: uri = p.uri
+    toggle :liked    state: p.liked_by_me    on -> toggle_like(p)
+    toggle :reposted state: p.reposted_by_me on -> toggle_repost(p)
 
 fn toggle_like (p: Post) -> unit !api =
   match p.liked_by_me
@@ -1065,45 +1020,34 @@ fn toggle_repost (p: Post) -> unit !api =
 
   on appear -> load_thread(uri)
 
-  body =
-    screen
-      header "Thread"
-      scroll
-        match state
-          | :loading -> center  spinner
-          | :error s -> status  icon: :error  message: s.message
-          | :loaded s -> thread_node(s.thread)
+  content =
+    match state
+      | :loading -> loading
+      | :error s -> error message: s.message
+      | :loaded s -> thread_node(s.thread)
 
-fn thread_node (t: Thread) -> component =
-  column
+fn thread_node (t: Thread) =
+  item ->
     post_expanded(t.post)
     for reply in t.replies
-      column
-        divider
-        thread_node(reply)
+      thread_node(reply)
 
-fn post_expanded (p: Post) -> component =
-  card
-    row
-      image
-        src:   unwrap_opt_or(p.author.avatar, "")
-        alt:   "Avatar"
-        style: :avatar
-      column
-        text (unwrap_opt_or(p.author.display_name, p.author.handle))  style: :heading
-        text "@{p.author.handle}"  style: :muted
-    text p.text  style: :body
-    text time_ago.format(p.created_at)  style: :muted :small
-    row
-      text "{p.reply_count} replies"   style: :muted
-      text "{p.like_count} likes"      style: :muted
-      text "{p.repost_count} reposts"  style: :muted
-    actions
-      button (match p.liked_by_me | true -> "❤️ Liked" | false -> "🤍 Like")
-        -> timeline_view.toggle_like(p)  style: :ghost
-      button "💬 Reply"
-        -> do  Compose.send(:open_reply, post: p)
-        style: :ghost
+fn post_expanded (p: Post) =
+  group "author"
+    media unwrap_opt_or(p.author.avatar, "")
+      alt:  "Avatar of {p.author.handle}"
+      hint: :avatar
+    unwrap_opt_or(p.author.display_name, p.author.handle)
+    "@{p.author.handle}"
+  rich_text p.text
+  time_ago.format(p.created_at)
+  group "stats"
+    "{p.reply_count} replies"
+    "{p.like_count} likes"
+    "{p.repost_count} reposts"
+  group "actions"
+    toggle :liked  state: p.liked_by_me  on -> timeline_view.toggle_like(p)
+    trigger "Reply" -> do  Compose.send(:open_reply, post: p)
 
 fn load_thread (uri: str) -> unit !api =
   match feed.get_thread(uri)
@@ -1128,47 +1072,34 @@ fn load_thread (uri: str) -> unit !api =
             load_notifs()
       | _ -> unit
 
-  body =
-    screen
-      header "Notifications"
-        badge: match Notifs.state
-          | :loaded s when s.unread > 0 -> :some str(s.unread)
-          | _                            -> :none
-      match Notifs.state
-        | :empty | :loading -> center  spinner
-        | :error s ->
-            center
-              status  icon: :error  message: s.message
-              actions
-                button "Retry" -> do  Notifs.send(:load)  load_notifs()
-        | :loaded s ->
-            scroll
-              on refresh -> load_notifs()
-              column
-                when s.unread > 0
-                  button "Mark all read"
-                    -> do  notification.mark_seen()  Notifs.send(:marked_read)
-                    style: :ghost
-                list s.items
-                  item n ->
-                    notif_row(n)
-                  empty_state ->
-                    center  text "No notifications"  style: :muted
+  content =
+    match Notifs.state
+      | :empty | :loading -> loading
+      | :error s ->
+          error message: s.message
+          trigger "Retry" -> do  Notifs.send(:load)  load_notifs()
+      | :loaded s ->
+          match s.unread > 0
+            | true ->
+                status (s.unread) label: "unread"
+                trigger "Mark all read" -> do
+                  notification.mark_seen()
+                  Notifs.send(:marked_read)
+            | false -> unit
+          list s.items
+            empty ->
+              "No notifications"
+            n ->
+              notif_row(n)
 
-fn notif_row (n: Notif) -> component =
-  card
-    row
-      image
-        src:   unwrap_opt_or(n.author.avatar, "")
-        alt:   "Avatar of {n.author.handle}"
-        style: :avatar
-      column
-        text (unwrap_opt_or(n.author.display_name, n.author.handle))
-          style: match n.is_read
-            | true  -> :muted
-            | false -> :body
-        text reason_label(n.reason)  style: :muted :small
-      text time_ago.format(n.indexed_at)  style: :muted :small
+fn notif_row (n: Notif) =
+  group "author"
+    media unwrap_opt_or(n.author.avatar, "")
+      alt:  "Avatar of {n.author.handle}"
+      hint: :avatar
+    unwrap_opt_or(n.author.display_name, n.author.handle)
+  reason_label(n.reason)
+  time_ago.format(n.indexed_at)
 
 fn reason_label (reason: str) -> str =
   match reason
@@ -1211,43 +1142,36 @@ fn load_notifs () -> unit !api =
 
   on appear -> load_profile(did)
 
-  body =
-    screen
-      match state
-        | :loading -> center  spinner
-        | :error s -> status  icon: :error  message: s.message
-        | :loaded s ->
-            scroll
-              column
-                match s.profile.avatar
-                  | :some url ->
-                      image
-                        src:   url
-                        alt:   "Profile photo of @{s.profile.handle}"
-                        style: :cover
-                  | :none -> unit
-                text (unwrap_opt_or(s.profile.display_name, s.profile.handle))
-                  style: :large :heading
-                text "@{s.profile.handle}"  style: :muted
-                when s.profile.bio is :some
-                  text s.profile.bio.value
-                row
-                  text "{s.profile.following} Following"  style: :muted
-                  text "{s.profile.followers} Followers"  style: :muted
-                when not is_me(s.profile.did)
-                  when s.profile.is_following
-                    button "Following"
-                      confirm:       "Unfollow @{s.profile.handle}?"
-                      confirm_label: "Unfollow"
-                      on confirm -> do_unfollow(s.profile)
-                      style: :secondary
-                  when not s.profile.is_following
-                    button "Follow"
-                      -> do_follow(s.profile)
-                      style: :primary
-                divider
-                for p in s.posts
-                  timeline_view.post_card(p)
+  content =
+    match state
+      | :loading -> loading
+      | :error s -> error message: s.message
+      | :loaded s ->
+          item ->
+            match s.profile.avatar
+              | :some url ->
+                  media url  alt: "Profile photo of @{s.profile.handle}"  hint: :cover
+              | :none -> unit
+            unwrap_opt_or(s.profile.display_name, s.profile.handle)
+            "@{s.profile.handle}"
+            match s.profile.bio
+              | :some bio -> rich_text bio
+              | :none     -> unit
+            group "stats"
+              "{s.profile.following} following"
+              "{s.profile.followers} followers"
+            match is_me(s.profile.did)
+              | false ->
+                  match s.profile.is_following
+                    | true  ->
+                        confirm "Unfollow"
+                          message: "Unfollow @{s.profile.handle}?"
+                          -> do_unfollow(s.profile)
+                    | false ->
+                        trigger "Follow" -> do_follow(s.profile)
+              | true -> unit
+          for p in s.posts
+            timeline_view.post_card(p)
 
 fn is_me (did: str) -> bool =
   match Auth.state
@@ -1279,48 +1203,29 @@ fn do_unfollow (p: Profile) -> unit !api =
 @view ComposeView
   @shows when: Compose is :open or Compose is :posting or Compose is :error
 
-  body =
-    screen
-      header "New Post"
-      match Compose.state
-        | :closed -> unit
+  content =
+    match Compose.state
+      | :closed -> unit
 
-        | :open s ->
-            column
-              when s.reply_to is :some
-                card
-                  text "Replying to @{s.reply_to.value.author.handle}"  style: :caption :muted
-                  text s.reply_to.value.text  style: :muted :small
-              textarea
-                value:       s.text
-                placeholder: "What's on your mind?"
-                max_length:  300
-                lines:       5
-                on change -> Compose.send(:update, text: event.value)
-              row
-                text "{text.length(s.text)}/300"
-                  style: match text.length(s.text) > 280
-                    | true  -> :warning
-                    | false -> :muted :small
-                spacer
-                button "Post"
-                  -> do_post(s.text, s.reply_to)
-                  style: :primary
-                  enabled: text.length(s.text) > 0 and text.length(s.text) <= 300
-              actions
-                button "Cancel"  -> Compose.send(:cancel)  style: :ghost
+      | :open s ->
+          match s.reply_to
+            | :some parent ->
+                group "reply context"
+                  "Replying to @{parent.author.handle}"
+                  parent.text
+            | :none -> unit
+          text :post_text  value: s.text  max_length: 300
+            on -> Compose.send(:update, text: event.value)
+          "{text.length(s.text)}/300"
+          trigger "Post"   -> do_post(s.text, s.reply_to)
+          trigger "Cancel" -> Compose.send(:cancel)
 
-        | :posting _ ->
-            center
-              spinner
-              text "Posting…"  style: :muted
+      | :posting _ -> loading
 
-        | :error s ->
-            column
-              banner "Failed: {s.message}"  style: :danger
-              actions
-                button "Retry"   -> Compose.send(:retry)   style: :primary
-                button "Discard" -> Compose.send(:cancel)  style: :ghost
+      | :error s ->
+          error message: "Failed: {s.message}"
+          trigger "Retry"   -> Compose.send(:retry)
+          trigger "Discard" -> Compose.send(:cancel)
 
 fn do_post (text_content: str, reply_to: Post?) -> unit !api =
   Compose.send(:submit)
@@ -1366,46 +1271,36 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
       from :searching s
       to   :error (query: s.query, message: message)
 
-  body =
-    screen
-      header "Search"
-      column
-        input
-          value:       state.query
-          placeholder: "Search posts and people"
-          style:       :search
-          on change -> send(:set_query, query: event.value)
-        button "Search"  -> do_search(state.query)  style: :primary
+  content =
+    search :query  value: state.query  hint: "Search posts and people"
+      on -> send(:set_query, query: event.value)
+    trigger "Search" -> do_search(state.query)
 
-        match state
-          | :idle _        -> unit
-          | :searching _   -> center  spinner
-          | :no_results s  -> center  text "No results for \"{s.query}\""  style: :muted
-          | :error s       -> status  icon: :error  message: s.message
-          | :results s     ->
-              column
-                when len(s.users) > 0
-                  column
-                    text "People"  style: :subheading
-                    list s.users
-                      item u ->
-                        card
-                          row
-                            image
-                              src:   unwrap_opt_or(u.avatar, "")
-                              alt:   "Avatar"
-                              style: :avatar
-                            column
-                              text (unwrap_opt_or(u.display_name, u.handle))  style: :heading
-                              text "@{u.handle}"  style: :muted
-                          button "View profile"
-                            -> :profile with: did = u.did
-                            style: :ghost
-                when len(s.posts) > 0
-                  column
-                    text "Posts"  style: :subheading
-                    list s.posts
-                      item p -> timeline_view.post_card(p)
+    match state
+      | :idle _       -> unit
+      | :searching _  -> loading
+      | :no_results s -> "No results for \"{s.query}\""
+      | :error s      -> error message: s.message
+      | :results s    ->
+          match len(s.users) > 0
+            | true ->
+                group "People"
+                  list s.users
+                    u ->
+                      group "user"
+                        media unwrap_opt_or(u.avatar, "")
+                          alt:  "Avatar of {u.handle}"
+                          hint: :avatar
+                        unwrap_opt_or(u.display_name, u.handle)
+                        "@{u.handle}"
+                      navigate "View profile" -> :profile with: did = u.did
+            | false -> unit
+          match len(s.posts) > 0
+            | true ->
+                group "Posts"
+                  list s.posts
+                    p -> timeline_view.post_card(p)
+            | false -> unit
 
 fn do_search (q: str) -> unit !api =
   send(:search)
@@ -1424,38 +1319,20 @@ fn do_search (q: str) -> unit !api =
 ```deck
 @view SettingsView
 
-  body =
-    screen
-      header "Settings"
-      scroll
-        match Auth.state
-          | :authenticated s ->
-              column
-                text "Account"  style: :subheading
-                reading  label: "Signed in as"  value: "@{s.handle}"
-                reading  label: "DID"            value: s.did
-                divider
-                text "Feed"  style: :subheading
-                reading  label: "Posts per page"  value: str(config.feed_page_size)
-                toggle
-                  value: config.show_reposts
-                  label: "Show reposts"
-                  on change -> unit    -- @config changes via OS settings screen
-                toggle
-                  value: config.notifications
-                  label: "Notifications"
-                  on change -> unit
-                divider
-                text "App"  style: :subheading
-                reading  label: "Server"       value: config.bsky_host
-                reading  label: "Version"      value: sys.app_version()
-                spacer
-                button "Sign Out"
-                  confirm:       "Sign out of Bluesky?"
-                  confirm_label: "Sign Out"
-                  on confirm -> do_logout()
-                  style: :danger
-          | _ -> center  spinner
+  content =
+    match Auth.state
+      | :authenticated s ->
+          group "Account"
+            "@{s.handle}"
+            s.did
+          group "Feed"
+            toggle :show_reposts   state: config.show_reposts   on -> unit
+            toggle :notifications  state: config.notifications  on -> unit
+          group "App"
+            config.bsky_host
+            sys.app_version()
+          confirm "Sign Out"  message: "Sign out of Bluesky?"  -> do_logout()
+      | _ -> loading
 
 fn do_logout () -> unit !api !nvs =
   auth.logout()
