@@ -235,9 +235,10 @@ markdown post.body
 markdown content
   style:      :prose
   code_copy:  true
-  on link ->  do
-    when event.url |> text.starts("https://")
-      -> :browser with: url = event.url
+  on link ->
+    match event.url |> text.starts("https://")
+      | true  -> nav.push(:browser, url: event.url)
+      | false -> unit
 
 -- From pre-parsed document:
 let doc = md.parse(raw_text)
@@ -1555,9 +1556,11 @@ fn delete (id: int) -> Result unit str !db =
 
 @private
 fn extract_meta_title (content: str) -> str? =
-  when md.has_front_matter(content)
-    let meta = md.front_matter(content)
-    row.str(meta, "title")
+  match md.has_front_matter(content)
+    | true  ->
+        let meta = md.front_matter(content)
+        row.str(meta, "title")
+    | false -> :none
 ```
 
 ```deck
@@ -1690,7 +1693,7 @@ fn new_note () -> unit !db =
               row
                 text s.current.title  style: :heading
                 spacer
-                text (if s.saved then "Saved" else "Editing")  style: :muted :small
+                text (match s.saved | true -> "Saved" | false -> "Editing")  style: :muted :small
               text "{s.current.word_count} words · {time.duration_str(md.reading_time(s.current.content))}"
                 style: :caption :muted
               divider
@@ -1784,10 +1787,12 @@ fn extract_title (content: str) -> str =
                 show_toc:  false
                 scroll_to: s.scroll_to
                 code_copy: true
-                on link -> do
-                  when event.url |> text.starts("note://")
-                    let target_id = text.slice(event.url, 7, text.length(event.url))
-                    send(:jump_to, id: target_id)
+                on link ->
+                  match event.url |> text.starts("note://")
+                    | true  ->
+                        let target_id = text.slice(event.url, 7, text.length(event.url))
+                        send(:jump_to, id: target_id)
+                    | false -> unit
               spacer
               actions
                 button "Edit"
@@ -1946,9 +1951,11 @@ fn build_theme () -> MdTheme =
   }
 
 fn handle_link (url: str) -> unit =
-  when text.starts(url, "#")
-    let id = text.slice(url, 1, text.length(url))
-    Reader.send(:jump, heading_id: id)
+  match text.starts(url, "#")
+    | true  ->
+        let id = text.slice(url, 1, text.length(url))
+        Reader.send(:jump, heading_id: id)
+    | false -> unit
 
 fn load_book (path: str) -> unit !fs =
   match fs.read(path)
@@ -2071,11 +2078,11 @@ fn message_list (msgs: [ChatMsg]) -> component =
                     on link -> handle_doc_link(event.url, event.text)
 
 fn handle_doc_link (url: str, label: str) -> unit =
-  if text.starts(url, "#") then
-    let id = text.slice(url, 1, text.length(url))
-    send(:section, id: id)
-  else
-    notify.send("External link: {label}")
+  match text.starts(url, "#")
+    | true  ->
+        let id = text.slice(url, 1, text.length(url))
+        send(:section, id: id)
+    | false -> notify.send("External link: {label}")
 ```
 
 ---

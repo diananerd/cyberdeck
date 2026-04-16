@@ -62,6 +62,11 @@ Block comment
   field_name : Type?
   field_name : [Type]
 
+-- ── Opaque Handle Types ──────────────────────────────────────────────────────
+-- For connection/session handles owned by the bridge (DECK_OPAQUE).
+-- Register with deck_register_opaque_type() for type-checked extraction.
+@opaque TypeName
+
 -- ── Capabilities ─────────────────────────────────────────────────────────────
 @capability capability.path
   method_name (params...) -> ReturnType
@@ -445,22 +450,27 @@ static DeckValue* bmp280_read_all(
     for (int i = 0; i < samples; i++) {
         DeckValue* reading = bmp280_read(rt, NULL, 0, NULL, NULL, 0);
         if (deck_is_err(reading)) {
-            /* Free accumulated readings */
+            /* Free all records accumulated so far, then the error wrapper */
             for (int j = 0; j < i; j++) deck_value_free(readings[j]);
             free(readings);
-            return reading;
+            return reading;  /* pass :err up; caller (runtime) takes ownership */
         }
+        /* deck_ok() copies inner, so we must extract the inner value BEFORE
+           freeing the :ok wrapper. deck_get_ok_val returns a pointer INTO reading.
+           We copy it by calling deck_value_retain on the inner, then free the outer.
+           After deck_value_free(reading), the inner's refcount keeps it alive. */
         readings[i] = deck_get_ok_val(reading);
-        deck_value_retain(readings[i]);
-        deck_value_free(reading);
+        deck_value_retain(readings[i]);   /* keep inner alive independent of outer */
+        deck_value_free(reading);         /* free :ok wrapper; inner refcount is now 1 */
     }
 
+    /* deck_list() copies all items into a new list value */
     DeckValue* list   = deck_list(readings, samples);
-    DeckValue* result = deck_ok(list);
-    for (int i = 0; i < samples; i++) deck_value_release(readings[i]);
-    deck_value_free(list);
+    DeckValue* result = deck_ok(list);   /* copies list */
+    deck_value_free(list);               /* free intermediate list */
+    for (int i = 0; i < samples; i++) deck_value_release(readings[i]);  /* release our refs */
     free(readings);
-    return result;
+    return result;   /* runtime takes ownership of :ok [BmpReading] */
 }
 
 void bmp280_register(DeckRuntime* rt) {
@@ -696,19 +706,26 @@ static DeckValue* ws_send(DeckRuntime* rt, DeckValue** args, size_t argc,
     if (!client) return deck_err_atom("closed");
 
     int err = ws_client_send(client, msg);
-    return err == 0 ? deck_unit() : deck_err_atom("refused");
+    /* network.ws.send() -> Result unit network.ws.Error — must wrap success in :ok */
+    if (err == 0) {
+        DeckValue* u      = deck_unit();
+        DeckValue* result = deck_ok(u);
+        deck_value_free(u);
+        return result;
+    }
+    return deck_err_atom("refused");
 }
 ```
 
 ### 8.3 Multiple Opaque Types
 
-Register type names with the runtime for better error messages:
+Register type names with the runtime for better error messages. Use the type name declared with `@opaque` in `.deck-os`:
 
 ```c
 void deck_register_opaque_type(
     DeckRuntime* rt,
-    const char*  type_name,   /* "WsConn" — matches @type in .deck-os */
-    bool       (*type_check)(void* ptr)  /* optional: for validation */
+    const char*  type_name,   /* "WsConn" — matches @opaque declaration in .deck-os */
+    bool       (*type_check)(void* ptr)  /* optional: for runtime validation */
 );
 
 /* Extract with type check */
@@ -1117,7 +1134,13 @@ Called by the main application before starting any app. All registrations happen
 DeckRuntime* deck_runtime_create(const DeckRuntimeConfig* cfg);
 
 typedef struct DeckRuntimeConfig {
-    const char*  os_surface_path;    /* path to .deck-os, or NULL to use compiled-in */
+    /* Path to .deck-os surface file.
+       Resolution order when NULL:
+         1. $DECK_OS_SURFACE environment variable (if set)
+         2. /etc/deck/system.deck-os (if it exists)
+         3. Compiled-in default (fatal error if none of the above)
+       Supply an explicit path to skip the search. */
+    const char*  os_surface_path;
     const char*  app_root_path;      /* directory containing app.deck */
     size_t       heap_limit_bytes;   /* 0 = unlimited */
     int          stack_depth;        /* evaluator call stack depth; 0 = default 512 */
@@ -1126,6 +1149,12 @@ typedef struct DeckRuntimeConfig {
     bool         enable_dap;         /* Debug Adapter Protocol server */
     uint16_t     dap_port;           /* if enable_dap */
     bool         hot_reload;         /* file watcher for deck watch mode */
+    /* Hardware RNG function for seeding `random`. Called once during
+       deck_runtime_create(). If NULL, the runtime uses platform entropy
+       (esp_random() on ESP32, getrandom() on Linux, etc.).
+       On platforms without a hardware RNG, supply a software PRNG seeded
+       from boot timestamp + chip ID + ADC noise, etc. */
+    uint64_t   (*rng_seed_fn)(void);
 } DeckRuntimeConfig;
 
 /* Registration (call between create and start) */
@@ -1349,7 +1378,12 @@ static DeckValue* co2_calibrate(DeckRuntime* rt, DeckValue** args, size_t argc,
     deck_fire_event_map(rt, "sensors.co2_calibrated", names, vals, 1);
     deck_value_free(vals[0]);
 
-    return deck_unit();
+    /* The .deck-os declares calibrate() -> Result unit sensors.co2.Error
+       so we must return :ok unit, not bare unit */
+    DeckValue* u      = deck_unit();
+    DeckValue* result = deck_ok(u);
+    deck_value_free(u);
+    return result;
 }
 
 void scd40_register(DeckRuntime* rt) {

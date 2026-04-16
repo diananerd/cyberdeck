@@ -48,6 +48,7 @@ Written once by the OS/board author. Compiled into the OS image or placed at a k
   -- inline at this position. Path is relative to the including file.
   -- Circular includes are a fatal parse error.
   -- Useful for splitting large surfaces into per-subsystem files.
+  -- Processed by the loader at Stage 2 (OS Surface Loading), depth-first.
 
 @builtin module_name
   fn_name (param: Type) -> ReturnType
@@ -63,9 +64,19 @@ Written once by the OS/board author. Compiled into the OS image or placed at a k
 @event event_name
 @event event_name (field: Type, ...)
 
+-- Record type with named fields (same as in .deck files):
 @type TypeName
   field : Type
   ...
+
+-- Union-of-atoms alias (ONLY valid in .deck-os, not in .deck source files):
+-- Documents a constrained set of valid atoms for a parameter or return value.
+@type TypeName = :atom1 | :atom2 | :atom3
+
+-- Opaque handle type (connection/session handles managed by the bridge):
+-- The runtime holds the value as DECK_OPAQUE; the bridge owns the underlying pointer.
+-- Register with deck_register_opaque_type() for better error messages.
+@opaque TypeName
 ```
 
 ---
@@ -343,6 +354,14 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   body    : str
   headers : {str: str}
 
+@opaque WsConn     -- WebSocket connection handle; bridge owns underlying connection
+
+@type WsMessage
+  type : atom     -- :text | :binary | :ping | :pong | :close
+  text : str?
+  data : [byte]?
+  code : int?
+
 @capability network.ws
   connect  (url: str)                        -> Result WsConn network.ws.Error
   connect  (url: str, headers: {str: str})   -> Result WsConn network.ws.Error
@@ -350,7 +369,7 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   send_bytes(conn: WsConn, data: [byte])     -> Result unit network.ws.Error
   messages (conn: WsConn)                    -> Stream WsMessage
   close    (conn: WsConn)                    -> Result unit network.ws.Error
-  is_open  (conn: WsConn)                    -> bool
+  is_open  (conn: WsConn)                    -> bool   @pure
   @errors
     :offline   "No network connection"
     :timeout   "Connection timed out"
@@ -359,13 +378,7 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
     :closed    "Connection closed by remote"
   @requires_permission
 
-@type WsConn     -- opaque handle
-
-@type WsMessage
-  type : atom     -- :text | :binary | :ping | :pong | :close
-  text : str?
-  data : [byte]?
-  code : int?
+@opaque Socket    -- TCP socket handle; bridge owns underlying socket
 
 @capability network.socket
   open   (host: str, port: int)              -> Result Socket network.Error
@@ -378,24 +391,23 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
     :timeout  "Connection timed out"
     :closed   "Socket closed by remote"
   @requires_permission
-
-@type Socket    -- opaque handle
 ```
 
 ### 4.4 Display
 
 ```
-@capability display.notify
-  send    (msg: str)                         -> unit   -- defaults to :info
-  send    (msg: str, level: NotifLevel)      -> unit
-  dismiss ()                                 -> unit
-
+-- NotifLevel: union-of-atoms alias (valid .deck-os syntax, see §2.1)
 @type NotifLevel = :info | :warning | :error | :success
   -- :info    — neutral informational message
   -- :warning — amber/yellow; something to be aware of
   -- :error   — red; an operation failed
   -- :success — green; an operation succeeded
   -- Unknown atoms passed as level are treated as :info with a runtime warning.
+
+@capability display.notify
+  send    (msg: str)                         -> unit   -- defaults to :info
+  send    (msg: str, level: NotifLevel)      -> unit
+  dismiss ()                                 -> unit
 
 @capability display.screen
   brightness (level: float)            -> unit   -- 0.0..1.0
@@ -407,6 +419,14 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
 ### 4.5 BLE
 
 ```
+@type BleDevice
+  id      : str
+  name    : str?
+  rssi    : int
+  address : str
+
+@opaque BleConn   -- BLE connection handle; bridge owns underlying GATT connection
+
 @capability ble
   scan         (duration: Duration)              -> Result [BleDevice] ble.Error
   scan_stream  ()                                -> Stream BleDevice
@@ -416,7 +436,7 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   write        (conn: BleConn, service: str, char: str, data: [byte]) -> Result unit ble.Error
   write_no_rsp (conn: BleConn, service: str, char: str, data: [byte]) -> Result unit ble.Error
   notify       (conn: BleConn, service: str, char: str) -> Stream [byte]
-  is_connected (conn: BleConn)                   -> bool
+  is_connected (conn: BleConn)                   -> bool   @pure
   @errors
     :unavailable    "BLE hardware not available or disabled"
     :permission     "BLE permission denied"
@@ -426,14 +446,6 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
     :disconnected   "Device disconnected unexpectedly"
     :invalid_handle "Service or characteristic UUID not found"
   @requires_permission
-
-@type BleDevice
-  id      : str
-  name    : str?
-  rssi    : int
-  address : str
-
-@type BleConn   -- opaque handle
 ```
 
 ### 4.6 System
@@ -532,8 +544,9 @@ OS events are pushed to the interpreter — never polled. The interpreter routes
 
 ```
 @event os.suspend
-@event os.resume
+@event os.resume               -- user-initiated resume only; NOT fired for background_fetch
 @event os.terminate
+@event os.background_fetch     -- OS woke the app for a background fetch window
 @event os.low_battery    (level: int)
 @event os.network_change (status: atom)    -- :connected | :offline
 @event os.time_change
@@ -559,8 +572,9 @@ Events declared but not referenced in any `@on` or `when:` are silently ignored.
 ### 6.1 Capability Enforcement
 
 The interpreter enforces `@use` declarations strictly. An app cannot call a capability method it did not declare in `@use`. This is checked:
-1. **At load time**: the loader verifies every `!effect` function signature references a declared alias
-2. **At runtime**: the effect dispatcher checks the alias is in the app's registered capability set before routing any call
+1. **At load time**: the loader verifies every `!effect` function signature references a declared alias. Methods marked `@pure` in the OS surface are exempt from the `!effect` requirement — they may be called from pure functions without an `!alias` annotation.
+2. **At runtime**: the effect dispatcher checks the alias is in the app's registered capability set before routing any call.
+3. **Permission + optional**: if a `@use` entry references a capability with `@requires_permission` and the app's `@permissions` does not include it — load error if the entry is not `optional`, load warning if it is `optional`.
 
 There is no way for app code to bypass this. The bridge is never called directly by app code.
 
@@ -603,13 +617,21 @@ Denying a permission makes the capability behave identically to an `optional` ca
 The bridge is the only OS-specific code. Platform authors implement this interface.
 
 ```c
-/* Synchronous capability call */
+/* Synchronous capability call.
+   Named args are passed alongside positional args; positional and named
+   are mutually exclusive in one Deck call (see 01-deck-lang §6.6).
+   The full normative DeckCapFn signature (with named args) is in
+   06-deck-native §5.1. This interface is the abstract protocol layer;
+   the implementation uses the full signature. */
 DeckResult deck_bridge_call(
-  const char* capability,   /* e.g. "sensors.temperature" */
-  const char* method,       /* e.g. "read" */
-  DeckValue*  args,
-  int         argc,
-  DeckValue*  out_result
+  const char*  capability,       /* e.g. "sensors.temperature" */
+  const char*  method,           /* e.g. "read" */
+  DeckValue**  args,
+  int          argc,
+  const char** named_arg_keys,   /* NULL if positional call */
+  DeckValue**  named_arg_vals,   /* NULL if positional call */
+  int          named_argc,       /* 0 if positional call */
+  DeckValue*   out_result
 );
 
 /* Subscribe to a stream capability */

@@ -159,9 +159,7 @@ bluesky/
   ./tasks/token_refresh
   ./tasks/timeline_refresh
   ./tasks/notif_refresh
-  math
-  text
-  time
+  -- math, text, time are builtins — always in scope, no @use needed
 
 @permissions
   network.http    reason: "Connect to Bluesky to fetch your timeline and notifications"
@@ -343,8 +341,9 @@ bluesky/
         Notifs.send(:load)
 
 @on resume
-  when Auth is :authenticated
-    Timeline.send(:refresh)
+  match Auth.state
+    | :authenticated _ -> Timeline.send(:refresh)
+    | _                -> unit
 
 -- ── Navigation ───────────────────────────────────────────────────────────────
 
@@ -411,7 +410,9 @@ fn map_api_error (e: atom) -> str =
 
 @private
 fn is_str (v: any) -> str? =
-  if is_str(v) then :some v else :none
+  match v is str
+    | true  -> :some v
+    | false -> :none
 ```
 
 ---
@@ -424,11 +425,12 @@ fn format (iso: str) -> str =
     | :none -> iso
     | :some t ->
         let parts = time.duration_parts(time.since(t))
-        if parts.seconds < 60 then "now"
-        else if parts.minutes < 60 then "{parts.minutes}m"
-        else if parts.hours < 24 then "{parts.hours}h"
-        else if parts.days < 7 then "{parts.days}d"
-        else time.format(t, "MMM d")
+        match parts
+          | p when p.seconds < 60 -> "now"
+          | p when p.minutes < 60 -> "{p.minutes}m"
+          | p when p.hours < 24   -> "{p.hours}h"
+          | p when p.days < 7     -> "{p.days}d"
+          | _                     -> time.format(t, "MMM d")
 ```
 
 ---
@@ -933,10 +935,12 @@ fn do_login (handle: str, password: str) -> unit !api !nvs =
   @shows when: Auth is :authenticated
 
   on appear ->
-    when Timeline is :empty
-      do
-        Timeline.send(:load)
-        load_timeline()
+    match Timeline.state
+      | :empty ->
+          do
+            Timeline.send(:load)
+            load_timeline()
+      | _ -> unit
 
   body =
     screen
@@ -1012,30 +1016,34 @@ fn post_card (p: Post) -> component =
         -> :thread with: uri = p.uri
         style: :ghost
         accessibility: "{p.reply_count} replies"
-      button "{p.like_count} {if p.liked_by_me then "❤️" else "🤍"}"
+      button "{p.like_count} {match p.liked_by_me | true -> "❤️" | false -> "🤍"}"
         -> toggle_like(p)
         style: :ghost
-        accessibility: if p.liked_by_me then "Unlike" else "Like"
+        accessibility: match p.liked_by_me
+          | true  -> "Unlike"
+          | false -> "Like"
       button "{p.repost_count} 🔁"
         -> toggle_repost(p)
         style: :ghost
-        accessibility: if p.reposted_by_me then "Undo repost" else "Repost"
+        accessibility: match p.reposted_by_me
+          | true  -> "Undo repost"
+          | false -> "Repost"
 
 fn toggle_like (p: Post) -> unit !api =
-  if p.liked_by_me then
-    match p.like_rkey
-      | :some rk -> interaction.unlike(rk)
-      | :none    -> unit
-  else
-    interaction.like(p.uri, p.cid)
+  match p.liked_by_me
+    | true  ->
+        match p.like_rkey
+          | :some rk -> interaction.unlike(rk)
+          | :none    -> unit
+    | false -> interaction.like(p.uri, p.cid)
 
 fn toggle_repost (p: Post) -> unit !api =
-  if p.reposted_by_me then
-    match p.repost_rkey
-      | :some rk -> interaction.unrepost(rk)
-      | :none    -> unit
-  else
-    interaction.repost(p.uri, p.cid)
+  match p.reposted_by_me
+    | true  ->
+        match p.repost_rkey
+          | :some rk -> interaction.unrepost(rk)
+          | :none    -> unit
+    | false -> interaction.repost(p.uri, p.cid)
 ```
 
 ---
@@ -1091,7 +1099,7 @@ fn post_expanded (p: Post) -> component =
       text "{p.like_count} likes"      style: :muted
       text "{p.repost_count} reposts"  style: :muted
     actions
-      button (if p.liked_by_me then "❤️ Liked" else "🤍 Like")
+      button (match p.liked_by_me | true -> "❤️ Liked" | false -> "🤍 Like")
         -> timeline_view.toggle_like(p)  style: :ghost
       button "💬 Reply"
         -> do  Compose.send(:open_reply, post: p)
@@ -1113,8 +1121,12 @@ fn load_thread (uri: str) -> unit !api =
   @listens UnreadCount
 
   on appear ->
-    when Notifs is :empty
-      do  Notifs.send(:load)  load_notifs()
+    match Notifs.state
+      | :empty ->
+          do
+            Notifs.send(:load)
+            load_notifs()
+      | _ -> unit
 
   body =
     screen
@@ -1152,7 +1164,9 @@ fn notif_row (n: Notif) -> component =
         style: :avatar
       column
         text (unwrap_opt_or(n.author.display_name, n.author.handle))
-          style: if n.is_read then :muted else :body
+          style: match n.is_read
+            | true  -> :muted
+            | false -> :body
         text reason_label(n.reason)  style: :muted :small
       text time_ago.format(n.indexed_at)  style: :muted :small
 
@@ -1285,7 +1299,9 @@ fn do_unfollow (p: Profile) -> unit !api =
                 on change -> Compose.send(:update, text: event.value)
               row
                 text "{text.length(s.text)}/300"
-                  style: if text.length(s.text) > 280 then :warning else :muted :small
+                  style: match text.length(s.text) > 280
+                    | true  -> :warning
+                    | false -> :muted :small
                 spacer
                 button "Post"
                   -> do_post(s.text, s.reply_to)
@@ -1500,13 +1516,18 @@ fn do_logout () -> unit !api !nvs =
           match notification.list_notifs()
             | :err _ -> unit
             | :ok items ->
-                let unread = count_where(items, i -> not i.is_read)
-                let prev   = match Notifs.state
-                  | :loaded s -> s.unread
-                  | _         -> 0
-                when unread > prev and config.notifications
-                  notify.send("{unread} new notification{if unread == 1 then "" else "s"}")
-                Notifs.send(:refreshed, items: items, unread: unread)
+                do
+                  let unread = count_where(items, i -> not i.is_read)
+                  let prev   = match Notifs.state
+                    | :loaded s -> s.unread
+                    | _         -> 0
+                  let suffix = match unread == 1
+                    | true  -> ""
+                    | false -> "s"
+                  match unread > prev and config.notifications
+                    | true  -> notify.send("{unread} new notification{suffix}")
+                    | false -> unit
+                  Notifs.send(:refreshed, items: items, unread: unread)
       | :ok _ -> unit
 ```
 

@@ -82,16 +82,7 @@ db.exec(
 
 ### 2.3 Row Access Helpers
 
-Rows are `{str: any}` maps. The `row` builtin module (declared in `03-deck-os §3`) provides pure helpers that extract typed fields safely. They are always in scope with no `@use` required:
-
-```
-row.int   (row: {str: any}, col: str) -> int?
-row.float (row: {str: any}, col: str) -> float?
-row.str   (row: {str: any}, col: str) -> str?
-row.bool  (row: {str: any}, col: str) -> bool?
-```
-
-All four return `:none` if the column is absent or if the value is SQL NULL. They do not throw.
+Rows are `{str: any}` maps. The `row` builtin module (declared in `03-deck-os §3`, `@builtin row`) provides pure helpers that extract typed fields safely. They are always in scope with no `@use` required. All four return `:none` if the column is absent or if the value is SQL NULL. They do not throw. See `03-deck-os §3` for the full signatures.
 
 ### 2.4 Transactions
 
@@ -319,7 +310,7 @@ MQTT pub/sub client. The OS manages connection, reconnection, and QoS bookkeepin
   publish     (topic: str, payload: str, qos: int) -> Result unit mqtt.Error
   subscribe   (topic: str)                    -> Stream str
   unsubscribe (topic: str)                    -> unit
-  connected   ()                             -> bool
+  connected   ()                             -> bool   @pure
 
   @errors
     :not_configured  "mqtt.configure() not called"
@@ -337,6 +328,8 @@ MQTT pub/sub client. The OS manages connection, reconnection, and QoS bookkeepin
 ```
 
 `mqtt` requires `@permissions mqtt reason: "..."`.
+
+**Stream lifecycle**: Calling `mqtt.unsubscribe(topic)` signals the corresponding `subscribe` stream with `deck_stream_end()` — the stream terminates cleanly. Active `@listens` consumers stop receiving values. Subsequent calls to `StreamName.last()` return the last received value or `:none` if nothing was received before the stream ended.
 
 ---
 
@@ -362,7 +355,9 @@ Symmetric encryption using **AES-CBC with PKCS#7 padding**. Required for any key
     :decrypt_failed "Wrong key or corrupted/padded data"
 ```
 
-The hash functions in `03-deck-os §3` (`sha256`, `hmac_sha256`) are builtins and do not require `@use`. `crypto.aes` is a capability because it uses OS-level secure storage for key material on some platforms.
+`crypto.aes` is a capability (not a builtin) for two reasons: (1) on platforms with hardware AES (e.g., ESP32's AES accelerator), the bridge routes `encrypt`/`decrypt` through the hardware engine rather than a software implementation; (2) `gen_key()` and `gen_iv()` draw from OS-level hardware entropy, which is a side-effecting OS call. Keys are passed explicitly as `[byte]` — this capability does not manage or store key material on behalf of the app.
+
+The hash functions in `03-deck-os §3` (`sha256`, `hmac_sha256`) are software-only builtins and do not require `@use`.
 
 ---
 
@@ -382,10 +377,12 @@ Allows the OS to wake the app periodically while suspended.
 @on launch
   bg.register(15m)
 
-@on resume
-  -- Background fetch woke us; do the work
-  when App is :authenticated
-    App.send(:background_refresh)
+@on os.background_fetch
+  -- OS woke the app specifically for a background fetch window.
+  -- Distinct from @on resume (which is user-initiated only).
+  match App.state
+    | :authenticated _ -> App.send(:background_refresh)
+    | _                -> unit
 ```
 
 `background_fetch` requires `@permissions background_fetch reason: "..."`.

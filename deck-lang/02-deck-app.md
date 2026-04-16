@@ -40,6 +40,10 @@ An annotation is `@keyword` followed by an indented body. Annotations are not ca
 
 `app.deck` is also a `.deck` file for annotation placement purposes. Annotations in the "Any `.deck` file" column are also valid in `app.deck`.
 
+**Module imports**: `@use ./path` entries for local modules are declared **only in `app.deck`**. Individual `.deck` files do not have their own `@use` declarations — the module graph is established once from `app.deck` and all declared modules are in scope project-wide. See `01-deck-lang §10.3`.
+
+`app.deck` is also a `.deck` file for annotation placement purposes. Annotations in the "Any `.deck` file" column are also valid in `app.deck`.
+
 ---
 
 ## 3. @app — Identity
@@ -119,7 +123,10 @@ Declares which sensitive capabilities require user/OS authorization and why. Pre
 
 `reason:` is mandatory and shown verbatim in the OS permission dialog — write it for a user, not a developer.
 
-**Load-time enforcement**: If a `@use` entry references a capability that has `@requires_permission` in the OS surface, it **must** appear in `@permissions`. Omitting it is a load error unless the capability is declared `optional` in `@use` (in which case the loader emits a warning instead, since the developer may have intentionally skipped it).
+**Load-time enforcement**: If a `@use` entry references a capability that has `@requires_permission` in the OS surface, it **must** appear in `@permissions`. The rules:
+- Not in `@permissions` AND `@use` entry is **not** `optional` → **load error**
+- Not in `@permissions` AND `@use` entry IS `optional` → **load warning** (developer may have intentionally skipped it)
+- In `@permissions` → continue normally
 
 **Runtime behavior**: If the user denies a permission at the OS dialog, the capability behaves identically to an `optional` capability that is currently absent. Calls return `:err :permission` as a `Result` value. The app does not crash.
 
@@ -326,7 +333,7 @@ StreamName.recent(n)     -- [T]  (last n values, oldest first)
 | Event | When |
 |---|---|
 | `launch` | App starts for the first time or after full restart |
-| `resume` | App returns from OS-suspended state |
+| `resume` | App returns from OS-suspended state (user-initiated) |
 | `suspend` | OS is suspending the app — must complete quickly |
 | `terminate` | App about to be killed — not guaranteed to run on force kill |
 
@@ -335,6 +342,17 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
 @on hardware.button (id: 0, action: :press)
   App.send(:button_pressed)
 ```
+
+**Background fetch vs. resume**: `@on resume` fires only for user-initiated app returns (e.g., user switches back from another app). Background wakeups from `background_fetch` fire `@on os.background_fetch` — a separate event that can be distinguished:
+
+```
+@on os.background_fetch
+  match App.state
+    | :authenticated _ -> App.send(:background_refresh)
+    | _                -> unit
+```
+
+**Load-time validation**: Every event name in an `@on` hook must exist in the OS event registry (declared in `.deck-os`). An `@on` referencing an unknown event name is a **load error**.
 
 `@on` hooks are the bridge between OS events and the app state machine. The app machine itself does not observe OS events directly — `@on` hooks translate them into `send()` calls.
 
@@ -368,6 +386,8 @@ Evaluated continuously. When the condition changes, the interpreter instructs th
 `@hides when:` is optional and complementary. If both are declared, the view is shown only when `@shows` is true AND `@hides` is false.
 
 Views without `@shows` are only reachable via `@nav` routes.
+
+**Priority when multiple `@shows` are simultaneously true**: At most one view occupies the root position at a time. If two or more views have `@shows` conditions that are simultaneously true, the **last-declared view** (in `app.deck` reading order) takes precedence. The loader emits a warning when two `@shows` conditions can be simultaneously true — this is almost always a design mistake.
 
 ### 11.2 Params
 
@@ -677,6 +697,8 @@ nav.replace(:route)              -- replace current in stack (no back entry)
 **Both**: runs at each interval only when all `when:` conditions are currently true.
 **Multiple `when:` clauses**: all must be true (logical AND).
 
+**Behavior at app launch**: `when:`-only tasks are evaluated once at launch time. If the condition is already `true` when the app starts, the task fires immediately — the initial evaluation is treated as a false→true transition from the "not yet evaluated" state. This means a task like `when: App is :authenticated` will fire on first launch if the app launches directly into the authenticated state.
+
 ### 14.2 Priority and Battery
 
 `:high` — run as soon as conditions are met.
@@ -706,11 +728,20 @@ Runs when the app is updated before the new version starts. Each `@migration` ru
 
 `from:` accepts semver ranges: `"1.x"`, `"1.2.x"`, `"<2.0"`.
 
+**Migration execution context**: Migrations run before `@on launch`, before the app's capability aliases are in scope. The following capabilities are always available inside a `@migration` body under their canonical names, regardless of what aliases are declared in `@use`:
+
+| Name in migration | Capability |
+|---|---|
+| `store` | `storage.local` |
+| `db` | `db` (SQLite) |
+| `nvs` | `nvs` |
+| `config` | app `@config` (write via `config.set` only) |
+
 Available operations inside `@migration`:
-- `store.*` — `storage.local` operations
-- `db.*` — SQLite operations (schema changes)
+- `store.*` — `storage.local` operations (canonical name `store`, not the alias from `@use`)
+- `db.*` — SQLite operations (schema changes, data transforms)
 - `nvs.*` — NVS operations
-- `config.set(field: str, value: any)` — set config to new default
+- `config.set(field: str, value: any)` — set a config field to a new default value
 
 **Ordering and overlap**: When updating, the OS identifies all `@migration` blocks whose `from:` range matches the installed version. They are sorted by specificity (most specific first: `"1.2.3"` before `"1.2.x"` before `"1.x"` before `"<2.0"`). If two blocks have equal specificity, they run in declaration order. Multiple blocks may match and all run. The OS tracks which blocks have run by a hash of `(app.id, from_range_string)` — a block never runs twice on the same device.
 

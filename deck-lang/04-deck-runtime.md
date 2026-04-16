@@ -211,7 +211,6 @@ LetBinding      { name, type_ann?, value: Expr }
 -- Expressions
 MatchExpr       { subject: Expr, arms: [MatchArm] }
 MatchArm        { pattern: Pattern, guard?: Expr, body: Expr }
-IfExpr          { cond: Expr, then_: Expr, else_: Expr }
 DoExpr          { stmts: [DoStmt] }   -- DoStmt = LetBinding | Expr
 PipeExpr        { left: Expr, right: Expr, propagate: bool }
 CallExpr        { fn_: Expr, args: [Expr], named: [(str, Expr)] }
@@ -231,7 +230,7 @@ LitList  LitTuple  LitMap
 NavPushExpr     { route: atom, params: [(str, Expr)] }
 NavBackExpr     {}
 NavRootExpr     {}
-NavReplaceExpr  { route: atom, params: [(str, Expr)] }
+NavReplaceExpr  { route: atom, params: [(str, Expr)] }   -- replaces current stack top
 
 -- Patterns
 WildPat  LitPat  AtomPat  AtomVarPat  AtomFieldsPat
@@ -243,7 +242,42 @@ GuardPat        { base: Pattern, guard: Expr }
 ComponentNode   { type_: atom, props: [(str, PropValue)], children: [ComponentNode],
                   action?: Action, on_change?: Expr, condition?: Expr,
                   loop?: LoopSpec, confirm?: ConfirmSpec,
+                  on_refresh?: Expr,
                   accessibility?: Expr, component_id: uint64 }
+
+-- PropValue: any value that can appear as a component property
+PropValue = PVExpr Expr         -- evaluated expression
+          | PVStyle [atom]      -- style: :heading :muted etc.
+          | PVAction Action     -- button action target
+          | PVBool Expr         -- enabled:, cache:, distinct: etc.
+
+-- Action: what a button or event handler does
+Action  = NavPush   { route: atom, params: [(str, Expr)] }
+        | NavBack
+        | NavRoot
+        | NavReplace { route: atom, params: [(str, Expr)] }
+        | SendAction { machine?: str, event: atom, args: [(str, Expr)] }
+        | DoAction   { body: Expr }   -- arbitrary do-block or expression
+
+-- LoopSpec: `for item in list` rendering loop
+LoopSpec  { binding: str, source: Expr }   -- `for binding in source`
+
+-- ConfirmSpec: `confirm:` on a button
+ConfirmSpec { message: Expr, confirm_label: Expr?, cancel_label: Expr?,
+              on_confirm?: Expr }
+
+-- StreamOp: operators in a derived @stream declaration
+StreamOp  = FilterOp      { pred: Expr }               -- filter: x -> bool
+          | MapOp          { fn_: Expr }               -- map: x -> y
+          | DistinctOp     {}                          -- distinct: true
+          | ThrottleOp     { duration: Expr }          -- throttle: 5s
+          | DebounceOp     { duration: Expr }          -- debounce: 2s
+          | BufferNOp      { n: int }                  -- buffer_n: 10
+          | WindowNOp      { n: int }                  -- window_n: 5
+          | TakeWhileOp    { pred: Expr }              -- take_while: x -> bool
+          | SkipOp         { n: int }                  -- skip: 3
+          | CombineLatestOp { sources: [str] }         -- combine_latest (up to 8)
+          | MergeOp         { sources: [str] }         -- merge (all same type)
 ```
 
 ### 4.3 Operator Precedence (lowest to highest)
@@ -269,17 +303,40 @@ Takes the parsed AST and produces a fully verified, bound program. The most comp
 ### 5.2 Loading Sequence
 
 ```
+Stage 0: ANNOTATION PLACEMENT VALIDATION
+  Verify that @app, @use, @permissions, @config, @on, @nav, @migration
+    only appear in app.deck → load error for each violation in other files
+
+Stage 0.5: MIGRATION EXECUTION (if prior version exists)
+  Query OS for previously installed app version
+  If found:
+    Collect all @migration blocks whose from: range matches the installed version
+    Sort by specificity (most specific first: "1.2.3" > "1.2.x" > "1.x" > "<2.0")
+    For each, check runtime's migration-completion log (keyed by hash of app.id + from_range)
+    Execute only those not yet run, in order
+    On success: log completion hash
+    On failure (returns :err or panics): abort — do not proceed to Stage 1;
+      report failure with migration's from: range and the error
+  Migration bodies run in a restricted context (store, db, nvs, config.set only — see 02-deck-app §15)
+
 Stage 1: MODULE GRAPH RESOLUTION
-  Walk @use local entries (./path)
+  Walk @use local entries (./path) from app.deck only
   Parse each, add to module graph
   Detect circular imports → load error for each cycle
-  Build complete module namespace map
+  Build complete module namespace map (all modules available project-wide)
   Resolve forward references within each module (declaration order irrelevant within a file)
 
 Stage 2: OS SURFACE LOADING
-  Load .deck-os from configured location
-  Parse all @builtin, @capability, @event, @type declarations
-  Build: capability registry, event registry, type registry
+  Determine .deck-os path:
+    1. os_surface_path config field if non-NULL
+    2. Else: $DECK_OS_SURFACE environment variable if set
+    3. Else: /etc/deck/system.deck-os if it exists
+    4. Else: compiled-in default (fatal error if none)
+  Parse top-level @os block
+  Process @include directives depth-first (path relative to including file;
+    circular includes → fatal parse error)
+  Parse all @builtin, @capability, @event, @type, @opaque declarations
+  Build: capability registry, event registry, type registry, opaque-type registry
 
 Stage 3: TYPE CHECKING
   For each @type declaration:
@@ -291,6 +348,15 @@ Stage 3: TYPE CHECKING
     Field value types match declared types
   For each FieldExpr:
     Field exists on the @type
+  For each CallExpr:
+    If both positional args and named args are non-empty → load error
+    (positional and named args cannot be mixed in one call)
+  For each FnDef containing @where bindings:
+    Build dependency graph among where bindings
+    Detect cycles → load error listing the full cycle
+    Topological-sort and store pre-sorted binding list
+  For each DoExpr:
+    Non-let statements that produce a type other than unit or Result unit E → load error
 
 Stage 4: CAPABILITY VERIFICATION
   For each @use capability entry:
@@ -310,18 +376,25 @@ Stage 5: PERMISSION NEGOTIATION
 Stage 6: EFFECT VERIFICATION
   For each FnDef with effects: [alias1, alias2, ...]:
     Each alias must be in @use
+  For each capability call:
+    If the method is marked @pure in the OS surface → exempt from !effect requirement
+    Otherwise → the calling function must declare !alias for the capability's alias
   For each @on hook body:
     All !effects used are in @use
   For each @task run body:
     All !effects used are in @use
   For each component-returning function body:
-    No !effect calls (component functions are pure)
+    No !effect calls allowed (component functions are pure) → load error
+  For each @on hook event name:
+    Must exist in the OS event registry (from Stage 2) → load error if not found
 
 Stage 7: NAV VALIDATION
   All route targets reference existing @view declarations
   All with: param types match the view's param declarations
   All -> :route navigation actions reference declared routes
   No route appears in more than one nav section
+  Tab entries with unknown icon: atoms (not in the guaranteed set) → load warning;
+    runtime renders :menu icon as fallback
 
 Stage 8: MACHINE VALIDATION
   All states in transitions exist in the state declarations
@@ -336,7 +409,12 @@ Stage 9: STREAM VALIDATION
   All from: references resolve to declared @stream
   No circular stream derivation
   @listens references resolve to declared @stream
-  combine_latest and merge: type compatibility
+  CombineLatestOp: each source name resolves to a declared @stream;
+    source count > 8 → load error; all sources accessible
+  MergeOp: each source name resolves to a declared @stream;
+    all sources must have the same element type T → load error if types differ
+  combine_latest resulting type: Stream (T1, T2, ...) matching source types
+  merge resulting type: Stream T (same as all sources)
 
 Stage 10: EXHAUSTIVENESS
   For each match expression:
@@ -438,11 +516,14 @@ Lookup: innermost to outermost. Not found: impossible after the Loader Bind stag
 3. Verify all fields present and typed correctly (runtime check as defense-in-depth)
 4. Produce `VRecord("Post", [(field, value), ...])`
 
+**Float NaN**: After any float arithmetic (`+`, `-`, `*`, `/`, `%`) or builtin math function that would produce an IEEE NaN value, the evaluator returns `VAtom(":nan")` instead. The `:nan` atom propagates through pure arithmetic (`:nan + 5` → `:nan`). `math.is_nan(v)` tests for it; `match` on a float value should cover `:nan` if the value may be invalid.
+
 **FieldExpr** (`.field`):
 - On `VRecord(_, fields)`: find field in fields list
 - On `VMap`: equivalent to `map.get`
 - On module namespace: look up exported definition
 - On machine instance: read field from current state payload
+- On `config` namespace (the special config binding): look up the field name in the app's `@config` declarations and return the current persisted value. `config` is always in scope; no `@use` or `!effect` annotation required for reading config values.
 - Field not found: runtime error with message
 
 **WithExpr** (`record with { field: expr }`):
@@ -483,11 +564,16 @@ Lookup: innermost to outermost. Not found: impossible after the Loader Bind stag
 6. Emit internal `MACHINE_STATE_CHANGED(machine_name, new_state)` event to the Scheduler's Condition Tracker. The Condition Tracker re-evaluates all `when:` conditions that reference this machine (via `is` operator), which may update `@task` eligibility, `@use when:` capability availability, and `@shows`/`@hides` visibility. The Navigation Manager observes the results from the Condition Tracker — it does not subscribe to `MACHINE_STATE_CHANGED` directly.
 7. Return new state value
 
-**IfExpr**: evaluate cond, branch to then or else.
-
 **Recursion**: the evaluator uses an explicit call stack (not host language call stack). Direct and mutual recursion supported. Tail calls in `|>` chains and final match arms are trampolined. Stack depth limit configurable; default 512.
 
 **Component evaluation**: component expressions (screen, column, text, button, etc.) are evaluated in a restricted context that reads machine state, config, and stream data but cannot perform effects. The result is a `VComponent(ComponentTree)`.
+
+**Component event handler evaluation** (`on_change`, `on press`, etc.): when the bridge delivers an input event (`deck_bridge_handle_input`), the evaluator invokes the relevant handler expression with the environment extended by an `event` binding:
+```
+event.value  -- the new value (for input, toggle, slider, picker)
+event.index  -- zero-based index of the selected/pressed item (for list item handlers)
+```
+`event` is only in scope inside `on change ->` and `on press ->` handler expressions. Referencing `event` outside a handler expression is a load error.
 
 ---
 
@@ -626,6 +712,20 @@ buffer_n n: accumulate n values into a list, then emit the list, reset
 window_n n: maintain a sliding window list; emit the window on each new value
 take_while: evaluate predicate; when first false, permanently deactivate stream
 skip n:     discard first n values; then pass through
+
+combine_latest (sources: [StreamName]):
+  Maintain a "last value" slot for each source (initially :none).
+  On every new value from any source: update that source's slot.
+  Emit a tuple of all current values only when ALL slots are :some (non-empty).
+  After first full emission, emit on every subsequent update from any source.
+  Result type: Stream (T1, T2, ...) matching the element types of each source.
+  Up to 8 sources (load error if exceeded).
+
+merge (sources: [StreamName]):
+  All sources must have the same element type T.
+  Emit each value from any source as it arrives, in arrival order.
+  Result type: Stream T.
+  No buffering: values from different sources are interleaved transparently.
 ```
 
 ---
@@ -651,12 +751,20 @@ ViewInstance {
 
 ### 9.2 @shows/@hides Evaluation
 
-After every `send()` (machine state change), the navigation manager re-evaluates all `@shows when:` / `@hides when:` conditions:
+The re-evaluation pipeline:
+```
+send() → Evaluator → MACHINE_STATE_CHANGED → Condition Tracker
+  → for each changed @shows/@hides condition → Navigation Manager
+  → Navigation Manager calls deck_bridge_render(view_name, delta) or nil
+```
+The Navigation Manager does **not** subscribe to `MACHINE_STATE_CHANGED` directly — it observes the results pushed by the Condition Tracker.
+
+Algorithm after any condition change:
 1. Determine desired visibility for every declared `@shows` view
 2. Compare to current display state
 3. For each change: call `deck_bridge_render` with new view or nil
 
-Multiple views with `@shows` conditions: at most one is visible at the root position at a time. The last-declared view whose condition is true wins. Overlapping conditions are a design problem, not a language error, but the loader emits a warning if two `@shows` conditions could be simultaneously true.
+**Priority rule**: At most one view occupies the root position at a time. If two or more `@shows` conditions are simultaneously true, the **last-declared view** (declaration order in `app.deck`) wins and becomes visible; others are hidden. The loader emits a warning when two `@shows` conditions can be simultaneously true — this is almost always a design mistake.
 
 ### 9.3 Explicit Navigation
 
@@ -677,6 +785,17 @@ nav.back:
   4. Destroy popped view's machine instance if any
   5. Call previous view's on resume
   6. Re-render previous view
+
+nav.replace(:route):
+  1. Call current view's on disappear
+  2. Destroy current view's machine instance (if any)
+  3. Pop current entry from stack (do NOT push a back entry)
+  4. Instantiate new ViewInstance for :route with params
+  5. Push new entry to stack (replaces the old top)
+  6. Render new view
+  7. Call new view's on appear
+  -- Result: nav.back from the new view goes to the entry before the replaced view,
+  --         not to the replaced view itself.
 
 nav.root:
   1. Unwind stack calling on disappear for each
@@ -856,3 +975,5 @@ nav_manager.{h,c}
 - `effect_dispatcher`, `scheduler`, `nav_manager`: depend on bridge
 
 A complete, testable pure-language implementation needs only lexer + parser + evaluator + a mock value environment. Add loader + mock OS surface for load-time verification. Add bridge for hardware execution.
+
+**`random` initialization**: `deck_runtime_create()` seeds the `random` builtin from OS hardware entropy before any app code runs. If the platform has no hardware RNG, the bridge implementor must provide a software PRNG seeded from an alternative entropy source (boot timestamp, ADC noise, chip ID, etc.). In `deck test` mode, `random.seed(42)` is called automatically before each test unless the test body overrides it.

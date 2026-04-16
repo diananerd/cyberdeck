@@ -11,7 +11,7 @@ Deck is a domain-specific, interpreted, purely functional language for embedded 
 - One way to express each concept — no syntactic alternatives
 - Pure by default; effects are explicit and named
 - No null, no exceptions, no mutation, no inheritance, no classes
-- Pattern matching is the only branching construct beyond binary `if/then/else`
+- `match` is the only branching construct — exhaustive, multi-arm, with guards. No `if/then/else`, no switch, no ternary.
 - The interpreter controls everything; the developer describes intentions
 - Every type error surfaces at load time with an actionable message
 
@@ -115,7 +115,7 @@ Deck is dynamically typed at the runtime level — types are checked when values
 | Type | Values | Notes |
 |------|--------|-------|
 | `int` | 64-bit signed integer | Runtime error on overflow |
-| `float` | 64-bit IEEE 754 | `:nan` atom returned on invalid ops instead of NaN propagation |
+| `float` | 64-bit IEEE 754 | After any float arithmetic that would produce IEEE NaN (e.g. `0.0 / 0.0`, `sqrt(-1.0)`), the evaluator returns the atom `:nan` instead of propagating a NaN value. This means a function that "returns `float`" may in practice return `:nan` — handle it with `match` or `math.is_nan`. |
 | `bool` | `true` / `false` | |
 | `str` | UTF-8 string | Immutable |
 | `byte` | 0–255 | For binary data |
@@ -302,7 +302,7 @@ fn process (raw: float) -> str =
     offset   = 2.5
 ```
 
-`where` bindings are visible only within the function body and may reference each other. The loader builds a dependency graph among `where` bindings and topological-sorts them; bindings are evaluated in that order, not declaration order. Circular `where` references (A depends on B, B depends on A) are a load error reported at load time with the cycle listed. The evaluator receives them pre-sorted — no runtime dependency analysis needed.
+`where` bindings are visible only within the function body and may reference each other. The loader builds a dependency graph among `where` bindings and topological-sorts them; bindings are evaluated in that order, not declaration order. Circular `where` references (A depends on B, B depends on A) are a **load error** reported at load time with the full cycle listed (e.g., `"Circular where binding: adjusted → offset → adjusted"`). The evaluator receives them pre-sorted — no runtime dependency analysis needed.
 
 ---
 
@@ -348,8 +348,9 @@ fn post_card (p: Post) -> component =
 Functions may call themselves. Direct recursion:
 ```
 fn factorial (n: int) -> int =
-  if n <= 1 then 1
-  else n * factorial(n - 1)
+  match n
+    | n when n <= 1 -> 1
+    | _             -> n * factorial(n - 1)
 ```
 
 Mutual recursion (functions in the same file calling each other) is supported. Forward references within a file are resolved by the loader — declaration order is irrelevant within a file.
@@ -378,7 +379,7 @@ temp.watch(hz: 2)
 store.set(key: "cfg", v: data)
 ```
 
-Positional and named cannot be mixed in one call.
+Positional and named cannot be mixed in one call. A `CallExpr` with both positional arguments and named arguments is a **load error**.
 
 ---
 
@@ -410,13 +411,7 @@ Short-circuits: `and` skips `b` if `a` is false; `or` skips `b` if `a` is true.
 ```
 Valid only on `str`. Use `str(v)` to convert other types. For complex assembly, prefer string interpolation `"Hello, {name}!"`.
 
-### 7.5 Binary `if`
-```
-if condition then value_a else value_b
-```
-Both branches must produce the same type. The `else` branch is mandatory. For more than two outcomes, use `match`.
-
-### 7.6 Do Block
+### 7.5 Do Block
 A sequence of effectful expressions evaluated purely for their side effects, producing `unit`:
 ```
 do
@@ -425,7 +420,7 @@ do
   notify.send("Welcome back")
 ```
 
-`do` blocks appear in `@on` hooks, `@task` run bodies, and view event handlers. Each line is a separate expression. All must produce `unit` or `Result unit E` (the result value is discarded). The `do` block itself produces `unit`.
+`do` blocks appear in `@on` hooks, `@task` run bodies, and view event handlers. Each line is a separate expression. All non-`let` lines must produce `unit` or `Result unit E` (the result value is discarded). Any non-`let` expression that produces a different type (e.g., `int`, `str`) is a **load error** — it signals a forgotten side effect. The `do` block itself produces `unit`.
 
 A `let` binding inside a `do` block is scoped to the remainder of the `do` block:
 ```
@@ -472,7 +467,9 @@ expr is TypeName           -- true if expr is a record of that @type
 `is` is a binary infix operator. Its precedence is equal to `==` (level 4). Both operands are evaluated; `is` is pure.
 
 ```
-if state is :loading then spinner else column ...
+match state
+  | :loading -> spinner
+  | _        -> column ...
 when App is :authenticated
   button "Logout" -> auth.logout()
 ```
@@ -580,7 +577,9 @@ This section covers the language mechanics. `@type` annotation syntax is covered
 - Multiple `@type` declarations per file
 
 ### 9.2 Field Types Allowed
-Any type expression: `int`, `float`, `bool`, `str`, `byte`, `unit`, `[T]`, `{str: T}`, `(T, U)`, `T?`, `Result T E`, `TypeName` (other `@type`s), `Timestamp`, `Duration` (OS builtin types).
+Any type expression: `int`, `float`, `bool`, `str`, `byte`, `unit`, `[T]`, `{str: T}`, `(T, U)`, `T?`, `Result T E`, `TypeName` (other `@type`s), `Timestamp`, `Duration`.
+
+`Timestamp` and `Duration` are OS-provided opaque types declared in `@builtin time` (see `03-deck-os §3`). They are always in scope without `@use` — they are not language primitives, but they are treated as first-class types everywhere in the language.
 
 Fields may **not** use `Stream T` or `component` — those are not storable data.
 
@@ -612,16 +611,41 @@ fn internal (x: float) -> float = x * 1.8 + 32.0
 fn to_fahrenheit (c: float) -> str = "{internal(c)}°F"
 ```
 
-### 10.3 Importing
-Via `@use ./path` in the importing file. Once imported, access as `module_name.definition`. Wildcard imports do not exist.
+### 10.3 Module Graph Declaration
+The complete set of local modules used by an app is declared via `@use ./path` entries in `app.deck` (and **only** in `app.deck` — see `02-deck-app §10.7`). The loader resolves the full module graph starting from `app.deck`, walking all `@use ./path` entries transitively.
+
+Individual `.deck` files other than `app.deck` do **not** have their own `@use` annotations. Instead, they rely on the project-wide module graph established by `app.deck`. Any module declared in `app.deck`'s `@use` block is available to every file in the project by its module name:
+
+```
+-- In app.deck:
+@use
+  ./models/post
+  ./utils/format
+  ./views/timeline
+
+-- In views/timeline.deck — no @use needed:
+fn render (p: Post) -> component =    -- Post is in scope because app.deck declared ./models/post
+  text format.date(p.created_at)      -- format is in scope for the same reason
+```
+
+Access is always by module name: `format.fn_name()`, `post.Type`, etc. Wildcard imports do not exist.
 
 ### 10.4 Cross-module @type Usage
-If module `models/post` declares `@type Post`, and `app.deck` uses `./models/post`, then all files in the project that also use `./models/post` can reference `Post` as a type. Types are not re-exported automatically — each file must import the module whose types it uses.
+If `app.deck` declares `@use ./models/post`, then `@type Post` defined in that module is available in every `.deck` file in the project. No per-file import is needed — the module graph declared by `app.deck` is the source of truth.
 
 ### 10.5 No Circular Imports
-Circular dependencies are a load error. The loader reports the full cycle.
+Circular dependencies between modules are a load error. The loader reports the full cycle (e.g., `"Circular import: views/timeline → models/post → views/timeline"`).
 
-### 10.6 Module-Level Definitions Allowed
+### 10.6 Union Alias Types in .deck-os
+The OS surface file (`.deck-os`) may declare named union-of-atoms types using the alias form:
+
+```
+@type TypeName = :atom1 | :atom2 | :atom3
+```
+
+This is valid **only in `.deck-os` files**, not in `.deck` source files. In Deck code, union types are expressed inline (`int | str | :ok | :err`) without a named alias. The OS author uses this form to document constrained atom arguments (e.g., `NotifLevel`). At the Deck language level, a value of such a type is simply an atom; the constraint is documented but not statically enforced beyond `@errors` coverage.
+
+### 10.7 Module-Level Definitions Allowed
 - `fn` definitions
 - `let` bindings (constants)
 - `@type` declarations
@@ -822,8 +846,10 @@ random.seed   (n: int)                 -> unit
 program      = { top_level } ;
 top_level    = annotation | fn_def | let_binding | type_def ;
 
+-- Record type (fields):
 type_def     = "@type" TYPE_IDENT INDENT { field_decl } DEDENT ;
 field_decl   = IDENT ":" type_ann NEWLINE ;
+-- Note: union alias types (@type Name = :a | :b) are valid ONLY in .deck-os files, not .deck files.
 
 -- Effect annotations follow the return type, before "=".
 -- The "!" applies to the function, not to the type.
@@ -850,7 +876,7 @@ range_lit    = INT_LIT ".." INT_LIT
 -- Range literals are valid only in @config range: and @stream operators.
 -- They are NOT general expressions.
 
-expr         = let_expr | match_expr | if_expr | do_expr
+expr         = let_expr | match_expr | do_expr
              | pipe_expr | block_expr ;
 
 let_expr     = "let" IDENT [":" type_ann] "=" expr
@@ -859,8 +885,6 @@ let_expr     = "let" IDENT [":" type_ann] "=" expr
 
 match_expr   = "match" expr INDENT { "|" pattern [guard] "->" expr NEWLINE } DEDENT ;
 guard        = "when" expr ;
-
-if_expr      = "if" expr "then" expr "else" expr ;
 
 do_expr      = "do" INDENT { do_stmt NEWLINE } DEDENT ;
 do_stmt      = let_binding | expr ;   -- non-let stmts must produce unit or Result unit E
@@ -898,22 +922,24 @@ pattern      = "_" | INT_LIT | FLOAT_LIT | BYTE_LIT | STR_LIT | BOOL_LIT
 
 ## 13. Error Format
 
-Every error has: stage, location, problem, and when possible a suggestion.
+Every error has: stage, location (file:line:col), problem, and when possible a suggestion and a cross-reference. The canonical format is defined in `04-deck-runtime §5.3`.
 
 ```
-Load error [exhaustiveness]: views/timeline.deck:31
+Load error [exhaustiveness]: views/timeline.deck:31:5
   match on 'sensor.Error' is missing variant: :out_of_range
   Hint: add '| :err :out_of_range -> ...' or use '_' to ignore it.
+  See:  models/sensor.deck:4  @errors sensor
 
-Load error [effect-check]: tasks/sync.deck:14
+Load error [effect-check]: tasks/sync.deck:14:3
   function 'api.post' uses capability 'api' but 'api' is not in @use.
   Hint: add 'api_client as api' to @use in app.deck.
 
-Load error [type-check]: models/post.deck:8
+Load error [type-check]: models/post.deck:8:12
   field 'author' in Post construction expects type 'Author', got '{str: any}'.
   Hint: use a Post construction expression or the post.parse() function.
+  See:  models/post.deck:2  @type Post
 
-Runtime error [record-access]: views/thread.deck:22
+Runtime error [record-access]: views/thread.deck:22:7
   accessed field 'text' on :none (Post? was :none).
   Hint: unwrap the optional first with 'match' or 'unwrap_opt_or'.
 ```
