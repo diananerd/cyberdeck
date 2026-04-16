@@ -197,18 +197,26 @@ static void on_nav_processes(void *arg, esp_event_base_t base,
     (void)arg; (void)base; (void)id; (void)data;
     ESP_LOGI(TAG, "NAV: Processes → launching task manager app");
 
-    /* TaskMan acts as a system overlay: push on top of whatever is running.
-     * Do NOT use app_manager_launch (which would raise/destroy the current app).
-     * Only skip if TaskMan is already the top activity. */
+    /* TaskMan acts as a system overlay.
+     * If already in the stack (anywhere, not just on top), raise it to front —
+     * avoids pushing a second instance that would double-register its event handler.
+     * If not in the stack, push a fresh instance and register its process. */
     if (ui_lock(500)) {
-        const activity_t *top = ui_activity_current();
-        if (top && top->app_id == APP_ID_TASKMAN) {
+        if (ui_activity_raise(APP_ID_TASKMAN)) {
+            /* Already in stack — raised to front, no new push needed */
+            os_process_set_state(APP_ID_TASKMAN, PROC_STATE_RUNNING);
             ui_unlock();
-            return;  /* already on top */
+            return;
         }
         const app_entry_t *entry = app_registry_get(APP_ID_TASKMAN);
         if (entry) {
             ui_activity_push(APP_ID_TASKMAN, 0, &entry->cbs, NULL);
+            /* Register process so on_app_closed can clean up correctly. */
+            if (!os_process_is_running(APP_ID_TASKMAN)) {
+                size_t heap_snap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                os_process_start(APP_ID_TASKMAN, entry->manifest.name,
+                                 NULL, heap_snap);
+            }
         }
         ui_unlock();
     }
