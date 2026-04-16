@@ -49,7 +49,7 @@ void app_manager_set_lock(void);
  * Register the lockscreen activity callbacks.
  * Call from app_launcher_register() before app_manager_lock() is used.
  */
-void app_manager_set_lockscreen_cbs(const activity_cbs_t *cbs);
+void app_manager_set_lockscreen_cbs(const view_cbs_t *cbs);
 
 #ifdef __cplusplus
 }

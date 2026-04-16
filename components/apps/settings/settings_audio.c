@@ -35,9 +35,10 @@ static void slider_cb(lv_event_t *e)
 }
 
 /* D1: returns state* */
-static void *audio_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *audio_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     audio_state_t *s = (audio_state_t *)lv_mem_alloc(sizeof(audio_state_t));
@@ -72,13 +73,14 @@ static void *audio_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void audio_on_destroy(lv_obj_t *screen, void *state)
+static void audio_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    lv_mem_free(state);
+    (void)app_data;
+    lv_mem_free(view_state);
 }
 
-const activity_cbs_t settings_audio_cbs = {
+const view_cbs_t settings_audio_cbs = {
     .on_create  = audio_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

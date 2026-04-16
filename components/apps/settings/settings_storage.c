@@ -236,9 +236,10 @@ static void sdcard_event_handler(void *arg, esp_event_base_t base,
  * Activity callbacks (D1)
  * ================================================================ */
 
-static void *storage_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *storage_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
 
     storage_scr_state_t *s =
         (storage_scr_state_t *)lv_mem_alloc(sizeof(storage_scr_state_t));
@@ -264,18 +265,20 @@ static void *storage_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void storage_on_resume(lv_obj_t *screen, void *state)
+static void storage_on_resume(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    storage_scr_state_t *s = (storage_scr_state_t *)state;
+    (void)app_data;
+    storage_scr_state_t *s = (storage_scr_state_t *)view_state;
     if (!s) return;
     build_content(s);
 }
 
-static void storage_on_destroy(lv_obj_t *screen, void *state)
+static void storage_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    storage_scr_state_t *s = (storage_scr_state_t *)state;
+    (void)app_data;
+    storage_scr_state_t *s = (storage_scr_state_t *)view_state;
     g_storage_scr_state = NULL;  /* clear guard before unsubscribe */
     os_event_unsubscribe(s->sub_mounted);
     os_event_unsubscribe(s->sub_unmounted);
@@ -283,7 +286,7 @@ static void storage_on_destroy(lv_obj_t *screen, void *state)
     ESP_LOGI(TAG, "Storage screen destroyed");
 }
 
-const activity_cbs_t settings_storage_cbs = {
+const view_cbs_t settings_storage_cbs = {
     .on_create  = storage_on_create,
     .on_resume  = storage_on_resume,
     .on_pause   = NULL,

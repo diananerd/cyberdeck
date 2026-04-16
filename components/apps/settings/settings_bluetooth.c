@@ -16,9 +16,10 @@
 static const char *TAG = "settings_bt";
 
 /* D1: returns NULL (no state needed) */
-static void *bt_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *bt_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     ui_statusbar_set_title("SETTINGS");
 
     lv_obj_t *content = ui_common_content_area(screen);
@@ -65,7 +66,7 @@ static void *bt_on_create(lv_obj_t *screen, const view_args_t *args)
     return NULL;
 }
 
-const activity_cbs_t settings_bluetooth_cbs = {
+const view_cbs_t settings_bluetooth_cbs = {
     .on_create  = bt_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

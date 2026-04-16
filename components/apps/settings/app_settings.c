@@ -20,7 +20,7 @@ typedef struct {
     const char         *label;
     const char         *subtitle;
     uint8_t             scr_id;
-    const activity_cbs_t *cbs;
+    const view_cbs_t *cbs;
 } menu_item_t;
 
 static const menu_item_t s_items[] = {
@@ -39,7 +39,7 @@ static const menu_item_t s_items[] = {
 
 typedef struct {
     uint8_t              scr_id;
-    const activity_cbs_t *cbs;
+    const view_cbs_t *cbs;
 } item_ctx_t;
 
 static void item_click_cb(uint32_t index, void *data)
@@ -53,9 +53,10 @@ static void item_click_cb(uint32_t index, void *data)
 
 /* ---- Activity callbacks (D1) ---- */
 
-static void *settings_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *settings_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
 
     ui_statusbar_set_title("SETTINGS");
 
@@ -78,10 +79,11 @@ static void *settings_on_create(lv_obj_t *screen, const view_args_t *args)
     return NULL;  /* no per-screen state needed */
 }
 
-static void settings_on_resume(lv_obj_t *screen, void *state)
+static void settings_on_resume(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    (void)state;
+    (void)view_state;
+    (void)app_data;
     ui_statusbar_set_title("SETTINGS");
 }
 
@@ -97,7 +99,7 @@ esp_err_t app_settings_register(void)
         .permissions = APP_PERM_SETTINGS | APP_PERM_WIFI | APP_PERM_SD,
         .storage_dir = NULL,
     };
-    static const activity_cbs_t cbs = {
+    static const view_cbs_t cbs = {
         .on_create  = settings_on_create,
         .on_resume  = settings_on_resume,
         .on_pause   = NULL,

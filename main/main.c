@@ -53,6 +53,11 @@
 /* OS Settings (Fase 5) */
 #include "os_settings.h"
 
+/* OS Core — process + service registries, monitor (Fase 7) */
+#include "os_process.h"
+#include "os_service.h"
+#include "svc_monitor.h"
+
 #include "driver/usb_serial_jtag.h"
 
 static const char *TAG = "cyberdeck";
@@ -191,7 +196,22 @@ static void on_nav_processes(void *arg, esp_event_base_t base,
 {
     (void)arg; (void)base; (void)id; (void)data;
     ESP_LOGI(TAG, "NAV: Processes → launching task manager app");
-    app_manager_launch(APP_ID_TASKMAN, NULL, 0);
+
+    /* TaskMan acts as a system overlay: push on top of whatever is running.
+     * Do NOT use app_manager_launch (which would raise/destroy the current app).
+     * Only skip if TaskMan is already the top activity. */
+    if (ui_lock(500)) {
+        const activity_t *top = ui_activity_current();
+        if (top && top->app_id == APP_ID_TASKMAN) {
+            ui_unlock();
+            return;  /* already on top */
+        }
+        const app_entry_t *entry = app_registry_get(APP_ID_TASKMAN);
+        if (entry) {
+            ui_activity_push(APP_ID_TASKMAN, 0, &entry->cbs, NULL);
+        }
+        ui_unlock();
+    }
 }
 
 /* ================================================================
@@ -284,6 +304,9 @@ void app_main(void)
     /* 7. App framework */
     app_registry_init();
     app_state_init();
+    os_process_init();
+    os_service_init();
+    ESP_ERROR_CHECK(svc_monitor_init(2000));
     ESP_ERROR_CHECK(app_manager_init());
     ESP_LOGI(TAG, "App framework OK");
 

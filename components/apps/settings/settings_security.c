@@ -197,9 +197,10 @@ static void style_keyboard(lv_obj_t *kb)
     lv_obj_set_style_text_color(kb, t->bg_dark, LV_PART_ITEMS | LV_STATE_PRESSED);
 }
 
-static void *security_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *security_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     sec_state_t *s = (sec_state_t *)calloc(1, sizeof(sec_state_t));
@@ -285,13 +286,14 @@ static void *security_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void security_on_destroy(lv_obj_t *screen, void *state)
+static void security_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    free(state);
+    (void)app_data;
+    free(view_state);
 }
 
-const activity_cbs_t settings_security_cbs = {
+const view_cbs_t settings_security_cbs = {
     .on_create  = security_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

@@ -32,14 +32,14 @@ extern "C" {
 esp_err_t app_settings_register(void);
 
 /* Sub-screen activity callbacks — defined in each settings_*.c file */
-extern const activity_cbs_t settings_wifi_cbs;
-extern const activity_cbs_t settings_display_cbs;
-extern const activity_cbs_t settings_time_cbs;
-extern const activity_cbs_t settings_storage_cbs;
-extern const activity_cbs_t settings_security_cbs;
-extern const activity_cbs_t settings_about_cbs;
-extern const activity_cbs_t settings_bluetooth_cbs;
-extern const activity_cbs_t settings_audio_cbs;
+extern const view_cbs_t settings_wifi_cbs;
+extern const view_cbs_t settings_display_cbs;
+extern const view_cbs_t settings_time_cbs;
+extern const view_cbs_t settings_storage_cbs;
+extern const view_cbs_t settings_security_cbs;
+extern const view_cbs_t settings_about_cbs;
+extern const view_cbs_t settings_bluetooth_cbs;
+extern const view_cbs_t settings_audio_cbs;
 
 #ifdef __cplusplus
 }

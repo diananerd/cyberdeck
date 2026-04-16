@@ -2,6 +2,8 @@
  * CyberDeck — App Manager
  * Bridges ui_intent -> app_registry, and provides navigation helpers
  * for use from non-LVGL task contexts.
+ *
+ * J6: Integra os_process_start/stop con el flujo de launch/terminate.
  */
 
 #include "app_manager.h"
@@ -11,68 +13,101 @@
 #include "ui_engine.h"
 #include "ui_effect.h"
 #include "os_task.h"
+#include "os_process.h"
+#include "os_app_storage.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 static const char *TAG = "app_manager";
 
-static const activity_cbs_t *s_lockscreen_cbs = NULL;
-static bool                  s_locked          = false;
+static const view_cbs_t *s_lockscreen_cbs = NULL;
+static bool              s_locked         = false;
 
-/* ---------- H2: OS-level close hook — called by activity system after on_destroy ----------
+/* ---------- H2 + J6: OS-level close hook ----------
  *
- * This is the single integration point between the UI lifecycle (activity stack)
- * and the OS process lifecycle (FreeRTOS tasks, app_ops.on_terminate).
- *
- * Contract:
- *  - Called ONCE per unique app_id that was permanently closed (not on rotation).
- *  - Called from the LVGL task (inside close_app_async / pop_to_home), after
- *    the LVGL screen and state* have already been freed by on_destroy.
- *  - Safe to call vTaskDelete here (not from within the deleted task itself).
+ * Contrato:
+ *  - Llamado UNA VEZ por app_id que fue cerrada permanentemente (no en rotación).
+ *  - Llamado desde LVGL task, después de que on_destroy ya liberó view_state.
+ *  - Seguro llamar vTaskDelete aquí.
  */
 static void on_app_closed(app_id_t app_id)
 {
-    /* 1. Call app-level terminate callback (if registered). */
+    /* 1. Capturar app_data del proceso ANTES de stop (stop lo zeroes) */
+    os_process_t *proc = os_process_get(app_id);
+    void *app_data = proc ? proc->app_data : NULL;
+
+    /* 2. Llamar on_terminate (flush a DB, free(app_data)) */
     const app_entry_t *entry = app_registry_get_raw(app_id);
     if (entry && entry->ops.on_terminate) {
-        entry->ops.on_terminate(app_id);
+        entry->ops.on_terminate(app_id, app_data);
     }
 
-    /* 2. Kill all FreeRTOS tasks owned by this app.
-     *    on_destroy should have already stopped lv_timers and unregistered event
-     *    handlers; os_task_destroy_all_for_app handles the rest. */
+    /* 3. Matar FreeRTOS tasks del app */
     os_task_destroy_all_for_app(app_id);
 
-    ESP_LOGI("app_manager", "App %d fully terminated (tasks killed, ops.on_terminate called)",
-             (int)app_id);
+    /* 4. Eliminar proceso del registry */
+    os_process_stop(app_id);
+
+    ESP_LOGI(TAG, "App %d fully terminated", (int)app_id);
 }
 
 /* ---------- navigate_fn registered with ui_intent ---------- */
 
 static bool manager_navigate_fn(const intent_t *intent)
 {
-    /* Singleton check: if the app is already in the stack, raise it to the
-     * front instead of creating a duplicate instance. This prevents multiple
-     * copies of Settings, Task Manager, etc. accumulating memory and state. */
+    /* Singleton check: si ya está en el stack, raise en lugar de duplicar. */
     if (ui_activity_raise(intent->app_id)) {
-        ESP_LOGI(TAG, "App %d already open — raised to front", (int)intent->app_id);
+        os_process_set_state(intent->app_id, PROC_STATE_RUNNING);
+        ESP_LOGI(TAG, "App %d raised to front", (int)intent->app_id);
         return true;
     }
 
     const app_entry_t *app = app_registry_get(intent->app_id);
     if (!app) {
-        ESP_LOGW(TAG, "App %d not registered — showing toast", (int)intent->app_id);
+        ESP_LOGW(TAG, "App %d not registered", (int)intent->app_id);
         ui_effect_toast("Coming soon...", 1500);
         return false;
     }
 
-    /* Wrap legacy intent data into view_args_t (not owned: caller manages lifetime) */
+    /* J6: Launch flow — on_launch → os_process_start → ui_activity_push */
     view_args_t args = {
         .data  = intent->data,
         .size  = intent->data_size,
         .owned = false,
     };
+    const view_args_t *args_ptr = intent->data ? &args : NULL;
+
+    /* Abrir storage (vacío si storage_dir == NULL) */
+    os_app_storage_t storage = {0};
+    os_app_storage_open(intent->app_id, app->manifest.storage_dir,
+                        NULL, 0, &storage);
+
+    /* on_launch: alloca L1 app_data, carga caché inicial desde DB */
+    void *app_data = NULL;
+    if (app->ops.on_launch) {
+        size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        app_data = app->ops.on_launch(intent->app_id, args_ptr, &storage);
+        if (!app_data && app->ops.on_launch) {
+            /* on_launch retornó NULL → abort, no storage open to close here */
+            ESP_LOGE(TAG, "App %d: on_launch returned NULL, aborting", (int)intent->app_id);
+            os_app_storage_close(&storage);
+            return false;
+        }
+        (void)heap_before;
+    }
+
+    /* Registrar proceso */
+    size_t heap_snap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    esp_err_t rc = os_process_start(intent->app_id, app->manifest.name,
+                                    app_data, heap_snap);
+    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
+        /* Registry lleno — continuar de todas formas, solo sin tracking */
+        ESP_LOGW(TAG, "App %d: process_start failed (%s)", (int)intent->app_id,
+                 esp_err_to_name(rc));
+    }
+
     return ui_activity_push(intent->app_id, intent->screen_id,
-                            &app->cbs, intent->data ? &args : NULL);
+                            &app->cbs, args_ptr);
 }
 
 /* ---------- Public API ---------- */
@@ -143,7 +178,7 @@ void app_manager_set_lock(void)
     ui_activity_set_nav_lock(true);
 }
 
-void app_manager_set_lockscreen_cbs(const activity_cbs_t *cbs)
+void app_manager_set_lockscreen_cbs(const view_cbs_t *cbs)
 {
     s_lockscreen_cbs = cbs;
 }

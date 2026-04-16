@@ -8,7 +8,7 @@
 #pragma once
 
 #include "os_core.h"
-#include "ui_activity.h"  /* activity_cbs_t, view_args_t */
+#include "ui_activity.h"  /* view_cbs_t, view_args_t */
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -26,8 +26,8 @@ extern "C" {
  * @return ESP_OK on success, ESP_ERR_NO_MEM if stack full.
  */
 esp_err_t os_view_push(app_id_t app_id, uint8_t screen_id,
-                       const activity_cbs_t *cbs,
-                       const view_args_t    *args);
+                       const view_cbs_t  *cbs,
+                       const view_args_t *args);
 
 /**
  * @brief Pop the current view (go back one level).

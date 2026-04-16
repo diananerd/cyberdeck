@@ -6,7 +6,10 @@
 #include "svc_ota.h"
 #include "svc_event.h"
 #include "svc_settings.h"
+#include "os_service.h"
 #include "os_task.h"
+
+#define SVC_OTA_NAME "svc_ota"
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
 #include "esp_log.h"
@@ -26,6 +29,7 @@ static void ota_task(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "OTA update starting: %s", s_ota_url);
 
+    os_service_update(SVC_OTA_NAME, SVC_STATE_RUNNING, "updating...");
     svc_event_post(EVT_OTA_STARTED, NULL, 0);
 
     esp_http_client_config_t http_cfg = {
@@ -73,6 +77,7 @@ static void ota_task(void *arg)
 
     ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(ret));
     esp_https_ota_abort(ota_handle);
+    os_service_update(SVC_OTA_NAME, SVC_STATE_ERROR, "failed");
     svc_event_post(EVT_OTA_ERROR, NULL, 0);
     s_in_progress = false;
     vTaskDelete(NULL);
@@ -80,6 +85,8 @@ static void ota_task(void *arg)
 
 esp_err_t svc_ota_init(void)
 {
+    os_service_register(SVC_OTA_NAME);
+    os_service_update(SVC_OTA_NAME, SVC_STATE_IDLE, "");
     ESP_LOGI(TAG, "OTA service initialized");
     return ESP_OK;
 }

@@ -4,6 +4,7 @@
  * C1: app_manifest_t, app_ops_t, app_type_t — formal OS app descriptor types.
  * C2: dynamic list (os_app_register, os_app_enumerate) alongside legacy API.
  * C3: built-ins registered via os_app_register; hardcoded slots eliminated.
+ * J4: app_ops_t con on_launch/on_terminate completos; view_cbs_t en app_entry_t.
  */
 
 #pragma once
@@ -11,7 +12,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "ui_activity.h"
-#include "os_core.h"   /* app_id_t, APP_ID_* constants */
+#include "os_core.h"          /* app_id_t, APP_ID_* constants */
+#include "os_app_storage.h"   /* os_app_storage_t, db_migration_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,10 +25,11 @@ extern "C" {
  */
 
 /** Permission flags for app manifests. */
-#define APP_PERM_WIFI     (1u << 0)
-#define APP_PERM_SD       (1u << 1)
-#define APP_PERM_NETWORK  (1u << 2)
-#define APP_PERM_SETTINGS (1u << 3)
+#define APP_PERM_WIFI          (1u << 0)
+#define APP_PERM_SD            (1u << 1)
+#define APP_PERM_NETWORK       (1u << 2)
+#define APP_PERM_SETTINGS      (1u << 3)
+#define APP_PERM_HIDE_LAUNCHER (1u << 7) /**< App does not appear in launcher grid. */
 
 typedef enum {
     APP_TYPE_BUILTIN = 0,  /**< Compiled into firmware, always available. */
@@ -40,28 +43,41 @@ typedef struct {
     const char     *icon;        /**< Short string for launcher card, e.g. "St". */
     app_type_t      type;
     uint8_t         permissions; /**< Bitmask of APP_PERM_* flags. */
-    const char     *storage_dir; /**< e.g. "/sdcard/apps/notes"; NULL if unused. */
+    const char     *storage_dir; /**< e.g. "notes" → /sdcard/apps/notes/; NULL = sin storage. */
 } app_manifest_t;
 
-/** High-level app lifecycle vtable (for app-level launch/terminate). */
+/**
+ * High-level app lifecycle vtable — proceso-level (J4).
+ *
+ *  on_launch    — [1] Antes de pushear ninguna view. Retorna app_data* (L1).
+ *                 Si retorna NULL → launch abortado.
+ *                 storage->db_ready==false → SD offline, continuar sin DB.
+ *                 Puede ser NULL para apps sin L1 state.
+ *  on_terminate — [6] Tras destruir todas las views. Flush a DB, free(app_data).
+ *                 El OS cierra storage DESPUÉS de este call.
+ *                 Puede ser NULL.
+ *  on_suspend   — App enviada al home (proceso sigue, screen oculta). Opcional.
+ *  on_foreground — App traída de vuelta del home. Opcional.
+ */
 typedef struct {
-    void (*on_terminate)(app_id_t id);    /**< OS terminates the app. */
-    /* on_launch, on_background, on_foreground added as needed in future phases */
+    void *(*on_launch    )(app_id_t id, const view_args_t *args,
+                           os_app_storage_t *storage);
+    void  (*on_terminate )(app_id_t id, void *app_data);
+    void  (*on_suspend   )(app_id_t id, void *app_data);
+    void  (*on_foreground)(app_id_t id, void *app_data);
 } app_ops_t;
 
 /* =========================================================================
  * app_entry_t — internal registry slot
  * =========================================================================
- * Holds both the new manifest/ops and the legacy activity_cbs_t for the
- * main screen (screen_id == 0), used by app_manager and launcher.
  */
 typedef struct {
     app_manifest_t  manifest;
     app_ops_t       ops;
-    activity_cbs_t  cbs;      /**< Main-screen lifecycle callbacks. */
+    view_cbs_t      cbs;       /**< Main-screen (screen_id==0) lifecycle callbacks. */
     bool            available; /**< false when SD app is unavailable. */
 
-    /* Legacy convenience aliases — mirror manifest fields for existing callers. */
+    /* Convenience aliases — mirror manifest fields for existing callers. */
     app_id_t        app_id;   /**< == manifest.id */
     const char     *name;     /**< == manifest.name */
     const char     *icon;     /**< == manifest.icon */
@@ -80,8 +96,8 @@ void               app_registry_init(void);
  * Overwrites any prior registration for the same app_id.
  */
 void               os_app_register(const app_manifest_t *manifest,
-                                   const app_ops_t       *ops,
-                                   const activity_cbs_t  *cbs);
+                                   const app_ops_t      *ops,
+                                   const view_cbs_t     *cbs);
 
 /**
  * Enumerate all registered apps (C2/C4).

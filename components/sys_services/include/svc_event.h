@@ -70,6 +70,9 @@ typedef enum {
 
     /* Theme */
     EVT_THEME_CHANGED,          /* data: NULL — fired from ui_theme_apply() */
+
+    /* Monitor */
+    EVT_MONITOR_UPDATED,        /* data: NULL — nuevo snapshot disponible en svc_monitor_get_snapshot() */
 } cyberdeck_event_id_t;
 
 /**

@@ -33,9 +33,10 @@ static void ota_btn_cb(lv_event_t *e)
 }
 
 /* D1: returns NULL (no state needed) */
-static void *about_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *about_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     ui_statusbar_set_title("SETTINGS");
 
     lv_obj_t *content = ui_common_content_area(screen);
@@ -98,7 +99,7 @@ static void *about_on_create(lv_obj_t *screen, const view_args_t *args)
     return NULL;
 }
 
-const activity_cbs_t settings_about_cbs = {
+const view_cbs_t settings_about_cbs = {
     .on_create  = about_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

@@ -5,7 +5,10 @@
 
 #include "svc_downloader.h"
 #include "svc_event.h"
+#include "os_service.h"
 #include "os_task.h"
+
+#define SVC_DOWNLOADER_NAME "svc_downloader"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -76,6 +79,7 @@ static void do_download(const dl_request_t *req)
 {
     ESP_LOGI(TAG, "Downloading: %s -> %s (id=%lu)",
              req->url, req->dest, (unsigned long)req->request_id);
+    os_service_update(SVC_DOWNLOADER_NAME, SVC_STATE_RUNNING, req->url);
 
     /* Check for resume state */
     uint32_t resume_from = 0;
@@ -190,12 +194,15 @@ static void do_download(const dl_request_t *req)
         write_sidecar(req->dest, received, etag);
         ESP_LOGI(TAG, "Download cancelled (id=%lu)", (unsigned long)req->request_id);
         s_cancel_id = UINT32_MAX;
+        os_service_update(SVC_DOWNLOADER_NAME, SVC_STATE_IDLE, "");
     } else if (received > resume_from) {
         delete_sidecar(req->dest);
         ESP_LOGI(TAG, "Download complete: %lu bytes", (unsigned long)received);
+        os_service_update(SVC_DOWNLOADER_NAME, SVC_STATE_IDLE, "");
         svc_event_post(EVT_DOWNLOAD_COMPLETE, &req->request_id, sizeof(req->request_id));
     } else {
         ESP_LOGE(TAG, "Download failed, no data received");
+        os_service_update(SVC_DOWNLOADER_NAME, SVC_STATE_ERROR, "failed");
         svc_event_post(EVT_DOWNLOAD_ERROR, &req->request_id, sizeof(req->request_id));
     }
 }
@@ -232,6 +239,9 @@ esp_err_t svc_downloader_init(void)
         ESP_LOGE(TAG, "Failed to create downloader task: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    os_service_register(SVC_DOWNLOADER_NAME);
+    os_service_update(SVC_DOWNLOADER_NAME, SVC_STATE_IDLE, "");
 
     ESP_LOGI(TAG, "Downloader initialized");
     return ESP_OK;

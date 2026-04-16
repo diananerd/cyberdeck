@@ -22,7 +22,7 @@ esp_err_t app_launcher_register(void);
  * Get the launcher activity callbacks for pushing the initial home screen.
  * Used by main.c to push the first activity.
  */
-const activity_cbs_t *app_launcher_get_cbs(void);
+const view_cbs_t *app_launcher_get_cbs(void);
 
 #ifdef __cplusplus
 }

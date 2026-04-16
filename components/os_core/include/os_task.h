@@ -14,7 +14,7 @@ extern "C" {
 #endif
 
 /**
- * Process info snapshot — usado por el Task Manager (Track H).
+ * FreeRTOS task info snapshot — usado por el monitor del sistema.
  */
 typedef struct {
     char         name[OS_TASK_NAME_LEN];
@@ -23,7 +23,8 @@ typedef struct {
     uint32_t     stack_high_water; /* palabras libres en el stack */
     uint8_t      priority;
     uint8_t      core;
-} os_process_info_t;
+    bool         is_killable;      /* false = OS_OWNER_SYSTEM, no se puede terminar */
+} os_task_info_t;
 
 /**
  * Crea una task y la registra en el OS.
@@ -50,7 +51,7 @@ void os_task_destroy_all_for_app(app_id_t id);
  * @param max Capacidad máxima del buffer.
  * @return Número de entradas escritas.
  */
-uint8_t os_task_list(os_process_info_t *buf, uint8_t max);
+uint8_t os_task_list(os_task_info_t *buf, uint8_t max);
 
 #ifdef __cplusplus
 }

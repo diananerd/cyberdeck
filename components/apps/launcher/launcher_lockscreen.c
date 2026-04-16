@@ -148,9 +148,10 @@ static void style_keyboard(lv_obj_t *kb)
 
 /* ---- Activity on_create ---- */
 
-static void *lockscreen_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *lockscreen_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     lock_state_t *s = (lock_state_t *)calloc(1, sizeof(lock_state_t));
@@ -238,17 +239,18 @@ static void *lockscreen_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void lockscreen_on_destroy(lv_obj_t *screen, void *state)
+static void lockscreen_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
+    (void)app_data;
     app_manager_clear_lock();
     /* Restore system bars before freeing */
     ui_statusbar_set_visible(true);
     ui_navbar_set_visible(true);
-    free(state);
+    free(view_state);
 }
 
-static const activity_cbs_t s_lockscreen_cbs = {
+static const view_cbs_t s_lockscreen_cbs = {
     .on_create  = lockscreen_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

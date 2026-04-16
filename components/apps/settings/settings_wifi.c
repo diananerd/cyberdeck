@@ -112,8 +112,9 @@ static void pass_ta_clicked_cb(lv_event_t *e)
 }
 
 /* D1: returns state* */
-static void *connect_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *connect_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     connect_state_t *s = (connect_state_t *)lv_mem_alloc(sizeof(connect_state_t));
@@ -165,22 +166,24 @@ static void *connect_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void connect_on_resume(lv_obj_t *screen, void *state)
+static void connect_on_resume(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    connect_state_t *s = (connect_state_t *)state;
+    (void)app_data;
+    connect_state_t *s = (connect_state_t *)view_state;
     /* Show keyboard now — screen is active so lv_scr_act() is correct */
     if (s) ui_keyboard_show(s->pass_ta);
 }
 
-static void connect_on_destroy(lv_obj_t *screen, void *state)
+static void connect_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
+    (void)app_data;
     ui_keyboard_hide();
-    lv_mem_free(state);
+    lv_mem_free(view_state);
 }
 
-static const activity_cbs_t s_connect_cbs = {
+static const view_cbs_t s_connect_cbs = {
     .on_create  = connect_on_create,
     .on_resume  = connect_on_resume,
     .on_pause   = NULL,
@@ -360,9 +363,10 @@ static void auto_scan_timer_cb(lv_timer_t *timer)
 /* ---- Activity callbacks (D1) ---- */
 
 /* D1: returns state* */
-static void *wifi_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *wifi_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
 
     wifi_scr_state_t *s =
         (wifi_scr_state_t *)lv_mem_alloc(sizeof(wifi_scr_state_t));
@@ -476,10 +480,11 @@ static void *wifi_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void wifi_on_resume(lv_obj_t *screen, void *state)
+static void wifi_on_resume(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    wifi_scr_state_t *s = (wifi_scr_state_t *)state;
+    (void)app_data;
+    wifi_scr_state_t *s = (wifi_scr_state_t *)view_state;
     if (!s) return;
     /* Restart scan after returning from connect sub-screen */
     lv_label_set_text(s->scan_status_lbl, "SCANNING...");
@@ -487,26 +492,27 @@ static void wifi_on_resume(lv_obj_t *screen, void *state)
     if (s->scan_timer) lv_timer_reset(s->scan_timer);
 }
 
-static void wifi_on_pause(lv_obj_t *screen, void *state)
+static void wifi_on_pause(lv_obj_t *screen, void *view_state, void *app_data)
 {
-    (void)screen; (void)state;
+    (void)screen; (void)view_state; (void)app_data;
 }
 
-static void wifi_on_destroy(lv_obj_t *screen, void *state)
+static void wifi_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    wifi_scr_state_t *s = (wifi_scr_state_t *)state;
+    (void)app_data;
+    wifi_scr_state_t *s = (wifi_scr_state_t *)view_state;
     /* Clear guard BEFORE unsubscribe — prevents queued handler from using freed state */
     g_wifi_scr_state = NULL;
     os_event_unsubscribe(s->scan_sub);
     if (s && s->scan_timer) {
         lv_timer_del(s->scan_timer);
     }
-    lv_mem_free(state);
+    lv_mem_free(view_state);
     ESP_LOGI(TAG, "WiFi screen destroyed");
 }
 
-const activity_cbs_t settings_wifi_cbs = {
+const view_cbs_t settings_wifi_cbs = {
     .on_create  = wifi_on_create,
     .on_resume  = wifi_on_resume,
     .on_pause   = wifi_on_pause,

@@ -636,7 +636,7 @@ Pendiente: verificación en hardware de Fase 6.
 
 ---
 
-### 🔲 Fase 7 — SDK Refactor (sprint completo, una sola sesión)
+### 🔲 Fase 7 — SDK Refactor (sprint completo, una sola sesión) — K DONE
 
 > **Una sola sesión de trabajo. Build limpio al final o no se commitea.**
 > La infraestructura sin la migración de firma es media casa inútil.
@@ -994,8 +994,8 @@ esp_err_t app_notes_register(void)
 - [ ] J3–J4: cambiar firmas `view_cbs_t` + `app_ops_t`
 - [ ] J5–J6: `ui_activity.c` + `app_manager.c`
 - [ ] J7–J11: migrar apps (Launcher, Lockscreen, Settings x8, TaskMan/Processes)
-- [ ] K1–K3: pantallas Overview, App Detail, Sys View
-- [ ] K4: renombrar taskman → processes
+- [x] K1–K3: pantallas Overview, App Detail, Sys View
+- [x] K4: cancelado — se conserva app_taskman en todo el sistema
 - [ ] `svc_monitor_init()` en `app_main()`
 - [ ] Build clean — 0 errores, 0 warnings
 - [ ] Verificar en hardware

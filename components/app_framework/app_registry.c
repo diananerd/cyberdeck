@@ -71,8 +71,8 @@ void app_registry_init(void)
 }
 
 void os_app_register(const app_manifest_t *manifest,
-                     const app_ops_t       *ops,
-                     const activity_cbs_t  *cbs)
+                     const app_ops_t      *ops,
+                     const view_cbs_t     *cbs)
 {
     if (!manifest) return;
 

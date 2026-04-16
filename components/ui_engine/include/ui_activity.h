@@ -36,30 +36,36 @@ typedef struct {
 } view_args_t;
 
 /**
- * @brief Activity lifecycle callbacks (D1).
+ * @brief View lifecycle callbacks (J3).
  *
- *  on_create  — allocate + build screen, return own state*.
- *  on_resume  — screen becomes top again (e.g. after pop of child).
- *  on_pause   — another activity pushed on top (rarely needed).
- *  on_destroy — free state; called synchronously before lv_obj_del.
+ *  on_create  — alloca view_state + construye widgets; retorna view_state* (L2).
+ *              app_data (L1) viene del proceso — fuente de verdad, no tocar.
+ *  on_resume  — screen vuelve a ser top; refrescar UI desde app_data si dirty.
+ *  on_pause   — otra view se pushea encima; raramente necesario.
+ *  on_destroy — libera view_state: widgets, timers, event handlers.
+ *              NO libera app_data — eso lo hace app_ops.on_terminate.
+ *
+ * Regla: view_state* contiene SOLO handles de widgets LVGL (lv_obj_t*, lv_timer_t*).
+ *        app_data contiene datos de app que sobreviven rotaciones y HOME.
  */
 typedef struct {
-    void *(*on_create )(lv_obj_t *screen, const view_args_t *args); /* returns state* */
-    void  (*on_resume )(lv_obj_t *screen, void *state);
-    void  (*on_pause  )(lv_obj_t *screen, void *state);
-    void  (*on_destroy)(lv_obj_t *screen, void *state);  /* must free state */
-} activity_cbs_t;
+    void *(*on_create )(lv_obj_t *screen, const view_args_t *args, void *app_data);
+    void  (*on_resume )(lv_obj_t *screen, void *view_state, void *app_data);
+    void  (*on_pause  )(lv_obj_t *screen, void *view_state, void *app_data);
+    void  (*on_destroy)(lv_obj_t *screen, void *view_state, void *app_data);
+} view_cbs_t;
 
 /**
  * @brief Activity instance on the stack.
  */
 typedef struct {
-    app_id_t        app_id;
-    uint8_t         screen_id;
-    lv_obj_t       *screen;
-    void           *state;      /* returned by on_create, passed back to all other cbs */
-    activity_cbs_t  cbs;
-    size_t          heap_used;  /* bytes consumed by on_create (internal heap delta) */
+    app_id_t   app_id;
+    uint8_t    screen_id;
+    lv_obj_t  *screen;
+    void      *view_state; /**< L2: retornado por on_create, solo widgets LVGL. */
+    void      *app_data;   /**< L1: datos del proceso — compartido entre todas sus views. */
+    view_cbs_t cbs;
+    size_t     heap_used;  /**< Heap consumido por on_create (delta interno). */
 } activity_t;
 
 /**
@@ -80,7 +86,7 @@ void ui_activity_init(void);
  * @return true if pushed; false if stack full or cbs invalid.
  */
 bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
-                      const activity_cbs_t *cbs, const view_args_t *args);
+                      const view_cbs_t *cbs, const view_args_t *args);
 
 /**
  * @brief Pop the top activity (go back).

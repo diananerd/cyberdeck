@@ -75,9 +75,10 @@ typedef struct {
 static void collect_app_cb(const app_entry_t *e, void *ctx)
 {
     collect_ctx_t *c = (collect_ctx_t *)ctx;
-    /* Skip the launcher itself */
-    if (e->manifest.id == APP_ID_LAUNCHER) return;
-    if (!e->manifest.name)                 return;
+    /* Skip the launcher itself and hidden-from-launcher apps */
+    if (e->manifest.id == APP_ID_LAUNCHER)                        return;
+    if (e->manifest.permissions & APP_PERM_HIDE_LAUNCHER)         return;
+    if (!e->manifest.name)                                         return;
     if (*c->count >= c->max)               return;
 
     uint8_t i = *c->count;
@@ -90,9 +91,10 @@ static void collect_app_cb(const app_entry_t *e, void *ctx)
 /* ---- Activity callbacks (D1) ---- */
 
 /* D1: returns NULL (no persistent state needed) */
-static void *launcher_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *launcher_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     /* ---- Collect apps from registry via os_app_enumerate (C4) ---- */
@@ -200,14 +202,15 @@ static void *launcher_on_create(lv_obj_t *screen, const view_args_t *args)
     return NULL;
 }
 
-static void launcher_on_resume(lv_obj_t *screen, void *state)
+static void launcher_on_resume(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    (void)state;
+    (void)view_state;
+    (void)app_data;
     ui_statusbar_set_title("CYBERDECK");
 }
 
-static const activity_cbs_t s_launcher_cbs = {
+static const view_cbs_t s_launcher_cbs = {
     .on_create  = launcher_on_create,
     .on_resume  = launcher_on_resume,
     .on_pause   = NULL,
@@ -216,7 +219,7 @@ static const activity_cbs_t s_launcher_cbs = {
 
 /* ---- Public API ---- */
 
-const activity_cbs_t *app_launcher_get_cbs(void)
+const view_cbs_t *app_launcher_get_cbs(void)
 {
     return &s_launcher_cbs;
 }

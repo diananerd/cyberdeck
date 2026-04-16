@@ -70,7 +70,7 @@ static void draw_triangle(lv_obj_t *canvas, lv_color_t bg, lv_color_t fg)
 /* Back and Home are called from the LVGL task (button callback) — call directly,
  * no need to bounce through the event loop (avoids async gap / glitch frame). */
 static void back_btn_cb(lv_event_t *e)       { (void)e; ui_activity_pop(); }
-static void home_btn_cb(lv_event_t *e)       { (void)e; ui_activity_pop_to_home(); }
+static void home_btn_cb(lv_event_t *e)       { (void)e; ui_activity_suspend_to_home(); }
 static void processes_btn_cb(lv_event_t *e)  { (void)e; svc_event_post(EVT_NAV_PROCESSES, NULL, 0); }
 
 static lv_event_cb_t s_btn_cbs[3] = {

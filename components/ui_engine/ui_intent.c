@@ -42,5 +42,5 @@ void ui_intent_go_back(void)
 void ui_intent_go_home(void)
 {
     ESP_LOGD(TAG, "Go home");
-    ui_activity_pop_to_home();
+    ui_activity_suspend_to_home();
 }

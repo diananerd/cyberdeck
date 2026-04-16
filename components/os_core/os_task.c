@@ -129,12 +129,12 @@ void os_task_destroy_all_for_app(app_id_t id)
     }
 }
 
-uint8_t os_task_list(os_process_info_t *buf, uint8_t max)
+uint8_t os_task_list(os_task_info_t *buf, uint8_t max)
 {
     uint8_t count = 0;
     for (int i = 0; i < OS_MAX_TASKS && count < max; i++) {
         if (!s_tasks[i].used) continue;
-        os_process_info_t *p = &buf[count++];
+        os_task_info_t *p = &buf[count++];
         strncpy(p->name, s_tasks[i].name, sizeof(p->name) - 1);
         p->name[sizeof(p->name) - 1] = '\0';
         p->handle          = s_tasks[i].handle;
@@ -142,6 +142,7 @@ uint8_t os_task_list(os_process_info_t *buf, uint8_t max)
         p->stack_high_water = uxTaskGetStackHighWaterMark(s_tasks[i].handle);
         p->priority        = (uint8_t)uxTaskPriorityGet(s_tasks[i].handle);
         p->core            = (uint8_t)xTaskGetCoreID(s_tasks[i].handle);
+        p->is_killable     = (s_tasks[i].owner != OS_OWNER_SYSTEM);
     }
     return count;
 }

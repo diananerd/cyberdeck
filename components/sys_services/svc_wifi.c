@@ -6,6 +6,7 @@
 #include "svc_wifi.h"
 #include "svc_event.h"
 #include "svc_settings.h"
+#include "os_service.h"
 #include "ui_statusbar.h"
 #include "ui_engine.h"
 #include "esp_wifi.h"
@@ -13,6 +14,9 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include <string.h>
+#include <stdio.h>
+
+#define SVC_WIFI_NAME "svc_wifi"
 
 static const char *TAG = "svc_wifi";
 
@@ -37,6 +41,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         case WIFI_EVENT_STA_DISCONNECTED:
             s_connected = false;
             s_rssi = 0;
+            os_service_update(SVC_WIFI_NAME, SVC_STATE_OFFLINE, "");
             svc_event_post(EVT_WIFI_DISCONNECTED, NULL, 0);
             if (ui_lock(100)) {
                 ui_statusbar_set_wifi(false, 0);
@@ -69,6 +74,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             memcpy(s_ssid, ap.ssid, sizeof(s_ssid));
         }
 
+        char ip_str[OS_SERVICE_STATUS_LEN];
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
+        os_service_update(SVC_WIFI_NAME, SVC_STATE_RUNNING, ip_str);
+
         svc_event_post(EVT_WIFI_CONNECTED, NULL, 0);
         if (ui_lock(100)) {
             ui_statusbar_set_wifi(true, s_rssi);
@@ -95,6 +104,9 @@ esp_err_t svc_wifi_init(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    os_service_register(SVC_WIFI_NAME);
+    os_service_update(SVC_WIFI_NAME, SVC_STATE_IDLE, "");
 
     s_initialized = true;
     ESP_LOGI(TAG, "WiFi STA initialized");

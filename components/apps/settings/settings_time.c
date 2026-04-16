@@ -74,9 +74,10 @@ static void sync_btn_cb(lv_event_t *e)
 }
 
 /* D1: returns state* */
-static void *time_on_create(lv_obj_t *screen, const view_args_t *args)
+static void *time_on_create(lv_obj_t *screen, const view_args_t *args, void *app_data)
 {
     (void)args;
+    (void)app_data;
     const cyberdeck_theme_t *t = ui_theme_get();
 
     time_state_t *s = (time_state_t *)lv_mem_alloc(sizeof(time_state_t));
@@ -157,15 +158,16 @@ static void *time_on_create(lv_obj_t *screen, const view_args_t *args)
     return s;
 }
 
-static void time_on_destroy(lv_obj_t *screen, void *state)
+static void time_on_destroy(lv_obj_t *screen, void *view_state, void *app_data)
 {
     (void)screen;
-    time_state_t *s = (time_state_t *)state;
+    (void)app_data;
+    time_state_t *s = (time_state_t *)view_state;
     if (s && s->clock_timer) lv_timer_del(s->clock_timer);
-    lv_mem_free(state);
+    lv_mem_free(view_state);
 }
 
-const activity_cbs_t settings_time_cbs = {
+const view_cbs_t settings_time_cbs = {
     .on_create  = time_on_create,
     .on_resume  = NULL,
     .on_pause   = NULL,

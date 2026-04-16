@@ -9,10 +9,13 @@
 
 #include "os_poller.h"
 #include "os_task.h"
+#include "os_service.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+
+#define SVC_POLLER_NAME "os_poller"
 
 static const char *TAG = "os_poller";
 
@@ -86,11 +89,16 @@ esp_err_t os_poller_start(void)
         .core       = OS_CORE_BG,
         .owner      = OS_OWNER_SYSTEM,
     };
+    os_service_register(SVC_POLLER_NAME);
+
     esp_err_t ret = os_task_create(&cfg, NULL);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start poller task: %s", esp_err_to_name(ret));
+        return ret;
     }
-    return ret;
+
+    os_service_update(SVC_POLLER_NAME, SVC_STATE_RUNNING, "");
+    return ESP_OK;
 }
 
 void os_poller_remove_all_for_app(app_id_t owner)

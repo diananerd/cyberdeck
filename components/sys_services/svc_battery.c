@@ -6,11 +6,15 @@
 
 #include "svc_battery.h"
 #include "svc_event.h"
+#include "os_service.h"
 #include "hal_battery.h"
 #include "ui_statusbar.h"
 #include "ui_engine.h"
 #include "os_poller.h"
 #include "esp_log.h"
+#include <stdio.h>
+
+#define SVC_BATTERY_NAME "svc_battery"
 
 static const char *TAG = "svc_battery";
 
@@ -24,6 +28,9 @@ static void poll_battery(void *arg)
     uint8_t pct = 0;
     if (hal_battery_read_pct(&pct) == ESP_OK) {
         s_last_pct = pct;
+        char status[OS_SERVICE_STATUS_LEN];
+        snprintf(status, sizeof(status), "%u%%", (unsigned)pct);
+        os_service_update(SVC_BATTERY_NAME, SVC_STATE_RUNNING, status);
         svc_event_post(EVT_BATTERY_UPDATED, &pct, sizeof(pct));
         if (ui_lock(100)) {
             ui_statusbar_set_battery(pct, false);
@@ -34,6 +41,9 @@ static void poll_battery(void *arg)
 
 esp_err_t svc_battery_start(void)
 {
+    os_service_register(SVC_BATTERY_NAME);
+    os_service_update(SVC_BATTERY_NAME, SVC_STATE_IDLE, "");
+
     esp_err_t ret = os_poller_register("battery", poll_battery, NULL,
                                        BATTERY_POLL_MS, OS_OWNER_SYSTEM);
     if (ret != ESP_OK) {

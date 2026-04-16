@@ -6,6 +6,7 @@
 #include "svc_time.h"
 #include "svc_event.h"
 #include "svc_settings.h"
+#include "os_service.h"
 #include "hal_rtc.h"
 #include "ui_statusbar.h"
 #include "ui_engine.h"
@@ -17,6 +18,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#define SVC_TIME_NAME "svc_time"
+
 static const char *TAG = "svc_time";
 
 static bool s_synced = false;
@@ -26,12 +29,12 @@ static bool s_synced = false;
 
 static void sntp_sync_cb(struct timeval *tv)
 {
+    (void)tv;
     ESP_LOGI(TAG, "SNTP time synchronized");
     s_synced = true;
 
-    /* Write synced time to RTC */
     hal_rtc_sync_from_system();
-
+    os_service_update(SVC_TIME_NAME, SVC_STATE_RUNNING, "NTP ok");
     svc_event_post(EVT_TIME_SYNCED, NULL, 0);
 }
 
@@ -61,6 +64,7 @@ static void on_wifi_connected(void *handler_arg, esp_event_base_t base,
     (void)id;
     (void)data;
     ESP_LOGI(TAG, "WiFi connected, triggering SNTP sync");
+    os_service_update(SVC_TIME_NAME, SVC_STATE_RUNNING, "syncing...");
     svc_time_sync();
 }
 
@@ -100,6 +104,9 @@ esp_err_t svc_time_init(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create time update task: %s", esp_err_to_name(ret));
     }
+
+    os_service_register(SVC_TIME_NAME);
+    os_service_update(SVC_TIME_NAME, SVC_STATE_IDLE, "RTC only");
 
     ESP_LOGI(TAG, "Time service initialized (TZ: %s)", tz_str);
     return ESP_OK;

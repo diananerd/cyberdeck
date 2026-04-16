@@ -1,13 +1,16 @@
 /*
  * CyberDeck — Activity stack manager
- * Manages a stack of up to 8 activities with lifecycle callbacks.
  *
- * D1: on_create returns void* state (replaces ui_activity_set_state).
+ * D1: on_create returns void* view_state.
  * D3: stack max=8, push fails instead of evicting when full.
  * D6: view_args_t passed to on_create; owned data freed by OS after on_create.
+ * J3: view_cbs_t con void *app_data (L1) en todos los callbacks.
+ * J5: app_data se obtiene de os_process_get(app_id) al pushear; se pasa
+ *     a todos los callbacks. NULL si el proceso no está registrado.
  */
 
 #include "ui_activity.h"
+#include "os_process.h"
 #include "ui_statusbar.h"
 #include "ui_navbar.h"
 #include "ui_theme.h"
@@ -82,11 +85,12 @@ static void destroy_entry(activity_t *a)
     if (!a->screen) return;
 
     if (a->cbs.on_destroy) {
-        a->cbs.on_destroy(a->screen, a->state);
+        a->cbs.on_destroy(a->screen, a->view_state, a->app_data);
     }
     lv_obj_del(a->screen);
-    a->screen = NULL;
-    a->state = NULL;
+    a->screen     = NULL;
+    a->view_state = NULL;
+    /* app_data NOT cleared here — owned by os_process_t until on_terminate */
     ESP_LOGD(TAG, "Destroyed activity app=%d scr=%d", (int)a->app_id, a->screen_id);
 }
 
@@ -95,7 +99,7 @@ static void pause_top(void)
     if (depth == 0) return;
     activity_t *a = &stack[depth - 1];
     if (a->cbs.on_pause) {
-        a->cbs.on_pause(a->screen, a->state);
+        a->cbs.on_pause(a->screen, a->view_state, a->app_data);
     }
     lv_obj_add_flag(a->screen, LV_OBJ_FLAG_HIDDEN);
 }
@@ -107,7 +111,7 @@ static void resume_top(void)
     lv_obj_clear_flag(a->screen, LV_OBJ_FLAG_HIDDEN);
     lv_scr_load(a->screen);
     if (a->cbs.on_resume) {
-        a->cbs.on_resume(a->screen, a->state);
+        a->cbs.on_resume(a->screen, a->view_state, a->app_data);
     }
 }
 
@@ -121,7 +125,7 @@ void ui_activity_init(void)
 }
 
 bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
-                      const activity_cbs_t *cbs, const view_args_t *args)
+                      const view_cbs_t *cbs, const view_args_t *args)
 {
     if (!cbs || !cbs->on_create) {
         ESP_LOGE(TAG, "Cannot push activity without on_create callback");
@@ -138,23 +142,33 @@ bool ui_activity_push(app_id_t app_id, uint8_t screen_id,
     /* Pause current top */
     pause_top();
 
+    /* J5: get app_data (L1) from process registry — NULL if not registered */
+    os_process_t *proc = os_process_get(app_id);
+    void *app_data = proc ? proc->app_data : NULL;
+
     /* Create new screen */
     lv_obj_t *scr = create_screen();
     activity_t *a = &stack[depth];
     memset(a, 0, sizeof(activity_t));
-    a->app_id    = app_id;
-    a->screen_id = screen_id;
-    a->screen    = scr;
-    a->cbs       = *cbs;
-    a->state     = NULL;
+    a->app_id     = app_id;
+    a->screen_id  = screen_id;
+    a->screen     = scr;
+    a->cbs        = *cbs;
+    a->app_data   = app_data;
+    a->view_state = NULL;
 
     depth++;
 
-    /* D1: on_create returns state* — measure heap before/after to track usage */
+    /* on_create returns view_state* (L2) — measure heap delta */
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    a->state = a->cbs.on_create(scr, args);
-    size_t heap_after  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    a->view_state = a->cbs.on_create(scr, args, app_data);
+    size_t heap_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     a->heap_used = (heap_before > heap_after) ? (heap_before - heap_after) : 0;
+
+    /* Update process view count */
+    if (proc) {
+        os_process_update_counts(app_id, depth, proc->task_count);
+    }
 
     /* D6: if args are owned, free the data buffer now */
     if (args && args->owned && args->data) {
@@ -182,7 +196,7 @@ bool ui_activity_pop(void)
     resume_top();
 
     if (old_top.cbs.on_destroy) {
-        old_top.cbs.on_destroy(old_top.screen, old_top.state);
+        old_top.cbs.on_destroy(old_top.screen, old_top.view_state, old_top.app_data);
     }
     lv_obj_del(old_top.screen);
 
@@ -209,7 +223,7 @@ void ui_activity_suspend_to_home(void)
     /* Pause the current top and hide it */
     activity_t *top = &stack[depth - 1];
     if (top->cbs.on_pause) {
-        top->cbs.on_pause(top->screen, top->state);
+        top->cbs.on_pause(top->screen, top->view_state, top->app_data);
     }
     lv_obj_add_flag(top->screen, LV_OBJ_FLAG_HIDDEN);
 
@@ -217,7 +231,7 @@ void ui_activity_suspend_to_home(void)
     lv_obj_clear_flag(stack[0].screen, LV_OBJ_FLAG_HIDDEN);
     lv_scr_load(stack[0].screen);
     if (stack[0].cbs.on_resume) {
-        stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
+        stack[0].cbs.on_resume(stack[0].screen, stack[0].view_state, stack[0].app_data);
     }
 
     ESP_LOGI(TAG, "Suspended to home (depth=%d, apps in background)", depth);
@@ -250,7 +264,7 @@ void ui_activity_pop_to_home(void)
     }
 
     if (stack[0].cbs.on_resume) {
-        stack[0].cbs.on_resume(stack[0].screen, stack[0].state);
+        stack[0].cbs.on_resume(stack[0].screen, stack[0].view_state, stack[0].app_data);
     }
 
     fire_close_hook(closed_ids, closed_count);
@@ -291,7 +305,7 @@ bool ui_activity_raise(app_id_t app_id)
 
     /* Resume the raised app */
     if (stack[depth - 1].cbs.on_resume) {
-        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].state);
+        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].view_state, stack[depth - 1].app_data);
     }
 
     fire_close_hook(closed_ids, closed_count);
@@ -345,7 +359,7 @@ static void close_app_async(void *arg)
 
     /* Resume the new top */
     if (depth > 0 && stack[depth - 1].cbs.on_resume) {
-        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].state);
+        stack[depth - 1].cbs.on_resume(stack[depth - 1].screen, stack[depth - 1].view_state, stack[depth - 1].app_data);
     }
 
     /* Fire OS-level close hook for each unique app that was closed (H2).
@@ -385,9 +399,9 @@ void ui_activity_recreate_all(void)
         if (!a->screen || !a->cbs.on_create) continue;
 
         if (a->cbs.on_destroy) {
-            a->cbs.on_destroy(a->screen, a->state);
+            a->cbs.on_destroy(a->screen, a->view_state, a->app_data);
         }
-        a->state = NULL;
+        a->view_state = NULL;
 
         lv_obj_clean(a->screen);
 
@@ -396,8 +410,8 @@ void ui_activity_recreate_all(void)
         lv_obj_set_style_bg_opa(a->screen, LV_OPA_COVER, 0);
         apply_screen_padding(a->screen);
 
-        /* D1: on_create returns new state* */
-        a->state = a->cbs.on_create(a->screen, NULL);
+        /* D1: on_create returns new view_state* */
+        a->view_state = a->cbs.on_create(a->screen, NULL, a->app_data);
 
         ESP_LOGD(TAG, "Recreated activity app=%d scr=%d", (int)a->app_id, a->screen_id);
     }
