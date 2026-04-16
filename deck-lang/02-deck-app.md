@@ -25,12 +25,11 @@ An annotation is `@keyword` followed by an indented body. Annotations are not ca
 | `@permissions` | ✓ | |
 | `@config` | ✓ | |
 | `@on` | ✓ | |
-| `@nav` | ✓ | |
 | `@migration` | ✓ | |
 | `@errors` | | ✓ |
 | `@machine` | | ✓ |
+| `@flow` | | ✓ |
 | `@stream` | | ✓ |
-| `@view` | | ✓ |
 | `@task` | | ✓ |
 | `@type` | | ✓ |
 | `@test` | | ✓ |
@@ -55,11 +54,14 @@ Defined once, only in `app.deck`.
   name:    str     -- display name shown to users
   id:      str     -- reverse-domain unique ID ("mx.lab.monitor")
   version: str     -- semver: "MAJOR.MINOR.PATCH"
+  entry:   Name    -- root @machine or @flow that is the app entry point
   author:  str?
   license: atom?   -- :mit | :apache2 | :gpl3 | :proprietary
 ```
 
 The `id` is stable identity. If the OS has a previously installed app with the same `id`, it runs `@migration` blocks before starting. If `id` changes, the OS treats it as a new app.
+
+`entry:` names the root `@machine` or `@flow`. The OS starts the app at its `initial` state. The root machine/flow defines the top-level navigation topology.
 
 The `@app` block is the app manifest. No separate manifest file exists.
 
@@ -168,13 +170,17 @@ Creates the type `domain_name.Error`. Variants are atoms. Defined in any `.deck`
 
 ## 8. @machine — State Machines
 
-Defines a named state machine type. All stateful behavior in Deck flows through machines.
+Defines a named state machine. All stateful behavior in Deck flows through machines. `@machine` is the core primitive; `@flow` (§9) is ergonomic sugar over it.
 
-### 8.1 Scope and Instantiation
+### 8.1 Scope
 
-**App-level machine** (`@machine` at top level in any file): a single global instance managed by the interpreter. Accessible anywhere as `MachineName.state`, `MachineName.send(...)`, `MachineName is :state`. Created at app load.
+| Scope | Declared in | Lifecycle | Access |
+|---|---|---|---|
+| **App-level** | Top level of any `.deck` file | Entire app lifetime | `MachineName.state`, `MachineName.send(...)`, `MachineName is :state` anywhere |
+| **Flow-scoped** | Inside a `@flow` block | Activated when the flow enters the stack; OS decides freeze vs. destroy on exit | Same qualifiers, visible only within the flow |
+| **State-scoped** | Inside a `state` block within a `@flow` | Created on state entry, destroyed on state exit | Same qualifiers, visible only within the state |
 
-**View-local machine** (declared inside a `@view` block): a private instance created when the view appears and destroyed when it disappears. Accessed within the view as `state` (unqualified) and `send(:event)` (unqualified). Cannot be accessed from outside the view.
+App-level machines are created at app load. Scoped machines follow their enclosing scope's lifecycle — the developer does not write creation or restoration code.
 
 ### 8.2 Declaration Syntax
 
@@ -182,6 +188,8 @@ Defines a named state machine type. All stateful behavior in Deck flows through 
 @machine MachineName
   state :name
   state :name (field: Type, field: Type)
+  state :name machine: OtherMachine   -- delegates content to another machine
+  state :name flow: OtherFlow         -- delegates content to a @flow
 
   initial :name
 
@@ -193,6 +201,29 @@ Defines a named state machine type. All stateful behavior in Deck flows through 
     from :state_name current
     to   :target (field: expr_using_current_and_params)
     when: guard_bool_expr
+    before -> expr   -- effect before this transition executes
+    after  -> expr   -- effect after this transition executes
+
+  -- Reactive transition: fires automatically when condition becomes true
+  transition :event_atom
+    from :state_name
+    to   :target_state
+    watch: bool_expr
+
+  -- Return to the previous state (one level of history)
+  transition :back
+    from :overlay _
+    to   history
+```
+
+States with `content =` define what the user perceives in that state (see §11):
+
+```
+state :active
+  on enter -> expr   -- effect on any transition that activates this state
+  on leave -> expr   -- effect on any transition that deactivates this state
+  content =
+    view_body_nodes
 ```
 
 ### 8.3 State Declarations
@@ -201,14 +232,18 @@ Defines a named state machine type. All stateful behavior in Deck flows through 
 state :idle                                      -- no payload
 state :active  (temp: float, max: float)         -- named payload
 state :error   (message: str, code: atom)
+state :editing machine: DraftMachine             -- delegates to another machine
+state :thread  flow: ThreadFlow                  -- delegates to a @flow
 ```
+
+`machine:` and `flow:` references are validated at load time — the named declaration must exist. A state with `machine:` or `flow:` may not also have `content =`.
 
 ### 8.4 Transition Rules
 
 - Transitions fire when `MachineName.send(:event, param: value)` is called
 - If the machine's current state does not match any `from:` for the given event, the send is silently ignored
 - If a `when:` guard evaluates to false, the transition is silently ignored
-- **Multiple transitions for the same event are allowed** if their `from:` states or `when:` guards are mutually exclusive. Evaluated top-to-bottom; first match fires.
+- **Multiple transitions for the same event** are allowed if `from:` states or `when:` guards are mutually exclusive. Evaluated top-to-bottom; first match fires.
 - `from *` matches any state
 
 **Binding current state data:**
@@ -219,37 +254,189 @@ transition :update (reading: float)
 ```
 `current` binds the entire from-state payload as a record.
 
-### 8.5 View-Local Machine Syntax
+**`to history`**: transitions to the state that was active immediately before the current one. One level only. Useful for modal overlays that should restore their parent's state on dismiss.
+
+### 8.5 Hooks and Execution Order
+
+`on enter` and `on leave` are sugar: they apply to **every** transition that activates or deactivates a state. `before` / `after` on a specific transition apply only to **that** transition.
+
+Execution order for a transition:
 
 ```
-@view MyView
-  @machine
-    state :idle
+1. transition before    -- hook of the specific transition
+2. state    on leave    -- hook of the from-state
+3. [state changes]
+4. state    on enter    -- hook of the to-state
+5. transition after     -- hook of the specific transition
+```
+
+### 8.6 Reactive Transitions (`watch:`)
+
+A `watch:` transition fires automatically whenever its condition changes from false to true — no `send()` needed. The runtime evaluates `watch:` reactively on every change to any value it references (machine state, stream value, network state).
+
+```
+transition :require_login
+  from :feed
+  to   :login
+  watch: not (AuthState is :authenticated)
+
+transition :auto_login
+  from :login
+  to   :feed
+  watch: AuthState is :authenticated
+```
+
+When multiple `watch:` transitions could apply simultaneously, evaluation is top-to-bottom and the first applicable one fires. Overlapping `watch:` conditions on the same machine are almost always a modeling mistake; the loader emits a warning.
+
+### 8.7 Implicit Reactivity
+
+If a `content =` body reads from a stream (e.g., `Timeline.last()`), the runtime detects that dependency and re-evaluates the content automatically when the stream emits. No `@listens` opt-in is needed — reactivity is implicit and derived from data dependencies.
+
+### 8.8 Scoped Declarations Inside a Machine or Flow
+
+The following declarations may appear inside a `@flow` body or inside a `state` block. Their lifecycle is tied to the enclosing scope:
+
+```
+@flow ComposeFlow
+  @machine Draft
+    state :empty
     state :editing (text: str)
-    initial :idle
+    initial :empty
+    ...
 
-    transition :start_edit
-      from :idle
-      to   :editing (text: "")
+  @stream LiveUpdates
+    source: ws.messages()
 
-    transition :update (text: str)
-      from :editing _
-      to   :editing (text: text)
+  @task AutoSave
+    every: 30s
+    run = Draft.save()
 
-    transition :cancel
-      from *
-      to   :idle
+  @on hardware.headphone_removed
+    send(:pause)
 
-  content = ...
+  fn render_empty () -> fragment =
+    rich_text "Nothing here yet."
+
+  initial :writing
+  step :writing -> ...
 ```
 
-The inline `@machine` inside a `@view` does not take a name. It is always accessed as `state` and `send()`.
+State-scoped (created on state entry, destroyed on exit):
+
+```
+state :results
+  @machine Filters
+    state :collapsed
+    state :expanded
+    initial :collapsed
+    ...
+  @stream LiveFeed
+    source: ws.feed()
+  @task PollFallback
+    every: 30s
+    run = Timeline.send(:refresh)
+```
+
+Within a `@flow`, all scoped declarations (machines, streams, tasks, `fn`, `@on`) are visible to each other without qualification — they form a private module. The `fn` scope is visibility-only (functions are pure and have no lifecycle).
+
+### 8.9 Flow Entry Context
+
+When a `@flow` is referenced by a state with a payload, that payload is automatically in scope inside the flow without explicit declaration:
+
+```
+state :thread (post: Post)  flow: ThreadFlow
+-- ThreadFlow has `post` in scope — it is the payload of the activating state
+
+@flow ThreadFlow
+  @stream ThreadUpdates
+    source: ws.subscribe(thread_id: post.uri)  -- post in scope
+```
+
+A flow may only be referenced from states with compatible (or absent) payloads. Incompatible types across reference sites is a load error.
 
 ---
 
-## 9. @stream — Reactive Data Sources
+## 9. @flow — Flow Sugar
 
-Declares a named, app-wide reactive stream. Streams are active from app load until termination.
+`@flow` is syntactic sugar over `@machine`. It adds `step :name ->` blocks that combine state content in a compact form. It does not add new semantics — a `@flow` desugars completely to a `@machine` with `content =` blocks per state.
+
+### 9.1 Syntax
+
+```
+@flow FlowName
+  state :state_a
+  state :state_b (field: Type)
+  state :state_c
+  initial :state_a
+
+  transition :event (param: Type)
+    from :state_a
+    to   :state_b (field: param)
+
+  transition :back
+    from :state_b _
+    to   :state_a
+
+  step :state_a ->
+    content_nodes
+
+  step :state_b s ->    -- s binds the state payload
+    content_nodes using s.field
+```
+
+`step :name ->` desugars to `state :name { content = ... }`. States that have `machine:` or `flow:` references do not need a `step` — their content is provided by the referenced declaration.
+
+Scoped declarations (§8.8) work identically inside `@flow`.
+
+### 9.2 When to Use Each
+
+| | `@machine` | `@flow` |
+|---|---|---|
+| Has `content =` per state | Optional | Always (via `step`) |
+| Typical use | Background state, no direct UI | All navigable, user-facing flows |
+| Examples | `AuthState`, loader, connection state | `App`, `FeedFlow`, `ComposeFlow` |
+
+In practice, almost everything the user sees is a `@flow`. Pure `@machine` stays for background state.
+
+### 9.3 Navigation Topology
+
+The root flow (named in `@app entry:`) expresses the app's navigation topology. States with `flow:` references compose it hierarchically. The OS infers navigation affordances from the structure:
+
+| Structure | Phone | Tablet | Voice |
+|---|---|---|---|
+| Peer states with `from *` bidirectional | Tab bar | Sidebar | "Switch to X" |
+| Nested states (depth) | Push/back | Split view | "More detail" |
+| `from * → history` | Modal sheet | Popover | Interruption |
+
+Deck does not declare tab bars, stacks, or modals explicitly. The topology is the semantics.
+
+```
+@flow App
+  state :feed    flow: FeedFlow
+  state :search  flow: SearchFlow
+  state :profile flow: ProfileFlow
+  state :compose flow: ComposeFlow
+
+  initial :feed
+
+  transition :go_feed    from * to :feed
+  transition :go_search  from * to :search
+  transition :go_profile from * to :profile
+
+  transition :open_compose
+    from *
+    to   :compose
+
+  transition :close_compose
+    from :compose
+    to   history
+```
+
+---
+
+## 10. @stream — Reactive Data Sources
+
+Declares a named reactive stream. App-level streams are active from app load until termination.
 
 ```
 @stream Name
@@ -314,7 +501,7 @@ StreamName.recent(n)     -- [T]  (last n values, oldest first)
 
 ---
 
-## 10. @on — App Lifecycle Hooks
+## 11. @on — App Lifecycle Hooks
 
 ```
 @on launch
@@ -358,64 +545,9 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
 
 ---
 
-## 11. @view — User Interface
+## 12. Content Bodies
 
-```
-@view ViewName
-  @shows when: condition
-  @hides when: condition
-  param field : Type
-  @machine
-    ...   -- optional inline local machine
-  @listens StreamName
-  @listens OtherStream
-
-  on appear    -> expr_or_do_block
-  on disappear -> expr_or_do_block
-  on suspend   -> expr_or_do_block
-  on resume    -> expr_or_do_block
-
-  content =
-    view_body
-```
-
-### 11.1 @shows and @hides
-
-Evaluated continuously. When the condition changes, the interpreter instructs the OS to show or hide the view. Views with `@shows` appear/disappear automatically — the developer never calls show/hide imperatively.
-
-`@hides when:` is optional and complementary. If both are declared, the view is shown only when `@shows` is true AND `@hides` is false.
-
-Views without `@shows` are only reachable via `@nav` routes.
-
-**Priority when multiple `@shows` are simultaneously true**: At most one view occupies the root position at a time. If two or more views have `@shows` conditions that are simultaneously true, the **last-declared view** (in `app.deck` reading order) takes precedence. The loader emits a warning when two `@shows` conditions can be simultaneously true — this is almost always a design mistake.
-
-### 11.2 Params
-
-```
-param user_id : str
-param post    : Post
-```
-
-Passed when navigating to the view. Available as plain identifiers in the view body and hooks.
-
-### 11.3 @listens
-
-Views with `@listens StreamName` re-render reactively when the stream produces a new value. Without `@listens`, a view reads stream data once (on appear) and does not update.
-
-### 11.4 View Lifecycle Hooks
-
-`on appear` — view is shown (navigation push or `@shows` becoming true).
-`on disappear` — view is hidden (navigation pop or `@shows` becoming false).
-`on suspend` — app suspends while this view is visible.
-`on resume` — app resumes while this view is visible.
-
-These hooks may use `!effect` capabilities declared in `@use`.
-
----
-
-## 12. View Body
-
-The `content =` of a view is a semantic description of what the user perceives and can do in that context. It does not describe how to render anything — that is the OS's responsibility. The OS uses the semantic structure to apply the appropriate pattern for the form factor (phone, smartwatch, voice, e-ink, terminal).
+The `content =` block inside any `@machine` state or `@flow` step is a semantic description of what the user perceives and can do in that context. It does not describe rendering — the OS decides how to present each element for the form factor (phone, smartwatch, voice, e-ink, terminal).
 
 ### 12.1 Structural Primitives
 
@@ -429,13 +561,6 @@ list expr
   on more -> action       -- how to load them; the OS exposes this per form factor
   var ->
     content               -- structure of each item
-```
-
-**`item`** — standalone entity for detail views (the subject of the view is a single thing).
-
-```
-item ->
-  content
 ```
 
 **`group`** — named semantic grouping. The label communicates the group's purpose to the OS; together with the types and intents inside, the OS decides how to present it.
@@ -455,22 +580,10 @@ form
   content               -- intents of type text, choice, range, password, pin, date...
 ```
 
-**`flow`** — multi-step flow with dependent steps, not necessarily linear. Combines a state machine (controlling the flow) with content and intents per state. Each `step` defines what the user perceives and can do when the machine is in that state.
+Example — login flow with 2FA expressed as `@flow`:
 
 ```
-flow MachineName
-  step :state_name ->
-    content
-  step :state_name var ->   -- when the state has payload, var binds it
-    content
-```
-
-The OS does not need to know how many steps there are or in what order — the machine controls transitions. The OS only knows it is showing a step of a dependent flow and applies its progress/stepper/conversation patterns accordingly.
-
-Example — login flow with 2FA:
-
-```
-@machine LoginFlow
+@flow LoginFlow
   state :credentials
   state :two_factor (email: str)
   state :done       (handle: str)
@@ -493,28 +606,27 @@ Example — login flow with 2FA:
     from :failed _
     to   :credentials
 
-flow LoginFlow
   step :credentials ->
-    text     :handle    hint: "Handle or email"   on -> send(:set_handle, v: event.value)
-    password :password  hint: "Password"           on -> send(:set_password, v: event.value)
+    text     :handle    hint: "Handle or email"   on -> LoginFlow.send(:set_handle, v: event.value)
+    password :password  hint: "Password"           on -> LoginFlow.send(:set_password, v: event.value)
     trigger "Sign in" -> auth.login(...)
 
   step :two_factor s ->
     rich_text "Enter the code sent to {s.email}"
-    pin :code  length: 6  on -> send(:verify, code: event.value)
+    pin :code  length: 6  on -> LoginFlow.send(:verify, code: event.value)
 
   step :done s ->
     rich_text "Welcome, {s.handle}!"
-    navigate "Continue" -> nav.root
+    trigger "Continue" -> App.send(:authenticated)
 
   step :failed e ->
     error message: e.message
-    trigger "Try again" -> send(:retry)
+    trigger "Try again" -> LoginFlow.send(:retry)
 ```
 
 ---
 
-### 12.2 View State
+### 12.2 State
 
 Semantic markers for the perceived state of the view. Used inside `match` arms over machine states. The OS maps them to its loading/error patterns for the device.
 
@@ -670,12 +782,11 @@ search name: atom  value: str?
 
 ---
 
-**`navigate`** — the user wants to go to a related context.
+**`navigate`** — the user wants to go to a related context. The `->` action sends to a machine or flow to trigger a state transition. The OS treats `navigate` semantically — it knows the user intends movement to a new context, not a pure action.
 ```
-navigate label: str  -> :route [with: param = expr]
-navigate label: str  -> nav.back
-navigate label: str  -> nav.root
+navigate label: str  -> action_expr
 ```
+`action_expr` is typically a `Machine.send(...)` call that triggers a navigation transition in the app's root flow. The OS may render this as a disclosure affordance, transition animation hint, or navigation gesture.
 
 ---
 
@@ -695,9 +806,9 @@ Uses: delete, block, sign out, reset.
 
 ---
 
-**`create`** — the user initiates creation of a new entity. Semantically distinct from `navigate`: the destination is a blank creation context.
+**`create`** — the user initiates creation of a new entity. Semantically distinct from `navigate`: the destination is a blank creation context. The OS may render this with a distinct affordance (FAB, "+" button, voice "create new").
 ```
-create label: str  -> :route [with: param = expr]
+create label: str  -> action_expr
 ```
 Uses: compose post, add contact, new document.
 
@@ -714,7 +825,7 @@ share expr  label: str?
 
 The position of a declaration in the content determines its scope:
 
-- **Context-level** — direct child of `content =` (not inside a `list` item or `group`): applies to the whole view. The OS places it as a primary action (FAB, voice command, toolbar, physical key).
+- **Context-level** — direct child of `content =` (not inside a `list` item or `group`): applies to the whole state context. The OS places it as a primary action (FAB, voice command, toolbar, physical key).
 - **Item-level** — inside the body of a `list` item: applies to that specific item. The OS exposes it through item affordances (tap, swipe, long-press, contextual voice command).
 - **Group-level** — inside a `group`: scoped to that group's semantic context. The OS may collapse group intents behind a secondary action (overflow menu, "more options", voice "options for [label]").
 
@@ -743,16 +854,18 @@ content =
             group "reactions"
               toggle :liked    state: p.liked_by_me    on -> interaction.toggle_like(p)
               toggle :reposted state: p.reposted_by_me on -> interaction.toggle_repost(p)
-              navigate "Reply" -> :compose_reply with: post = p
+              navigate "Reply" -> App.send(:open_compose, reply_to: p)
             group "options"
               confirm "Report"     message: "Report this post?"         -> moderation.report_post(p)
               confirm "Block user" message: "Block @{p.author.handle}?" -> moderation.block(p.author)
     | _ -> unit
 
-  create "Compose" -> :compose     -- context-level; always available
+  create "Compose" -> App.send(:open_compose)     -- context-level; always available
 ```
 
 `for` iterates over any `[T]` and is equivalent to `list` without `more:` and `empty ->` semantics. Use `list` when the OS should treat the collection as a navigable, potentially paginated data set; use `for` for repeated inline content inside a larger structure.
+
+View content functions (§6.3 of `01-deck-lang`) may be called freely inside content bodies. Their nodes are spliced inline at the call site. Business logic (`let`, `match`, pure functions) may appear alongside content nodes anywhere in the body — the evaluator resolves the full body to a `[ViewContentNode]` sequence.
 
 ---
 
@@ -776,61 +889,9 @@ Inside `on ->` handlers of input intents, `event` is an implicit binding:
 
 ---
 
-## 13. @nav — Navigation Topology
+## 13. Navigation Topology
 
-Declares the complete navigation structure. Views exist at exactly one position in this hierarchy.
-
-```
-@nav
-  root: ViewName
-
-  stack
-    :route -> ViewName
-    :route -> ViewName  with: param:Type  other_param:Type
-
-  modal
-    :route -> ViewName
-    :route -> ViewName  with: param:Type
-
-  tab
-    :route -> ViewName  icon: :icon_atom  label: str
-    :route -> ViewName  icon: :icon_atom  label: str
-```
-
-**`root`**: Initial view. Shown after `@on launch` completes.
-**`stack`**: Views pushed onto a navigation stack. OS provides back gesture/button.
-**`modal`**: Views presented over current content. Dismissed with `nav.back`.
-**`tab`**: Views in a persistent tab bar. Switching tabs is stateless.
-
-**Tab `icon:` atoms** — the following atoms are guaranteed to map to a native icon on all compliant OS implementations. The OS author may add platform-specific atoms; unknown atoms render as a generic `:menu` icon with a load-time warning.
-
-| Atom | Meaning |
-|---|---|
-| `:home` | Home / dashboard |
-| `:search` | Search |
-| `:notifications` | Notifications / bell |
-| `:profile` | User profile / person |
-| `:settings` | Settings / gear |
-| `:compose` | Compose / new item |
-| `:feed` | Feed / list |
-| `:favorites` | Favorites / star |
-| `:history` | History / clock |
-| `:menu` | Hamburger menu (generic fallback) |
-
-A route may not appear in more than one section. The nav topology is validated at load time:
-- All referenced views must exist
-- All `with:` params must match the view's `param` declarations
-- All `-> :route` navigation actions in view bodies must reference declared routes
-
-### 13.1 Navigation Actions
-
-```
--> :route_name
--> :route_name with: param = expr  other_param = expr
-nav.back
-nav.root
-nav.replace(:route)              -- replace current in stack (no back entry)
-```
+Navigation topology is expressed through the structure of the root `@flow` (or `@machine`) named in `@app entry:`. The OS infers affordances from the topology — Deck never declares "use a tab bar" or "use a stack." The structure is the semantics. See §9.3 for the inference rules and examples.
 
 ---
 
@@ -838,14 +899,19 @@ nav.replace(:route)              -- replace current in stack (no back entry)
 
 ```
 @task TaskName
-  every:    Duration
-  when:     condition_expr
-  priority: :high | :normal | :low | :background
-  battery:  :normal | :efficient
+  every:      Duration
+  when:       condition_expr
+  priority:   :high | :normal | :low | :background
+  battery:    :normal | :efficient
+  background: bool     -- default false; true = runs independently of main task
 
   run =
     expr_or_do_block
 ```
+
+**`background: true`** — the task runs in its own execution context, independent of the main task. It continues running even when the main task is suspended. Effects (`!http`, `!db`, etc.) and `Machine.send()` calls work normally. Without `background: true`, the task runs in the main task context and suspends with it.
+
+**Background → main communication**: A background task may call `Machine.send()` on any app-level machine. If the main task is suspended, the machine state updates immediately; the UI re-renders when the main task resumes. The developer does not write restoration code.
 
 ### 14.1 Scheduling
 
@@ -964,6 +1030,7 @@ fn celsius (t: float) -> str
   name:    "Ambient Monitor"
   id:      "mx.lab.ambient"
   version: "2.0.0"
+  entry:   App
 
 @use
   sensors.temperature as temp
@@ -972,12 +1039,10 @@ fn celsius (t: float) -> str
   network.http        as http      when: network is :connected
   display.notify      as notify
   db                  as db
-  ./types
-  ./views/main
-  ./views/alert
-  ./views/history
-  ./tasks/sync
-  ./tasks/persist
+  ./machines/sensor
+  ./flows/app
+  ./flows/main
+  ./flows/history
 
 @permissions
   sensors.temperature reason: "Read ambient temperature from sensor"
@@ -994,7 +1059,32 @@ fn celsius (t: float) -> str
   :unavailable  "Sensor not responding"
   :out_of_range "Reading outside calibrated range"
 
-@machine App
+@stream TempStream
+  source: temp.watch(hz: 1)
+
+@stream HumidityStream
+  source: humidity.watch(hz: 1)
+
+@on launch
+  do
+    db.schema("""
+      CREATE TABLE IF NOT EXISTS readings (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        value REAL    NOT NULL,
+        ts    TEXT    NOT NULL
+      )
+    """)
+    match temp.read()
+      | :ok v  -> Sensor.send(:ready, first: v)
+      | :err _ -> Sensor.send(:sensor_lost)
+
+@on suspend
+  store.set("last_reading", str(unwrap_opt_or(TempStream.last(), 0.0)))
+
+
+-- machines/sensor.deck
+
+@machine Sensor
   state :booting
   state :active   (temp: float, max: float)
   state :alert    (temp: float, max: float)
@@ -1032,31 +1122,82 @@ fn celsius (t: float) -> str
     from :no_sensor
     to   :active (temp: first, max: first)
 
-@stream Readings
-  source: temp.watch(hz: 1)
 
-@stream HumidityReadings
-  source: humidity.watch(hz: 1)
+-- flows/app.deck
 
-@on launch
-  db.exec("""
-    CREATE TABLE IF NOT EXISTS readings (
-      id    INTEGER PRIMARY KEY AUTOINCREMENT,
-      value REAL    NOT NULL,
-      ts    TEXT    NOT NULL
-    )
-  """)
-  match temp.read()
-    | :ok v      -> App.send(:ready, first: v)
-    | :err _     -> App.send(:sensor_lost)
+@flow App
+  state :main    flow: MainFlow
+  state :history flow: HistoryFlow
 
-@on suspend
-  store.set("last_reading", str(unwrap_opt_or(Readings.last(), 0.0)))
+  initial :main
 
-@nav
-  root: MainView
-  stack
-    :history -> HistoryView
-  modal
-    :settings -> SettingsView
+  transition :go_history
+    from :main
+    to   :history
+
+  transition :go_main
+    from :history
+    to   :main
+
+
+-- flows/main.deck
+
+@flow MainFlow
+  @task PollSensor
+    every: 1s
+    run = do
+      match temp.read()
+        | :ok v  -> Sensor.send(:update, t: v)
+        | :err _ -> Sensor.send(:sensor_lost)
+
+  state :dashboard
+  initial :dashboard
+
+  step :dashboard ->
+    match Sensor.state
+      | :booting   -> loading
+      | :no_sensor -> error message: "Sensor not responding"
+      | :alert s   ->
+          status true  label: "Temperature alert"
+          "{s.temp}°C (max recorded: {s.max}°C)"
+          match HumidityStream.last()
+            | :some h -> "Humidity: {h}%"
+            | :none   -> unit
+          chart TempStream.recent(60)
+            label: "Last minute"
+            y_label: "°C"
+          confirm "Dismiss alert" message: "Clear the temperature alert?" ->
+            Sensor.send(:acknowledge)
+          navigate "History" -> App.send(:go_history)
+      | :active s  ->
+          "{s.temp}°C"
+          "Max: {s.max}°C"
+          match HumidityStream.last()
+            | :some h -> "Humidity: {h}%"
+            | :none   -> unit
+          chart TempStream.recent(60)
+            label: "Last minute"
+            y_label: "°C"
+          navigate "History" -> App.send(:go_history)
+
+
+-- flows/history.deck
+
+@flow HistoryFlow
+  state :list
+  initial :list
+
+  step :list ->
+    match db.query("SELECT value, ts FROM readings ORDER BY ts DESC LIMIT 100")
+      | :loading -> loading
+      | :ok rows ->
+          list rows
+            empty ->
+              "No readings recorded yet."
+            r ->
+              "{r.value}°C"
+              r.ts
+          navigate "Back" -> App.send(:go_main)
 ```
+
+**What the topology expresses:** `App` is a 2-state peer flow (tab bar or sidebar on phone/tablet). `MainFlow` reads reactively from `Sensor` and both streams — no `@listens` needed. `PollSensor` is flow-scoped: active only while `MainFlow` is on the stack. `HistoryFlow` queries the DB on demand. The OS infers all affordances from the structure.

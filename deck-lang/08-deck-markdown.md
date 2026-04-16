@@ -13,7 +13,7 @@ Markdown is not an afterthought in Deck — when installed, it is structurally i
 - Pure operations (parse, excerpt, word count, reading time, to-plain) are builtins in scope everywhere without `@use`.
 - Stateful operations (editor, streaming render) are a capability declared in `@use`.
 - The parsed document is a `@type MdDocument` — a real, inspectable, pattern-matchable value. Deck code can walk the AST, extract headings for a table of contents, or rewrite nodes programmatically.
-- Streaming render works natively with `@stream` and `@listens` — appending tokens as they arrive without full re-parse.
+- Streaming render works natively with `@stream` and reactive content bodies — appending tokens as they arrive without full re-parse.
 - A `markdown_editor` component provides a native Markdown editing surface with optional toolbar and live preview.
 
 **What this module does NOT do:**
@@ -463,19 +463,29 @@ For AI chat responses, live document sync, or streaming file reads.
   -- fold tokens into an accumulating string, then stream MdPatch values
 
 -- In view:
-@view ChatView
-  @listens RenderedDoc
+@machine ChatView
+  state :empty
+  state :streaming (accumulated: str)
+  state :done      (document: MdDocument)
+  initial :empty
+
+  transition :patch (patch: MdPatch)
+    from :empty
+    to   :streaming (accumulated: patch.text)
+  transition :patch (patch: MdPatch)
+    from :streaming s
+    to   :streaming (accumulated: "{s.accumulated}{patch.text}")
+  transition :finalize (doc: MdDocument)
+    from :streaming _
+    to   :done (document: doc)
 
   body =
     screen
       scroll
-        match RenderedDoc.last()
-          | :none -> spinner
-          | :some patch ->
-              match patch.type
-                | :append   -> markdown "{accumulated_text}{patch.text}"
-                | :finalize -> markdown patch.document
-                | _         -> unit
+        match state
+          | :empty      -> spinner
+          | :streaming s -> markdown s.accumulated
+          | :done s     -> markdown s.document
 ```
 
 The `md_cap.stream_parse` capability handles the accumulation and incremental parsing:
@@ -1470,13 +1480,19 @@ void markdown_module_register(DeckRuntime* rt) {
     )
   """)
 
-@nav
-  root: NoteListView
-  stack
-    :editor -> NoteEditorView  with: note: Note
-    :reader -> NoteReaderView  with: note: Note
-  modal
-    :search -> SearchView
+@flow Nav
+  state :list
+  state :editor
+  state :reader
+  state :search
+  initial :list
+
+  transition :to_editor  from :list      to :editor  watch: App is :editing _
+  transition :to_reader  from :list      to :reader  watch: App is :reading _ or App is :new_note _
+  transition :to_search  from :list      to :search  watch: App is :searching _
+  transition :to_list    from :editor    to :list    watch: App is :list
+  transition :to_list    from :reader    to :list    watch: App is :list
+  transition :to_list    from :search    to :list    watch: App is :list
 ```
 
 ```deck
@@ -1566,29 +1582,26 @@ fn extract_meta_title (content: str) -> str? =
 ```deck
 -- views/note_list_view.deck
 
-@view NoteListView
-  @shows when: App is :list
+@machine NoteListView
+  state :idle
+  state :loading
+  state :loaded (notes: [Note])
+  state :error  (message: str)
+  initial :idle
 
-  @machine
-    state :idle
-    state :loading
-    state :loaded (notes: [Note])
-    state :error  (message: str)
-    initial :idle
+  transition :load   from :idle from :error _  to :loading
+  transition :loaded (notes: [Note])  from :loading  to :loaded (notes: notes)
+  transition :failed (message: str)   from :loading  to :error (message: message)
+  transition :reload  from *  to :loading
 
-    transition :load   from :idle from :error _  to :loading
-    transition :loaded (notes: [Note])  from :loading  to :loaded (notes: notes)
-    transition :failed (message: str)   from :loading  to :error (message: message)
-    transition :reload  from *  to :loading
-
-  on appear -> do  send(:load)  load_notes()
+  on enter -> do  send(:load)  load_notes()
 
   body =
     screen
       header "Notes"
         actions
           button "⌕"
-            -> :search
+            -> App.send(:search)
             accessibility: "Search notes"
           button "✦"
             -> new_note()
@@ -1609,7 +1622,7 @@ fn extract_meta_title (content: str) -> str? =
                 note_card(n)
               on refresh -> do  send(:reload)  load_notes()
 
-fn note_card (n: Note) -> component =
+fn note_card (n: Note) =
   card
     row
       column
@@ -1648,42 +1661,41 @@ fn new_note () -> unit !db =
 ```deck
 -- views/note_editor_view.deck
 
-@view NoteEditorView
+@machine NoteEditorView
   param note : Note
 
-  @machine
-    state :editing  (current: Note, saved: bool, editor: MdEditorState?)
-    initial :editing (current: note, saved: true, editor: :none)
+  state :editing  (current: Note, saved: bool, editor: MdEditorState?)
+  initial :editing (current: note, saved: true, editor: :none)
 
-    transition :update_content (text: str)
-      from :editing s
-      to   :editing (
-        current: s.current with {
-          title:      extract_title(text),
-          content:    text,
-          word_count: md.word_count(text),
-          excerpt:    md.excerpt(text, 160, "…")
-        },
-        saved:  false,
-        editor: :none
-      )
+  transition :update_content (text: str)
+    from :editing s
+    to   :editing (
+      current: s.current with {
+        title:      extract_title(text),
+        content:    text,
+        word_count: md.word_count(text),
+        excerpt:    md.excerpt(text, 160, "…")
+      },
+      saved:  false,
+      editor: :none
+    )
 
-    transition :update_editor (editor: MdEditorState)
-      from :editing s
-      to   :editing (
-        current: s.current with {
-          content:    editor.content,
-          title:      extract_title(editor.content),
-          word_count: md.word_count(editor.content),
-          excerpt:    md.excerpt(editor.content, 160, "…")
-        },
-        saved:  false,
-        editor: :some editor
-      )
+  transition :update_editor (editor: MdEditorState)
+    from :editing s
+    to   :editing (
+      current: s.current with {
+        content:    editor.content,
+        title:      extract_title(editor.content),
+        word_count: md.word_count(editor.content),
+        excerpt:    md.excerpt(editor.content, 160, "…")
+      },
+      saved:  false,
+      editor: :some editor
+    )
 
-    transition :saved (note: Note)
-      from :editing s
-      to   :editing (current: note, saved: true, editor: s.editor)
+  transition :saved (note: Note)
+    from :editing s
+    to   :editing (current: note, saved: true, editor: s.editor)
 
   body =
     screen
@@ -1749,18 +1761,17 @@ fn extract_title (content: str) -> str =
 ```deck
 -- views/note_reader_view.deck
 
-@view NoteReaderView
+@machine NoteReaderView
   param note : Note
 
-  @machine
-    state :reading (scroll_to: str?)
-    initial :reading (scroll_to: :none)
+  state :reading (scroll_to: str?)
+  initial :reading (scroll_to: :none)
 
-    transition :jump_to (id: str)
-      from *
-      to   :reading (scroll_to: :some id)
+  transition :jump_to (id: str)
+    from *
+    to   :reading (scroll_to: :some id)
 
-  on appear -> unit
+  on enter -> unit
 
   body =
     screen
@@ -1861,6 +1872,14 @@ fn extract_title (content: str) -> str =
   transition :close_search  from :searching s  to :open (book: s.book, position: 0, chapter_id: :none)
   transition :close         from *             to :closed
 
+@flow App
+  state :library
+  state :reading
+  initial :library
+
+  transition :open   from :library  to :reading  watch: Reader is :open or Reader is :searching
+  transition :close  from :reading  to :library  watch: Reader is :closed
+
 @on hardware.button (id: 0, action: :press)
   match Reader.state
     | :open _ -> display.backlight_toggle()
@@ -1870,27 +1889,25 @@ fn extract_title (content: str) -> str =
 ```deck
 -- views/reader_view.deck
 
-@view ReaderView
-  @shows when: Reader is :open or Reader is :searching
+@machine ReaderView
 
-  @machine
-    state :idle
-    state :loading (path: str)
-    state :ready   (content: str, doc: MdDocument)
-    state :error   (message: str)
-    initial :idle
+  state :idle
+  state :loading (path: str)
+  state :ready   (content: str, doc: MdDocument)
+  state :error   (message: str)
+  initial :idle
 
-    transition :load (path: str)  from :idle from :error _  to :loading (path: path)
-    transition :ready (content: str, doc: MdDocument)
-      from :loading _
-      to   :ready (content: content, doc: doc)
-    transition :failed (message: str)
-      from :loading _
-      to   :error (message: message)
+  transition :load (path: str)  from :idle from :error _  to :loading (path: path)
+  transition :ready (content: str, doc: MdDocument)
+    from :loading _
+    to   :ready (content: content, doc: doc)
+  transition :failed (message: str)
+    from :loading _
+    to   :error (message: message)
 
-  on appear ->
+  on enter ->
     match Reader.state
-      | :open s     -> do  send(:load, path: s.book.path)
+      | :open s      -> do  send(:load, path: s.book.path)
       | :searching s -> do  send(:load, path: s.book.path)
       | _            -> unit
 
@@ -1923,7 +1940,7 @@ fn extract_title (content: str) -> str =
                       style: :ghost
               | _ -> unit
 
-fn reader_body (doc: MdDocument, chapter_id: str?, theme: MdTheme) -> component =
+fn reader_body (doc: MdDocument, chapter_id: str?, theme: MdTheme) =
   scroll
     column
       markdown doc
@@ -1970,28 +1987,24 @@ fn load_book (path: str) -> unit !fs =
 ```deck
 -- views/chat_view.deck
 
-@view ChatView
+@machine ChatView
 
-  @machine
-    state :idle
-    state :waiting (messages: [ChatMsg], partial: str)
+  state :idle
+  state :waiting (messages: [ChatMsg], partial: str)
 
-    initial :idle
+  initial :idle
 
-    transition :user_sent (msg: str)
-      from :idle
-      to   :waiting (messages: [ChatMsg { role: :user, content: msg }], partial: "")
+  transition :user_sent (msg: str)
+    from :idle
+    to   :waiting (messages: [ChatMsg { role: :user, content: msg }], partial: "")
 
-    transition :token (text: str)
-      from :waiting s
-      to   :waiting (messages: s.messages, partial: "{s.partial}{text}")
+  transition :token (text: str)
+    from :waiting s
+    to   :waiting (messages: s.messages, partial: "{s.partial}{text}")
 
-    transition :response_done
-      from :waiting s
-      to   :idle with messages: s.messages ++ [ChatMsg { role: :assistant, content: s.partial }]
-
-  @machine
-    ...
+  transition :response_done
+    from :waiting s
+    to   :idle with messages: s.messages ++ [ChatMsg { role: :assistant, content: s.partial }]
 
   body =
     screen
@@ -2018,7 +2031,7 @@ fn load_book (path: str) -> unit !fs =
           enabled: not text.is_blank(compose_text)
           style: :primary
 
-fn message_list (msgs: [ChatMsg]) -> component =
+fn message_list (msgs: [ChatMsg]) =
   column
     for msg in msgs
       card
@@ -2041,16 +2054,15 @@ fn message_list (msgs: [ChatMsg]) -> component =
 ```deck
 -- views/docs_view.deck
 
-@view DocsView
+@machine DocsView
   param source : str      -- markdown content
 
-  @machine
-    state :navigating (scroll_to: str?)
-    initial :navigating (scroll_to: :none)
+  state :navigating (scroll_to: str?)
+  initial :navigating (scroll_to: :none)
 
-    transition :section (id: str)
-      from *
-      to   :navigating (scroll_to: :some id)
+  transition :section (id: str)
+    from *
+    to   :navigating (scroll_to: :some id)
 
   body =
     screen

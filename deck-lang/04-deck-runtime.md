@@ -185,17 +185,22 @@ ConfigEntry     { name, type, default, range?, options?, unit? }
 TypeDecl        { name: TypeIdent, fields: [(name, type_ann)] }
 ErrorsDecl      { domain, variants: [(atom, str)] }
 MachineDecl     { name: TypeIdent?, states, initial, transitions }
-StateDecl       { name: atom, fields: [(name, type_ann)] }
+StateDecl       { name: atom, fields: [(name, type_ann)],
+                  content?: Expr,           -- view content body for this state
+                  on_enter?: Expr,          -- hook evaluated on state entry
+                  on_exit?: Expr }          -- hook evaluated on state exit
 TransDecl       { event, params, from_state, from_binding?, to_state,
-                  to_fields: [(str, Expr)], guard? }
+                  to_fields: [(str, Expr)], guard?,
+                  watch?: Expr }            -- boolean condition for reactive firing
+FlowDecl        { name: TypeIdent?,        -- equivalent to MachineDecl with step blocks
+                  steps: [StepDecl],        -- ordered step declarations
+                  initial: atom }
+StepDecl        { name: atom,              -- step state name
+                  content: Expr,            -- view content body for this step
+                  on_enter?: Expr,
+                  on_exit?: Expr }
 StreamDecl      { name, source?, from?, operators: [StreamOp] }
 OnHookDecl      { event: str, body: Expr }
-ViewDecl        { name, shows?, hides?, params, machine?, listens,
-                  hooks: [(atom, Expr)], content: Expr }
-NavDecl         { root, stack: [NavEntry], modal: [NavEntry],
-                  tab: [TabEntry] }
-NavEntry        { route: atom, view: str, params: [(str, type_ann)] }
-TabEntry        { route: atom, view: str, icon: atom, label: str }
 TaskDecl        { name, every?, when_conds: [Expr], priority, battery, body: Expr }
 MigrationDecl   { from_version: str, body: Expr }
 TestDecl        { description: str, assertions: [Assertion] }
@@ -227,10 +232,9 @@ AtomVariantExpr { name: atom, positional?: Expr, fields?: [(str, Expr)] }
 InterpStrExpr   { parts: [StrPart] }  -- StrPart = Literal str | Interpolated Expr
 LitInt  LitFloat  LitBool  LitStr  LitUnit
 LitList  LitTuple  LitMap
-NavPushExpr     { route: atom, params: [(str, Expr)] }
-NavBackExpr     {}
-NavRootExpr     {}
-NavReplaceExpr  { route: atom, params: [(str, Expr)] }   -- replaces current stack top
+-- Note: NavPushExpr / NavBackExpr / NavRootExpr / NavReplaceExpr are removed.
+-- Navigation is driven entirely by machine state transitions (SendExpr).
+-- `to history` in a TransDecl signals the OS bridge to perform back navigation.
 
 -- Patterns
 WildPat  LitPat  AtomPat  AtomVarPat  AtomFieldsPat
@@ -238,15 +242,14 @@ TypePat         { type_: TypeIdent, fields: [(str, str)] }
 TuplePat  ListPat  SomePat  NonePat  OkPat  ErrPat
 GuardPat        { base: Pattern, guard: Expr }
 
--- View content nodes (produced by evaluating a view's content = body)
--- The evaluator produces a [ViewContentNode] from the view content expression.
+-- View content nodes (produced by evaluating a machine state or @flow step content= body)
+-- The evaluator produces a [ViewContentNode] from the content= expression.
 -- Regular language constructs (match, let, for) are standard Expr nodes;
 -- the evaluator resolves them to [ViewContentNode] sequences at runtime.
 ViewContentNode
   -- Structural primitives
   = VCList        { source: Expr, empty?: [ViewContentNode], more?: Expr,
                     on_more?: Expr, binding: str, body: [ViewContentNode] }
-  | VCItem        { body: [ViewContentNode] }
   | VCGroup       { label: str, body: [ViewContentNode] }
   | VCForm        { on_submit: Expr, body: [ViewContentNode] }
   | VCFlow        { machine: TypeIdent, steps: [FlowStep] }
@@ -254,7 +257,7 @@ ViewContentNode
   | VCLoading     {}
   | VCError       { message: Expr }
   -- Data content
-  | VCData        { expr: Expr }               -- bare data expression in content position
+  | VCData        { expr: Expr }               -- bare data expression or fragment call in content position
   | VCMedia       { expr: Expr, alt: Expr, hint?: atom }
   | VCRichText    { expr: Expr }
   | VCStatus      { expr: Expr, label: Expr }
@@ -278,7 +281,10 @@ ViewContentNode
 
 FlowStep  { state: atom, binding?: str, body: [ViewContentNode] }
 
--- NavTarget: destination of a navigate or create intent
+-- NavTarget: destination of a navigate or create intent (rendered as VCNavigate / VCCreate)
+-- NTRoute maps to a Machine.send() that transitions to the named state.
+-- NTBack signals the OS bridge to perform back navigation (equivalent to to history).
+-- NTRoot signals the OS bridge to return to the app root state.
 NavTarget = NTRoute   { route: atom, params: [(str, Expr)] }
           | NTBack
           | NTRoot
@@ -308,7 +314,7 @@ typedef struct DeckViewNode    DeckViewNode;
 
 /* Node type tag — mirrors ViewContentNode variants */
 typedef enum {
-  DVC_LIST, DVC_ITEM, DVC_GROUP, DVC_FORM, DVC_FLOW,
+  DVC_LIST, DVC_GROUP, DVC_FORM, DVC_FLOW,
   DVC_LOADING, DVC_ERROR,
   DVC_DATA, DVC_MEDIA, DVC_RICH_TEXT, DVC_STATUS, DVC_CHART, DVC_PROGRESS,
   DVC_TOGGLE, DVC_RANGE, DVC_CHOICE, DVC_MULTISELECT,
@@ -413,7 +419,7 @@ Takes the parsed AST and produces a fully verified, bound program. The most comp
 
 ```
 Stage 0: ANNOTATION PLACEMENT VALIDATION
-  Verify that @app, @use, @permissions, @config, @on, @nav, @migration
+  Verify that @app, @use, @permissions, @config, @on, @migration
     only appear in app.deck → load error for each violation in other files
 
 Stage 0.5: MIGRATION EXECUTION (if prior version exists)
@@ -492,18 +498,17 @@ Stage 6: EFFECT VERIFICATION
     All !effects used are in @use
   For each @task run body:
     All !effects used are in @use
-  For each component-returning function body:
-    No !effect calls allowed (component functions are pure) → load error
+  For each view content function body (inferred or declared -> fragment):
+    No !effect calls allowed (view content evaluation is always pure) → load error
   For each @on hook event name:
     Must exist in the OS event registry (from Stage 2) → load error if not found
 
-Stage 7: NAV VALIDATION
-  All route targets reference existing @view declarations
-  All with: param types match the view's param declarations
-  All -> :route navigation actions reference declared routes
-  No route appears in more than one nav section
-  Tab entries with unknown icon: atoms (not in the guaranteed set) → load warning;
-    runtime renders :menu icon as fallback
+Stage 7: FLOW VALIDATION
+  All flow: and machine: references in states resolve to declared @flow or @machine declarations
+  All watch: conditions are boolean expressions (no !effect calls, no send() calls)
+  to history is only used from states reachable via a transition, not from initial
+  Entry context types are compatible: if a @flow is referenced from multiple states
+    with payloads, the payload types must be compatible across all call sites
 
 Stage 8: MACHINE VALIDATION
   All states in transitions exist in the state declarations
@@ -517,7 +522,6 @@ Stage 9: STREAM VALIDATION
   All source: capabilities exist, return Stream T
   All from: references resolve to declared @stream
   No circular stream derivation
-  @listens references resolve to declared @stream
   CombineLatestOp: each source name resolves to a declared @stream;
     source count > 8 → load error; all sources accessible
   MergeOp: each source name resolves to a declared @stream;
@@ -588,7 +592,7 @@ type Value =
   | VMachine of machine_instance
   | VDuration of int64               -- milliseconds
   | VTimestamp of int64              -- ms since epoch
-  | VComponent of component_tree     -- component-returning fn result
+  | VFragment  of ViewContentNode list  -- view content function result; spliced inline at call site
   | VOpaque  of void*               -- bridge-defined types
 ```
 
@@ -666,12 +670,12 @@ Lookup: innermost to outermost. Not found: impossible after the Loader Bind stag
 3. Evaluate guard if present; if false, return current state unchanged
 4. Evaluate `to:` field expressions in env extended with from-binding and params
 5. Update live machine instance in interpreter state
-6. Emit internal `MACHINE_STATE_CHANGED(machine_name, new_state)` event to the Scheduler's Condition Tracker. The Condition Tracker re-evaluates all `when:` conditions that reference this machine (via `is` operator), which may update `@task` eligibility, `@use when:` capability availability, and `@shows`/`@hides` visibility. The Navigation Manager observes the results from the Condition Tracker — it does not subscribe to `MACHINE_STATE_CHANGED` directly.
+6. Emit internal `MACHINE_STATE_CHANGED(machine_name, new_state)` event to the Scheduler's Condition Tracker. The Condition Tracker re-evaluates all `when:` conditions that reference this machine (via `is` operator), which may update `@task` eligibility and `@use when:` capability availability. The Navigation Manager observes the results from the Condition Tracker — it does not subscribe to `MACHINE_STATE_CHANGED` directly.
 7. Return new state value
 
 **Recursion**: the evaluator uses an explicit call stack (not host language call stack). Direct and mutual recursion supported. Tail calls in `|>` chains and final match arms are trampolined. Stack depth limit configurable; default 512.
 
-**View content evaluation**: the `content =` body of a `@view` is evaluated in a restricted context that reads machine state, config, and stream data but cannot perform effects. The result is a `[ViewContentNode]` list that the runtime serializes into a `DeckViewContent*` and passes to `deck_bridge_render()`. `match`, `let`, and `for` within content are evaluated normally; their results must be `ViewContentNode` values or lists thereof.
+**View content evaluation**: the `content =` body of a machine state or `@flow` step is evaluated in a restricted context that reads machine state, config, and stream data but cannot perform effects. The result is a `[ViewContentNode]` list that the runtime serializes into a `DeckViewContent*` and passes to `deck_bridge_render()`. `match`, `let`, and `for` within content are evaluated normally; their results must be `ViewContentNode` values or lists thereof. When a view content function (one whose body produces `ViewContentNode` values and carries no `!` effects) is called inside a content body, its result is a `VFragment` — a `[ViewContentNode]` list that is spliced inline into the parent node list at the call site.
 
 **Intent handler evaluation**: when the bridge delivers an intent event via `deck_bridge_handle_intent(view_name, intent_name, payload)`, the evaluator locates the `on ->` handler of the intent whose `name:` atom matches `intent_name` and invokes it with the environment extended by an `event` binding:
 ```
@@ -770,7 +774,7 @@ Task bodies run via the evaluator's do-block mechanism. Errors in task bodies: l
 
 ### 8.3 Condition Tracker
 
-Maintains a table of `(condition_expr → current_bool)` for all `@use when:`, `@task when:`, `@shows when:`, `@hides when:` conditions.
+Maintains a table of `(condition_expr → current_bool)` for all `@use when:` and `@task when:` conditions.
 
 Re-evaluates affected conditions on:
 - OS events (`os.network_change`, `system.battery.watch()` stream updates, `os.permission_change`, etc.)
@@ -779,7 +783,6 @@ Re-evaluates affected conditions on:
 For each condition whose value changed:
 - `@use when:` → update Effect Dispatcher availability map
 - `@task when:` → may trigger task (false→true transition fires the task if no `every:`)
-- `@shows`/`@hides` → pass new desired-visibility state to Navigation Manager
 
 Condition expressions are evaluated in a pure read-only context. They may read `@config`, call `@pure`-marked capability methods, use the `is` operator on machines and atoms, and access stream `.last()`. They may **not** contain `!effect` calls or `send()`.
 
@@ -791,7 +794,6 @@ StreamBuffer {
   items:     Value array    -- ring buffer
   head:      int
   count:     int
-  listeners: ViewRef list   -- views with @listens
 }
 ```
 
@@ -801,7 +803,6 @@ On new value:
 3. Apply additional operators (distinct, throttle, debounce, etc.)
 4. Push to buffer (overwrite oldest if full)
 5. Push to all derived stream buffers that `from:` this stream
-6. Signal all `listeners` to re-render
 
 `StreamName.last()` → `buffer.items[(head - 1 + capacity) % capacity]` as `VOpt`.
 `StreamName.recent(n)` → last `min(n, count)` items as `VList`, oldest first.
@@ -838,81 +839,58 @@ merge (sources: [StreamName]):
 
 ### 9.1 Navigation State
 
+The Navigation Manager tracks the set of active machine instances and the currently rendered content. There is no push/pop route stack in the runtime — the OS bridge maintains any platform-level back history.
+
 ```
 NavState {
-  stack:      ViewInstance list   -- index 0 = root
-  modals:     ViewInstance list
-  active_tab: atom?
-}
-
-ViewInstance {
-  route:    atom
-  view_def: ViewDecl
-  params:   HashMap<string, Value>
-  machine?: MachineInstance
+  machines:      HashMap<string, MachineInstance>  -- all live @machine instances
+  active_content: DeckViewContent*?                -- last rendered content
 }
 ```
 
-### 9.2 @shows/@hides Evaluation
+The active content is always derived from the `content =` body of the currently active state in the root `@machine` or `@flow`. When a machine state changes, the Navigation Manager re-evaluates that body and calls `deck_bridge_render()` with the new `DeckViewContent*`.
 
-The re-evaluation pipeline:
+### 9.2 Reactive Transitions (watch:)
+
+The runtime tracks `watch:` conditions declared on `@machine` transitions. Each `watch:` condition is a boolean expression evaluated in the same pure read-only context as `@task when:` expressions — it may read machine state, config, stream `.last()`, and call `@pure` capability methods, but may not contain `!effect` calls or `send()`.
+
+Re-evaluation pipeline:
 ```
-send() → Evaluator → MACHINE_STATE_CHANGED → Condition Tracker
-  → for each changed @shows/@hides condition → Navigation Manager
-  → Navigation Manager calls deck_bridge_render(view_name, content) or nil
+machine state change | stream value | network state
+  → Condition Tracker re-evaluates affected watch: conditions
+  → if a watch: condition changed to true and the machine is currently
+    in the matching from: state → transition fires automatically
+  → send() is called internally with the watch: event
+  → MACHINE_STATE_CHANGED emitted → further reactive evaluation
 ```
-The Navigation Manager does **not** subscribe to `MACHINE_STATE_CHANGED` directly — it observes the results pushed by the Condition Tracker.
 
-Algorithm after any condition change:
-1. Determine desired visibility for every declared `@shows` view
-2. Compare to current display state
-3. For each change: call `deck_bridge_render(view_name, content)` with the new view's evaluated content, or nil to hide
+**Ordering rule**: When multiple `watch:` transitions apply to the same machine and the machine is in a state where more than one could fire, they are evaluated top-to-bottom in declaration order. The first watch: condition that is currently true fires; remaining are not evaluated for that cycle.
 
-**Priority rule**: At most one view occupies the root position at a time. If two or more `@shows` conditions are simultaneously true, the **last-declared view** (declaration order in `app.deck`) wins and becomes visible; others are hidden. The loader emits a warning when two `@shows` conditions can be simultaneously true — this is almost always a design mistake.
+### 9.3 Machine State Transitions as Navigation
 
-### 9.3 Explicit Navigation
+Navigation in Deck is not a push/pop stack operation — the flow structure defined by `@machine` and `@flow` declarations IS the navigation. State transitions drive what content is displayed.
 
+**Machine.send() is the only navigation primitive.** When a transition fires (via an explicit `send()` call in an `on ->` handler, a `VCTrigger` action, or a `watch:` condition), the evaluator updates the machine instance and emits `MACHINE_STATE_CHANGED`.
+
+The OS bridge receives `FLOW_STATE_CHANGED` events from the runtime and re-renders the `content =` of the newly active state:
 ```
-NavPushExpr:
-  1. Evaluate params
-  2. Instantiate ViewInstance
-  3. Initialize view-local machine if declared (initial state)
-  4. Call current view's on disappear (if any)
-  5. Push to stack (or modal stack for :modal routes; switch tab for :tab)
-  6. Render new view
-  7. Call new view's on appear
-
-nav.back:
-  1. Call current view's on disappear
-  2. If modal stack non-empty: pop modal
-  3. Else: pop main stack
-  4. Destroy popped view's machine instance if any
-  5. Call previous view's on resume
-  6. Re-render previous view
-
-nav.replace(:route):
-  1. Call current view's on disappear
-  2. Destroy current view's machine instance (if any)
-  3. Pop current entry from stack (do NOT push a back entry)
-  4. Instantiate new ViewInstance for :route with params
-  5. Push new entry to stack (replaces the old top)
-  6. Render new view
-  7. Call new view's on appear
-  -- Result: nav.back from the new view goes to the entry before the replaced view,
-  --         not to the replaced view itself.
-
-nav.root:
-  1. Unwind stack calling on disappear for each
-  2. Re-render root view (on appear)
+send(:event, args)
+  → transition fires → machine instance updated
+  → MACHINE_STATE_CHANGED emitted
+  → Navigation Manager evaluates content= of new active state
+  → deck_bridge_render(content) called with new DeckViewContent*
+  → bridge updates display
 ```
+
+**Back navigation via `to history`**: When the runtime evaluates a transition whose `to:` target is `history`, it signals the OS bridge to restore the previous display context. The OS bridge (not the runtime) maintains the back stack — the runtime emits a `FLOW_BACK` event and the bridge handles the actual navigation. This keeps the runtime agnostic of platform navigation conventions.
+
+**No stack management in the runtime.** There is no push/pop/replace API in the Navigation Manager. The `@machine` and `@flow` state graphs replace the stack; `to history` is the only escape hatch for platform-level back navigation.
 
 ### 9.4 View Re-render Trigger
 
 Triggered by:
 - Navigation (view appears or changes)
-- Any `send()` to any machine (state may affect `match state` in body)
-- New value in any `@listens` stream
-- `@shows`/`@hides` condition change
+- Machine state change in any `@machine` that is referenced by the active state's `content =` body
 - View `on resume` lifecycle
 
 For each trigger:
@@ -1035,7 +1013,7 @@ Hot reload does not work for changes to:
 - `@type` field declarations — live record values cannot be migrated
 - `@stream source:` declarations — subscriptions must be re-established
 
-All other changes (`fn`, `let`, `@view` body, `@task` body, `@on` hooks, `@config` defaults, derived `@stream` operators) support hot reload.
+All other changes (`fn`, `let`, `@flow` step body or `@machine` state `content =`, `@task` body, `@on` hooks, `@config` defaults, derived `@stream` operators) support hot reload.
 
 ---
 
@@ -1070,9 +1048,10 @@ scheduler.{h,c}
   Output: task execution requests to evaluator
 
 nav_manager.{h,c}
-  Input:  NavDecl, ViewDecl[], BridgeInterface*
+  Input:  MachineDecl[], FlowDecl[], BridgeInterface*
   Output: deck_bridge_render() calls with DeckViewContent*,
-          deck_bridge_handle_intent() routing to on -> handlers
+          deck_bridge_handle_intent() routing to on -> handlers,
+          FLOW_BACK events to OS bridge for to history transitions
 ```
 
 **Dependency summary:**

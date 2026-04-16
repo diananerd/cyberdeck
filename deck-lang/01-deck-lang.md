@@ -110,6 +110,8 @@ from  to  on  every  optional  true  false  unit  do
 
 Deck is dynamically typed at the runtime level — types are checked when values are used — but strongly typed in semantics. Type annotations in code are documentation and runtime assertions combined. There is no static type inference algorithm; the loader performs structural verification at load time on what can be verified statically.
 
+**Type annotation policy**: annotations are optional in all code positions — function parameters, return types, and `let` bindings. The runtime checks types when values are used; omitting an annotation is never an error. Annotations are required only in schema declarations: `@type` field declarations, `@config` entries, and `@machine` state payload fields. In those positions the runtime needs the type to build and validate a data schema.
+
 ### 3.1 Primitive Types
 
 | Type | Values | Notes |
@@ -182,17 +184,20 @@ Atom variants are constructed inline and destructured via pattern matching. They
 ### 3.8 Named Record Types (`@type`)
 User-defined immutable record types. Declared with the `@type` annotation (see §4). Field access via `.`, update via `with`. Structurally typed — a map `{str: any}` is not the same as a declared `@type`, and they are not interchangeable.
 
-### 3.9 Effect-Annotated Return Types
+### 3.9 Effect Annotations
 
-Effect annotations appear after the return type and before `=` in a function definition:
+Effect annotations `!alias` declare which OS capabilities a function uses. They appear after the return type (if present) or directly after the parameter list, before `=`:
+
 ```
 fn fetch_profile (did: str) -> Result Profile str !api =
   ...
 fn update_and_sync (v: float) -> unit !store !http =
   ...
+fn sync (url) !http =      -- effect without explicit return type
+  ...
 ```
 
-The syntax is `-> TypeAnnotation !alias1 !alias2`. The `!alias` qualifiers are not part of the type itself — they are a property of the function declaration. A function returning `float !temp` produces a float and performs the `temp` capability side effect. Functions without `!` are guaranteed pure. The interpreter verifies at load time that every `!alias` in a function signature is declared in `@use`.
+The `!alias` qualifiers are not part of the return type — they are a property of the function declaration. Functions without `!` are guaranteed pure. The interpreter verifies at load time that every `!alias` in a function signature is declared in `@use`.
 
 ### 3.10 Stream Type
 ```
@@ -200,11 +205,13 @@ Stream T
 ```
 A continuous, potentially infinite sequence of `T` values. Produced by OS capabilities (`watch` methods) and consumed via `@stream` declarations. Not a list — has no length, cannot be iterated imperatively.
 
-### 3.11 Component Type
+### 3.11 Fragment Type
 ```
-component
+fragment
 ```
-A fragment of the view component tree. Can be returned by functions and used in view body expressions. Only valid as a function return type when that function is called from within a view body. Cannot be stored in data structures, passed to non-view functions, or used as a `@stream` type. The interpreter validates this at load time.
+A sequence of zero or more semantic view content nodes. Returned by view content helper functions and spliced inline into the parent view body at the call site. Cannot be stored in data structures, passed to non-view functions, or used as a `@stream` type.
+
+`-> fragment` is optional in a function signature. When a function body produces semantic content nodes and carries no `!` effects, the loader infers `fragment` as the return type. The explicit annotation is available for documentation when desired.
 
 ---
 
@@ -309,40 +316,85 @@ fn process (raw: float) -> str =
 ## 6. Functions
 
 ### 6.1 Pure Functions
+
+Type annotations on parameters and return type are optional. The minimal and fully-annotated forms are both valid:
+
 ```
-fn name (param: Type, param: Type) -> ReturnType =
+fn name (param, param) =          -- minimal: no annotations
+  body_expression
+
+fn name (param: Type) -> Type =   -- fully annotated
   body_expression
 ```
 
-A function is pure if its return type has no `!` qualifier. Pure functions have no observable effects beyond their return value: no I/O, no OS calls, no randomness.
+A function is pure if it has no `!alias` declarations. Pure functions have no observable effects beyond their return value: no I/O, no OS calls, no randomness.
 
 Multi-step body via `let` chain:
 ```
 fn bmi (weight: float, height_m: float) -> float =
   let h2 = height_m * height_m
   weight / h2
+
+fn bmi (weight, height_m) =   -- equivalent, annotations omitted
+  let h2 = height_m * height_m
+  weight / h2
 ```
 
 ### 6.2 Functions with Effects
+
+Effect annotations `!alias` are declared after the return type (if present) or directly after the parameter list. They are a property of the function, not of the return type.
+
 ```
 fn fetch_profile (did: str) -> Result Profile str !api =
   match api.get("/app.bsky.actor.getProfile?actor={did}")
     | :err e  -> :err (api_error(e))
     | :ok r   -> parse_profile(r.json)
+
+fn sync (url) !http =             -- effect without explicit return type
+  http.get(url)
 ```
 
-The effect annotations `!alias` are checked by the loader. Every `!alias` must correspond to a name declared in `@use`.
+Every `!alias` must correspond to a name declared in `@use`. The loader verifies this at load time.
 
-### 6.3 Functions Returning Components
+### 6.3 View Content Functions
+
+Functions that produce semantic content nodes are view content functions. They may be called from view body expressions and from other view content functions. They may not carry `!` effects — content evaluation is always pure.
+
+The `-> fragment` return type is optional. The loader infers it when the function body produces semantic content nodes and declares no effects.
+
 ```
-fn post_card (p: Post) -> component =
-  column
-    text p.author.name   style: :heading
-    text p.text
-    text p.age           style: :muted :small
+fn post_card (p) =
+  group "post"
+    media p.author.avatar  alt: p.author.handle  hint: :avatar
+    p.author.display_name
+    rich_text p.text
+    p.created_at
+    group "actions"
+      toggle :liked    state: p.liked_by_me    on -> interaction.toggle_like(p)
+      toggle :reposted state: p.reposted_by_me on -> interaction.toggle_repost(p)
 ```
 
-`component`-returning functions may be called from view body expressions and from other `component`-returning functions. They may not use `!effect` capabilities; they are pure view constructors. Effect capability calls from within a component function body are a load error.
+A view content function returns a sequence of zero or more nodes — not a single root node. The nodes are spliced inline into the parent view body at the call site:
+
+```
+content =
+  list posts
+    p ->
+      post_card(p)          -- expands to the group and its children inline
+      navigate "Thread" -> :thread with: post = p
+```
+
+Business logic (`let`, `match`, pure function calls) may appear freely alongside content nodes in the body:
+
+```
+fn notification_row (n) =
+  let age     = time.ago(n.created_at)
+  let unread  = not n.read
+  group "notification"
+    status unread  label: "unread"
+    n.text
+    age
+```
 
 ### 6.4 Recursion
 Functions may call themselves. Direct recursion:
@@ -581,7 +633,7 @@ Any type expression: `int`, `float`, `bool`, `str`, `byte`, `unit`, `[T]`, `{str
 
 `Timestamp` and `Duration` are OS-provided opaque types declared in `@builtin time` (see `03-deck-os §3`). They are always in scope without `@use` — they are not language primitives, but they are treated as first-class types everywhere in the language.
 
-Fields may **not** use `Stream T` or `component` — those are not storable data.
+Fields may **not** use `Stream T` or `fragment` — those are not storable data.
 
 ### 9.3 Type Equality
 Two values are equal (`==`) if they are the same `@type` with equal field values, recursively. Equality on `@type` is deep structural equality.
@@ -624,7 +676,7 @@ Individual `.deck` files other than `app.deck` do **not** have their own `@use` 
   ./views/timeline
 
 -- In views/timeline.deck — no @use needed:
-fn render (p: Post) -> component =    -- Post is in scope because app.deck declared ./models/post
+fn render (p: Post) =    -- Post is in scope because app.deck declared ./models/post
   text format.date(p.created_at)      -- format is in scope for the same reason
 ```
 
@@ -651,20 +703,19 @@ This is valid **only in `.deck-os` files**, not in `.deck` source files. In Deck
 - `@type` declarations
 - `@errors` declarations
 - `@machine` definitions
+- `@flow` definitions
 - `@stream` declarations
-- `@view` declarations
 - `@task` declarations
 - `@test` cases
 - `@doc` annotations
 - `@private` markers
 
-### 10.7 Definitions Not Allowed Outside app.deck
+### 10.8 Definitions Not Allowed Outside app.deck
 - `@app`
 - `@use`
 - `@permissions`
 - `@config`
 - `@on`
-- `@nav`
 - `@migration`
 
 Note: `app.deck` is also a `.deck` file, so annotations in the "any `.deck` file" column of the placement table (§10.6) are also valid in `app.deck`.
@@ -846,23 +897,26 @@ random.seed   (n: int)                 -> unit
 program      = { top_level } ;
 top_level    = annotation | fn_def | let_binding | type_def ;
 
--- Record type (fields):
+-- Record type (fields): field types are required — @type declares a schema.
 type_def     = "@type" TYPE_IDENT INDENT { field_decl } DEDENT ;
 field_decl   = IDENT ":" type_ann NEWLINE ;
 -- Note: union alias types (@type Name = :a | :b) are valid ONLY in .deck-os files, not .deck files.
 
--- Effect annotations follow the return type, before "=".
--- The "!" applies to the function, not to the type.
-fn_def       = "fn" IDENT "(" param_list ")" "->" return_ann
+-- Return type and parameter types are optional.
+-- Effect annotations !alias follow the return type (if present) or the parameter list directly.
+-- The "!" applies to the function, not to the return type.
+fn_def       = "fn" IDENT "(" param_list ")" [ "->" type_ann ] { "!" IDENT }
                [ fn_ann_block ] "=" expr ;
-return_ann   = type_ann { "!" IDENT } ;
 fn_ann_block = INDENT { fn_inline_ann } DEDENT ;
 fn_inline_ann= ( "@doc" STR_LIT | "@example" expr "==" expr ) NEWLINE ;
+
+param_list   = [ param { "," param } ] ;
+param        = IDENT [ ":" type_ann ] ;
 
 let_binding  = "let" IDENT [ ":" type_ann ] "=" expr ;
 
 type_ann     = "int" | "float" | "bool" | "str" | "byte" | "unit"
-             | "any" | "component" | "Duration" | "Timestamp"
+             | "any" | "fragment" | "Duration" | "Timestamp"
              | "[" type_ann "]"
              | "{" type_ann ":" type_ann "}"
              | "(" type_ann { "," type_ann } ")"

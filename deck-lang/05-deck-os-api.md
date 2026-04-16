@@ -329,7 +329,7 @@ MQTT pub/sub client. The OS manages connection, reconnection, and QoS bookkeepin
 
 `mqtt` requires `@permissions mqtt reason: "..."`.
 
-**Stream lifecycle**: Calling `mqtt.unsubscribe(topic)` signals the corresponding `subscribe` stream with `deck_stream_end()` — the stream terminates cleanly. Active `@listens` consumers stop receiving values. Subsequent calls to `StreamName.last()` return the last received value or `:none` if nothing was received before the stream ended.
+**Stream lifecycle**: Calling `mqtt.unsubscribe(topic)` signals the corresponding `subscribe` stream with `deck_stream_end()` — the stream terminates cleanly. Any content bodies that depend on the stream stop receiving updates. Subsequent calls to `StreamName.last()` return the last received value or `:none` if nothing was received before the stream ended.
 
 ---
 

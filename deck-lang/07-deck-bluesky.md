@@ -36,15 +36,16 @@ bluesky/
   utils/
     xrpc.deck
     time_ago.deck
-  views/
-    login_view.deck
-    timeline_view.deck
-    thread_view.deck
-    notifications_view.deck
-    profile_view.deck
-    compose_view.deck
-    search_view.deck
-    settings_view.deck
+  flows/
+    app.deck
+    main.deck
+    login.deck
+    timeline.deck
+    notifications.deck
+    profile.deck
+    compose.deck
+    search.deck
+    settings.deck
   tasks/
     token_refresh.deck
     timeline_refresh.deck
@@ -148,14 +149,15 @@ bluesky/
   ./api/actor
   ./api/interaction
   ./api/notification
-  ./views/login_view
-  ./views/timeline_view
-  ./views/thread_view
-  ./views/notifications_view
-  ./views/profile_view
-  ./views/compose_view
-  ./views/search_view
-  ./views/settings_view
+  ./flows/app
+  ./flows/main
+  ./flows/login
+  ./flows/timeline
+  ./flows/notifications
+  ./flows/profile
+  ./flows/compose
+  ./flows/search
+  ./flows/settings
   ./tasks/token_refresh
   ./tasks/timeline_refresh
   ./tasks/notif_refresh
@@ -347,22 +349,53 @@ bluesky/
 
 -- ── Navigation ───────────────────────────────────────────────────────────────
 
-@nav
-  root: LoginView
+@flow App
+  state :login     flow: LoginFlow
+  state :main      flow: MainFlow
+  state :compose   flow: ComposeFlow
+  state :settings  flow: SettingsFlow
 
-  tab
-    :timeline      -> TimelineView      icon: :home      label: "Home"
-    :notifications -> NotificationsView icon: :bell      label: "Notifications"
-    :search        -> SearchView        icon: :search    label: "Search"
-    :my_profile    -> ProfileView       icon: :person    label: "Profile"
+  initial :login
 
-  stack
-    :thread        -> ThreadView        with: uri:str
-    :profile       -> ProfileView       with: did:str
+  transition :authenticated
+    from :login
+    to   :main
+    watch: Auth is :authenticated
 
-  modal
-    :compose       -> ComposeView
-    :settings      -> SettingsView
+  transition :logged_out
+    from :main
+    to   :login
+    watch: Auth is :unauthenticated
+
+  transition :open_compose
+    from :main
+    to   :compose
+
+  transition :close_compose
+    from :compose
+    to   history
+
+  transition :open_settings
+    from :main
+    to   :settings
+
+  transition :close_settings
+    from :settings
+    to   history
+
+
+@flow MainFlow
+  state :timeline      flow: TimelineFlow
+  state :notifications flow: NotificationsFlow
+  state :profile       flow: ProfileFlow
+  state :search        flow: SearchFlow
+
+  initial :timeline
+
+  transition :go_timeline      from * to :timeline
+  transition :go_notifications from * to :notifications
+  transition :go_profile       from * to :profile
+  transition :go_search        from * to :search
 ```
 
 ---
@@ -854,95 +887,122 @@ fn get_list (m: {str: any}, k: str) -> [any] =
 
 ---
 
-## views/login_view.deck
+## flows/login.deck
 
 ```deck
-@view LoginView
-  @shows when: Auth is :unauthenticated
+@machine LoginForm
+  state :idle      (handle: str, password: str, error: str?)
+  state :submitting
+  initial :idle (handle: "", password: "", error: :none)
 
-  @machine
-    state :idle      (handle: str, password: str, error: str?)
-    state :submitting
-    initial :idle (handle: "", password: "", error: :none)
+  transition :set_handle (v: str)
+    from :idle s
+    to   :idle (handle: v, password: s.password, error: :none)
 
-    transition :set_handle (v: str)
-      from :idle s
-      to   :idle (handle: v, password: s.password, error: :none)
+  transition :set_password (v: str)
+    from :idle s
+    to   :idle (handle: s.handle, password: v, error: :none)
 
-    transition :set_password (v: str)
-      from :idle s
-      to   :idle (handle: s.handle, password: v, error: :none)
+  transition :submit
+    from :idle s
+    when: not text.is_blank(s.handle) and not text.is_blank(s.password)
+    to   :submitting
 
-    transition :submit
-      from :idle s
-      when: not text.is_blank(s.handle) and not text.is_blank(s.password)
-      to   :submitting
+  transition :failed (message: str)
+    from :submitting
+    to   :idle (handle: "", password: "", error: :some message)
 
-    transition :failed (message: str)
-      from :submitting
-      to   :idle (handle: "", password: "", error: :some message)
 
-  on appear ->
-    match Auth.state
-      | :unauthenticated (error: :some msg) -> send(:failed, message: msg)
-      | _ -> unit
+@flow LoginFlow
+  state :form
+    on enter ->
+      match Auth.state
+        | :unauthenticated (error: :some msg) -> LoginForm.send(:failed, message: msg)
+        | _ -> unit
+    content =
+      match LoginForm.state
+        | :submitting -> loading
+        | :idle s ->
+            match s.error
+              | :some msg -> error message: msg
+              | :none     -> unit
+            form
+              on submit -> do_login(s.handle, s.password)
+              text     :handle    value: s.handle    hint: "you.bsky.social"  format: :email
+                on -> LoginForm.send(:set_handle, v: event.value)
+              password :password  value: s.password  hint: "Password"
+                on -> LoginForm.send(:set_password, v: event.value)
+              trigger "Sign in" -> do_login(s.handle, s.password)
 
-  content =
-    match state
-      | :submitting -> loading
-      | :idle s ->
-          match s.error
-            | :some msg -> error message: msg
-            | :none     -> unit
-          form
-            on submit -> do_login(s.handle, s.password)
-            text     :handle    value: s.handle    hint: "you.bsky.social"  format: :email
-              on -> send(:set_handle, v: event.value)
-            password :password  value: s.password  hint: "Password"
-              on -> send(:set_password, v: event.value)
-            trigger "Sign in" -> do_login(s.handle, s.password)
+  initial :form
 
 fn do_login (handle: str, password: str) -> unit !api !nvs =
   match auth.login(handle, password)
     | :ok _  -> unit
-    | :err e -> send(:failed, message: e)
+    | :err e -> LoginForm.send(:failed, message: e)
 ```
 
 ---
 
-## views/timeline_view.deck
+## flows/timeline.deck
 
 ```deck
-@view TimelineView
-  @shows when: Auth is :authenticated
+@machine ThreadView
+  state :loading
+  state :loaded (thread: Thread)
+  state :error  (message: str)
+  initial :loading
 
-  on appear ->
-    match Timeline.state
-      | :empty ->
-          do
-            Timeline.send(:load)
-            load_timeline()
-      | _ -> unit
+  transition :loaded (thread: Thread)  from :loading  to :loaded (thread: thread)
+  transition :failed (message: str)    from :loading  to :error  (message: message)
 
-  content =
-    match Timeline.state
-      | :empty | :loading -> loading
-      | :error s ->
-          error message: s.message
-          trigger "Retry" -> do
-            Timeline.send(:load)
-            load_timeline()
-      | :loaded s | :refreshing s | :paginating s ->
-          list posts_to_show(s)
-            more:    s.cursor is :some
-            on more -> load_more(s)
-            p ->
-              post_card(p)
-          match Timeline.state
-            | :paginating _ -> loading
-            | _             -> unit
 
-    create "New post" -> :compose
+@flow TimelineFlow
+  state :list
+    on enter ->
+      match Timeline.state
+        | :empty ->
+            do
+              Timeline.send(:load)
+              load_timeline()
+        | _ -> unit
+    content =
+      match Timeline.state
+        | :empty | :loading -> loading
+        | :error s ->
+            error message: s.message
+            trigger "Retry" -> do
+              Timeline.send(:load)
+              load_timeline()
+        | :loaded s | :refreshing s | :paginating s ->
+            list posts_to_show(s)
+              more:    s.cursor is :some
+              on more -> load_more(s)
+              p ->
+                post_card(p)
+            match Timeline.state
+              | :paginating _ -> loading
+              | _             -> unit
+
+      create "New post" -> App.send(:open_compose)
+
+  state :thread (uri: str)
+    on enter -> load_thread(uri)
+    content =
+      match ThreadView.state
+        | :loading -> loading
+        | :error s -> error message: s.message
+        | :loaded s -> thread_node(s.thread)
+
+  initial :list
+
+  transition :open_thread (uri: str)
+    from :list
+    to   :thread (uri: uri)
+
+  transition :close_thread
+    from :thread
+    to   history
 
 fn posts_to_show (s: any) -> [Post] =
   match s
@@ -980,7 +1040,7 @@ fn post_card (p: Post) =
     time_ago.format(p.created_at)
   rich_text p.text
   group "actions"
-    navigate "{p.reply_count} replies" -> :thread with: uri = p.uri
+    navigate "{p.reply_count} replies" -> TimelineFlow.send(:open_thread, uri: p.uri)
     toggle :liked    state: p.liked_by_me    on -> toggle_like(p)
     toggle :reposted state: p.reposted_by_me on -> toggle_repost(p)
 
@@ -999,32 +1059,6 @@ fn toggle_repost (p: Post) -> unit !api =
           | :some rk -> interaction.unrepost(rk)
           | :none    -> unit
     | false -> interaction.repost(p.uri, p.cid)
-```
-
----
-
-## views/thread_view.deck
-
-```deck
-@view ThreadView
-  param uri : str
-
-  @machine
-    state :loading
-    state :loaded (thread: Thread)
-    state :error  (message: str)
-    initial :loading
-
-    transition :loaded (thread: Thread)  from :loading  to :loaded (thread: thread)
-    transition :failed (message: str)    from :loading  to :error  (message: message)
-
-  on appear -> load_thread(uri)
-
-  content =
-    match state
-      | :loading -> loading
-      | :error s -> error message: s.message
-      | :loaded s -> thread_node(s.thread)
 
 fn thread_node (t: Thread) =
   item ->
@@ -1046,51 +1080,51 @@ fn post_expanded (p: Post) =
     "{p.like_count} likes"
     "{p.repost_count} reposts"
   group "actions"
-    toggle :liked  state: p.liked_by_me  on -> timeline_view.toggle_like(p)
+    toggle :liked  state: p.liked_by_me  on -> toggle_like(p)
     trigger "Reply" -> do  Compose.send(:open_reply, post: p)
 
 fn load_thread (uri: str) -> unit !api =
   match feed.get_thread(uri)
-    | :err e -> send(:failed, message: e)
-    | :ok t  -> send(:loaded, thread: t)
+    | :err e -> ThreadView.send(:failed, message: e)
+    | :ok t  -> ThreadView.send(:loaded, thread: t)
 ```
 
 ---
 
-## views/notifications_view.deck
+## flows/notifications.deck
 
 ```deck
-@view NotificationsView
-  @shows when: Auth is :authenticated
-  @listens UnreadCount
+@flow NotificationsFlow
+  state :list
+    on enter ->
+      match Notifs.state
+        | :empty ->
+            do
+              Notifs.send(:load)
+              load_notifs()
+        | _ -> unit
+    -- UnreadCount stream is read directly in content=; reactivity is implicit
+    content =
+      match Notifs.state
+        | :empty | :loading -> loading
+        | :error s ->
+            error message: s.message
+            trigger "Retry" -> do  Notifs.send(:load)  load_notifs()
+        | :loaded s ->
+            match s.unread > 0
+              | true ->
+                  status (s.unread) label: "unread"
+                  trigger "Mark all read" -> do
+                    notification.mark_seen()
+                    Notifs.send(:marked_read)
+              | false -> unit
+            list s.items
+              empty ->
+                "No notifications"
+              n ->
+                notif_row(n)
 
-  on appear ->
-    match Notifs.state
-      | :empty ->
-          do
-            Notifs.send(:load)
-            load_notifs()
-      | _ -> unit
-
-  content =
-    match Notifs.state
-      | :empty | :loading -> loading
-      | :error s ->
-          error message: s.message
-          trigger "Retry" -> do  Notifs.send(:load)  load_notifs()
-      | :loaded s ->
-          match s.unread > 0
-            | true ->
-                status (s.unread) label: "unread"
-                trigger "Mark all read" -> do
-                  notification.mark_seen()
-                  Notifs.send(:marked_read)
-            | false -> unit
-          list s.items
-            empty ->
-              "No notifications"
-            n ->
-              notif_row(n)
+  initial :list
 
 fn notif_row (n: Notif) =
   group "author"
@@ -1121,57 +1155,62 @@ fn load_notifs () -> unit !api =
 
 ---
 
-## views/profile_view.deck
+## flows/profile.deck
 
 ```deck
-@view ProfileView
-  param did : str
+@machine ProfileView
+  state :loading
+  state :loaded  (profile: Profile, posts: [Post])
+  state :error   (message: str)
+  initial :loading
 
-  @machine
-    state :loading
-    state :loaded  (profile: Profile, posts: [Post])
-    state :error   (message: str)
-    initial :loading
+  transition :loaded (profile: Profile, posts: [Post])
+    from :loading
+    to   :loaded (profile: profile, posts: posts)
+  transition :failed (message: str)
+    from :loading
+    to   :error (message: message)
 
-    transition :loaded (profile: Profile, posts: [Post])
-      from :loading
-      to   :loaded (profile: profile, posts: posts)
-    transition :failed (message: str)
-      from :loading
-      to   :error (message: message)
 
-  on appear -> load_profile(did)
+@flow ProfileFlow
+  state :profile (did: str)
+    on enter -> load_profile(did)
+    content =
+      match ProfileView.state
+        | :loading -> loading
+        | :error s -> error message: s.message
+        | :loaded s ->
+            item ->
+              match s.profile.avatar
+                | :some url ->
+                    media url  alt: "Profile photo of @{s.profile.handle}"  hint: :cover
+                | :none -> unit
+              unwrap_opt_or(s.profile.display_name, s.profile.handle)
+              "@{s.profile.handle}"
+              match s.profile.bio
+                | :some bio -> rich_text bio
+                | :none     -> unit
+              group "stats"
+                "{s.profile.following} following"
+                "{s.profile.followers} followers"
+              match is_me(s.profile.did)
+                | false ->
+                    match s.profile.is_following
+                      | true  ->
+                          confirm "Unfollow"
+                            message: "Unfollow @{s.profile.handle}?"
+                            -> do_unfollow(s.profile)
+                      | false ->
+                          trigger "Follow" -> do_follow(s.profile)
+                | true -> unit
+            for p in s.posts
+              timeline.post_card(p)
 
-  content =
-    match state
-      | :loading -> loading
-      | :error s -> error message: s.message
-      | :loaded s ->
-          item ->
-            match s.profile.avatar
-              | :some url ->
-                  media url  alt: "Profile photo of @{s.profile.handle}"  hint: :cover
-              | :none -> unit
-            unwrap_opt_or(s.profile.display_name, s.profile.handle)
-            "@{s.profile.handle}"
-            match s.profile.bio
-              | :some bio -> rich_text bio
-              | :none     -> unit
-            group "stats"
-              "{s.profile.following} following"
-              "{s.profile.followers} followers"
-            match is_me(s.profile.did)
-              | false ->
-                  match s.profile.is_following
-                    | true  ->
-                        confirm "Unfollow"
-                          message: "Unfollow @{s.profile.handle}?"
-                          -> do_unfollow(s.profile)
-                    | false ->
-                        trigger "Follow" -> do_follow(s.profile)
-              | true -> unit
-          for p in s.posts
-            timeline_view.post_card(p)
+  initial :profile (did: "")
+
+  transition :open_profile (did: str)
+    from *
+    to   :profile (did: did)
 
 fn is_me (did: str) -> bool =
   match Auth.state
@@ -1182,9 +1221,9 @@ fn load_profile (did: str) -> unit !api =
   let profile_result = actor.get_profile(did)
   let posts_result   = feed.get_author_feed(did, :none)
   match (profile_result, posts_result)
-    | (:ok p, :ok page) -> send(:loaded, profile: p, posts: page.posts)
-    | (:err e, _)       -> send(:failed, message: e)
-    | (_, :err e)       -> send(:failed, message: e)
+    | (:ok p, :ok page) -> ProfileView.send(:loaded, profile: p, posts: page.posts)
+    | (:err e, _)       -> ProfileView.send(:failed, message: e)
+    | (_, :err e)       -> ProfileView.send(:failed, message: e)
 
 fn do_follow (p: Profile) -> unit !api =
   interaction.follow(p.did)
@@ -1197,35 +1236,42 @@ fn do_unfollow (p: Profile) -> unit !api =
 
 ---
 
-## views/compose_view.deck
+## flows/compose.deck
 
 ```deck
-@view ComposeView
-  @shows when: Compose is :open or Compose is :posting or Compose is :error
+-- Backed by the @machine Compose defined in app.deck.
 
-  content =
-    match Compose.state
-      | :closed -> unit
+@flow ComposeFlow
+  state :editing
+    content =
+      match Compose.state
+        | :closed -> unit
 
-      | :open s ->
-          match s.reply_to
-            | :some parent ->
-                group "reply context"
-                  "Replying to @{parent.author.handle}"
-                  parent.text
-            | :none -> unit
-          text :post_text  value: s.text  max_length: 300
-            on -> Compose.send(:update, text: event.value)
-          "{text.length(s.text)}/300"
-          trigger "Post"   -> do_post(s.text, s.reply_to)
-          trigger "Cancel" -> Compose.send(:cancel)
+        | :open s ->
+            match s.reply_to
+              | :some parent ->
+                  group "reply context"
+                    "Replying to @{parent.author.handle}"
+                    parent.text
+              | :none -> unit
+            text :post_text  value: s.text  max_length: 300
+              on -> Compose.send(:update, text: event.value)
+            "{text.length(s.text)}/300"
+            trigger "Post"   -> do_post(s.text, s.reply_to)
+            trigger "Cancel" -> do
+              Compose.send(:cancel)
+              App.send(:close_compose)
 
-      | :posting _ -> loading
+        | :posting _ -> loading
 
-      | :error s ->
-          error message: "Failed: {s.message}"
-          trigger "Retry"   -> Compose.send(:retry)
-          trigger "Discard" -> Compose.send(:cancel)
+        | :error s ->
+            error message: "Failed: {s.message}"
+            trigger "Retry"   -> Compose.send(:retry)
+            trigger "Discard" -> do
+              Compose.send(:cancel)
+              App.send(:close_compose)
+
+  initial :editing
 
 fn do_post (text_content: str, reply_to: Post?) -> unit !api =
   Compose.send(:submit)
@@ -1233,80 +1279,86 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
     | :err e -> Compose.send(:failed, message: e)
     | :ok _  -> do
         Compose.send(:done)
-        timeline_view.refresh_timeline()
+        App.send(:close_compose)
+        timeline.refresh_timeline()
 ```
 
 ---
 
-## views/search_view.deck
+## flows/search.deck
 
 ```deck
-@view SearchView
+@machine SearchState
+  state :idle      (query: str)
+  state :searching (query: str)
+  state :results   (query: str, posts: [Post], users: [Profile])
+  state :no_results (query: str)
+  state :error     (query: str, message: str)
 
-  @machine
-    state :idle      (query: str)
-    state :searching (query: str)
-    state :results   (query: str, posts: [Post], users: [Profile])
-    state :no_results (query: str)
-    state :error     (query: str, message: str)
+  initial :idle (query: "")
 
-    initial :idle (query: "")
+  transition :set_query (query: str)
+    from *
+    to   :idle (query: query)
 
-    transition :set_query (query: str)
-      from *
-      to   :idle (query: query)
+  transition :search
+    from :idle s
+    when: not text.is_blank(s.query)
+    to   :searching (query: s.query)
 
-    transition :search
-      from :idle s
-      when: not text.is_blank(s.query)
-      to   :searching (query: s.query)
+  transition :got_results (posts: [Post], users: [Profile])
+    from :searching s
+    to   match (len(posts) + len(users) == 0)
+      | true  -> :no_results (query: s.query)
+      | false -> :results (query: s.query, posts: posts, users: users)
 
-    transition :got_results (posts: [Post], users: [Profile])
-      from :searching s
-      to   match (len(posts) + len(users) == 0)
-        | true  -> :no_results (query: s.query)
-        | false -> :results (query: s.query, posts: posts, users: users)
+  transition :failed (message: str)
+    from :searching s
+    to   :error (query: s.query, message: message)
 
-    transition :failed (message: str)
-      from :searching s
-      to   :error (query: s.query, message: message)
 
-  content =
-    search :query  value: state.query  hint: "Search posts and people"
-      on -> send(:set_query, query: event.value)
-    trigger "Search" -> do_search(state.query)
+@flow SearchFlow
+  state :search
+    content =
+      search :query  value: SearchState.state.query  hint: "Search posts and people"
+        on -> SearchState.send(:set_query, query: event.value)
+      trigger "Search" -> do_search(SearchState.state.query)
 
-    match state
-      | :idle _       -> unit
-      | :searching _  -> loading
-      | :no_results s -> "No results for \"{s.query}\""
-      | :error s      -> error message: s.message
-      | :results s    ->
-          match len(s.users) > 0
-            | true ->
-                group "People"
-                  list s.users
-                    u ->
-                      group "user"
-                        media unwrap_opt_or(u.avatar, "")
-                          alt:  "Avatar of {u.handle}"
-                          hint: :avatar
-                        unwrap_opt_or(u.display_name, u.handle)
-                        "@{u.handle}"
-                      navigate "View profile" -> :profile with: did = u.did
-            | false -> unit
-          match len(s.posts) > 0
-            | true ->
-                group "Posts"
-                  list s.posts
-                    p -> timeline_view.post_card(p)
-            | false -> unit
+      match SearchState.state
+        | :idle _       -> unit
+        | :searching _  -> loading
+        | :no_results s -> "No results for \"{s.query}\""
+        | :error s      -> error message: s.message
+        | :results s    ->
+            match len(s.users) > 0
+              | true ->
+                  group "People"
+                    list s.users
+                      u ->
+                        group "user"
+                          media unwrap_opt_or(u.avatar, "")
+                            alt:  "Avatar of {u.handle}"
+                            hint: :avatar
+                          unwrap_opt_or(u.display_name, u.handle)
+                          "@{u.handle}"
+                        navigate "View profile" -> do
+                          MainFlow.send(:go_profile)
+                          ProfileFlow.send(:open_profile, did: u.did)
+              | false -> unit
+            match len(s.posts) > 0
+              | true ->
+                  group "Posts"
+                    list s.posts
+                      p -> timeline.post_card(p)
+              | false -> unit
+
+  initial :search
 
 fn do_search (q: str) -> unit !api =
-  send(:search)
+  SearchState.send(:search)
   let pr = feed.search_posts(q, :none)
   let ur = actor.search_actors(q)
-  send(:got_results,
+  SearchState.send(:got_results,
     posts: match pr | :ok page -> page.posts | :err _ -> [],
     users: match ur | :ok u -> u              | :err _ -> []
   )
@@ -1314,29 +1366,31 @@ fn do_search (q: str) -> unit !api =
 
 ---
 
-## views/settings_view.deck
+## flows/settings.deck
 
 ```deck
-@view SettingsView
+@flow SettingsFlow
+  state :main
+    content =
+      match Auth.state
+        | :authenticated s ->
+            group "Account"
+              "@{s.handle}"
+              s.did
+            group "Feed"
+              toggle :show_reposts   state: config.show_reposts   on -> unit
+              toggle :notifications  state: config.notifications  on -> unit
+            group "App"
+              config.bsky_host
+              sys.app_version()
+            confirm "Sign Out"  message: "Sign out of Bluesky?"  -> do_logout()
+        | _ -> loading
 
-  content =
-    match Auth.state
-      | :authenticated s ->
-          group "Account"
-            "@{s.handle}"
-            s.did
-          group "Feed"
-            toggle :show_reposts   state: config.show_reposts   on -> unit
-            toggle :notifications  state: config.notifications  on -> unit
-          group "App"
-            config.bsky_host
-            sys.app_version()
-          confirm "Sign Out"  message: "Sign out of Bluesky?"  -> do_logout()
-      | _ -> loading
+  initial :main
 
 fn do_logout () -> unit !api !nvs =
   auth.logout()
-  nav.root
+  App.send(:logged_out)
 ```
 
 ---
@@ -1424,15 +1478,15 @@ The `cache` capability holds API response bodies (strings/JSON) for 30 seconds. 
 ### Auth Flow
 
 ```
-LoginView: user fills handle + password → button press
+LoginFlow :form — user fills handle + password → button press
   auth.login()
   ├── xrpc.post_rpc("createSession")
   ├── parse_session() → Session @type
   ├── nvs.set("bsky_session", json)   -- survive restart
   ├── api.set_token(access_jwt)       -- configure api_client
   └── Auth.send(:success)             -- machine → :authenticated
-                                      -- LoginView @shows becomes false
-                                      -- Tab views @shows become true
+                                      -- @flow App :authenticated transition fires
+                                      -- App moves from :login to :main (MainFlow)
 
 RefreshToken task (every 4m):
   Auth.send(:refresh_start)
@@ -1456,4 +1510,4 @@ Token expiry (api returns :unauthorized):
 - The app always talks to `config.bsky_host` — no PDS discovery (sufficient for Bluesky network)
 - `rkey` extraction: last segment of `at://` URI, used for delete operations
 - Reply `root` reference: taken from the parent post's existing `reply_ref` if it has one (thread root), otherwise the parent itself is the root
-- Parsing is done eagerly at API call time into `@type` records, keeping view code clean
+- Parsing is done eagerly at API call time into `@type` records, keeping flow content= bodies clean

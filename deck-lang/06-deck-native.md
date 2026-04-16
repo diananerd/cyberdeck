@@ -514,7 +514,7 @@ int hz = hz_val ? (int)deck_get_int(hz_val) : 1;  /* default 1 */
 
 ### 7.1 The Stream Pattern
 
-A streaming capability delivers values continuously over time. The app subscribes once; values are pushed by the bridge; the runtime delivers them to `@stream` consumers and `@listens` views.
+A streaming capability delivers values continuously over time. The app subscribes once; values are pushed by the bridge; the runtime delivers them to `@stream` consumers and re-evaluates any content bodies that depend on the stream.
 
 **Push API:**
 ```c
