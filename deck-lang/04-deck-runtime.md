@@ -68,6 +68,7 @@ Converts UTF-8 source text to a flat token stream. Handles indentation, string i
 -- Literals
 TOK_INT          -- 42, -7
 TOK_FLOAT        -- 3.14, -0.5
+TOK_BYTE_LIT     -- 0xFF, 0x1A  (hex only; value 0-255; lexer error if > 0xFF)
 TOK_BOOL         -- true, false
 TOK_UNIT         -- unit
 TOK_DURATION     -- 500ms, 5s, 1m, 1h, 1d  → stored as (int64_ms)
@@ -89,6 +90,9 @@ TOK_TYPE_IDENT   -- TypeName
 TOK_LET  TOK_FN  TOK_MATCH  TOK_WHEN  TOK_IS  TOK_AS  TOK_WITH
 TOK_AND  TOK_OR  TOK_NOT
 TOK_FROM  TOK_TO  TOK_ON  TOK_EVERY  TOK_OPTIONAL  TOK_DO
+-- TOK_IS parses as infix binary operator (see 01-deck-lang §7.8).
+-- It is also used as a sub-keyword in @machine from/to syntax; the parser
+-- disambiguates by context (annotation body vs. expression position).
 
 -- Annotations
 TOK_AT           -- @
@@ -247,12 +251,12 @@ ComponentNode   { type_: atom, props: [(str, PropValue)], children: [ComponentNo
 1. `or`
 2. `and`
 3. `not`
-4. `== != < > <= >=`
-5. `++ |> |>?`
+4. `== != < > <= >= is`
+5. `++`
 6. `+ -`
 7. `* / %`
 8. unary `-`
-9. `|>` (pipe — same level as `++` but left-associative so chains read naturally)
+9. `|> |>?` (pipe — left-associative; binds tighter than arithmetic so chains read naturally)
 10. field access `.`, `with { }`, function application `()`
 
 ---
@@ -295,7 +299,9 @@ Stage 4: CAPABILITY VERIFICATION
       NO, optional     → mark statically unavailable
       YES              → bind alias
     Has @requires_permission?
-      YES, not in @permissions → warning
+      YES, not in @permissions, and @use entry is NOT optional → load error
+      YES, not in @permissions, and @use entry IS optional     → warning
+      YES, in @permissions                                     → continue
 
 Stage 5: PERMISSION NEGOTIATION
   Call deck_bridge_request_permissions()
@@ -345,7 +351,10 @@ Stage 11: CONFIG VALIDATION
 Stage 12: BIND
   Replace all VarExpr nodes with direct references to their definitions
   Replace all TypeVarExpr nodes with @type definitions
-  Assign component_id to every ComponentNode (stable uint64 hash of position)
+  Assign component_id to every ComponentNode:
+    hash = FNV-1a 64-bit of "<file_path>:<line>:<col>"
+    This is stable across hot reloads as long as the component's source position
+    does not move. The bridge uses component_id for input routing and diff reconciliation.
   Instantiate app-level @machine instances in initial state
   Register @stream subscriptions with scheduler
   Register @task conditions with scheduler
@@ -471,7 +480,7 @@ Lookup: innermost to outermost. Not found: impossible after the Loader Bind stag
 3. Evaluate guard if present; if false, return current state unchanged
 4. Evaluate `to:` field expressions in env extended with from-binding and params
 5. Update live machine instance in interpreter state
-6. Trigger condition re-evaluation
+6. Emit internal `MACHINE_STATE_CHANGED(machine_name, new_state)` event to the Scheduler's Condition Tracker. The Condition Tracker re-evaluates all `when:` conditions that reference this machine (via `is` operator), which may update `@task` eligibility, `@use when:` capability availability, and `@shows`/`@hides` visibility. The Navigation Manager observes the results from the Condition Tracker — it does not subscribe to `MACHINE_STATE_CHANGED` directly.
 7. Return new state value
 
 **IfExpr**: evaluate cond, branch to then or else.
@@ -508,7 +517,11 @@ dispatch(request):
   1. Resolve alias → capability path in registry
   2. Check availability map:
        UNAVAILABLE → resume continuation with VResult(Err(VAtom(":unavailable")))
-  3. Marshal Deck values → DeckValue C structs
+  2b. Check @singleton flag for this capability.method:
+       IN PROGRESS → enqueue request; return without calling bridge.
+       When the in-progress call completes, dequeue and dispatch next.
+  3. Marshal Deck values → DeckValue C structs (overload selected by argc,
+     then first-arg DeckType if arity ties; see 03-deck-os §7.1)
   4. Call deck_bridge_call(path, method, args, ...)
   5. Unmarshal result → Deck Value
   6. Resume continuation
@@ -569,12 +582,16 @@ Task bodies run via the evaluator's do-block mechanism. Errors in task bodies: l
 
 Maintains a table of `(condition_expr → current_bool)` for all `@use when:`, `@task when:`, `@shows when:`, `@hides when:` conditions.
 
-On each relevant OS event: re-evaluate affected conditions. For each changed condition:
-- `@use when:` → update Effect Dispatcher availability map
-- `@task when:` → may trigger task
-- `@shows`/`@hides` → invoke Navigation Manager
+Re-evaluates affected conditions on:
+- OS events (`os.network_change`, `system.battery.watch()` stream updates, `os.permission_change`, etc.)
+- Internal `MACHINE_STATE_CHANGED(machine_name, new_state)` events emitted by the Evaluator after each successful `send()`
 
-Condition expressions are evaluated in a pure read-only context: access to OS state queries (battery level, network status, etc.) but no `!effect` capability calls and no `send()`.
+For each condition whose value changed:
+- `@use when:` → update Effect Dispatcher availability map
+- `@task when:` → may trigger task (false→true transition fires the task if no `every:`)
+- `@shows`/`@hides` → pass new desired-visibility state to Navigation Manager
+
+Condition expressions are evaluated in a pure read-only context. They may read `@config`, call `@pure`-marked capability methods, use the `is` operator on machines and atoms, and access stream `.last()`. They may **not** contain `!effect` calls or `send()`.
 
 ### 8.4 Stream Buffers
 
@@ -786,7 +803,15 @@ When `deck watch` is running and a `.deck` file changes:
 5. Preserve current machine state and stream subscriptions (state is not reset)
 6. If load errors: report them without crashing the running app
 
-Hot reload does not work for changes to `@app`, `@use`, `@permissions`, `@machine` state declarations, or `@type` field declarations — these require a full restart.
+Hot reload does not work for changes to:
+- `@app` — identity change requires restart
+- `@use` — capability set change requires restart
+- `@permissions` — permission set change requires restart
+- `@machine` blocks (any part: state declarations, transitions, guards, initial state) — live machine instances cannot be migrated to a new state schema
+- `@type` field declarations — live record values cannot be migrated
+- `@stream source:` declarations — subscriptions must be re-established
+
+All other changes (`fn`, `let`, `@view` body, `@task` body, `@on` hooks, `@config` defaults, derived `@stream` operators) support hot reload.
 
 ---
 

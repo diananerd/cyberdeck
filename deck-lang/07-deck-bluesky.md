@@ -79,8 +79,8 @@ bluesky/
   like_count  : int
   reply_count : int
   repost_count: int
-  liked_by_me : bool
-  reposted_by : bool
+  liked_by_me    : bool
+  reposted_by_me : bool
   like_rkey   : str?
   repost_rkey : str?
   reply_ref   : ReplyRef?
@@ -587,7 +587,7 @@ fn parse_post_view (p: {str: any}) -> Post =
     reply_count:  int_field(p, "replyCount"),
     repost_count: int_field(p, "repostCount"),
     liked_by_me:  is_some(like_uri),
-    reposted_by:  is_some(rp_uri),
+    reposted_by_me:  is_some(rp_uri),
     like_rkey:    like_uri |> map_opt(extract_rkey),
     repost_rkey:  rp_uri   |> map_opt(extract_rkey),
     reply_ref:    parse_reply_ref(record)
@@ -631,7 +631,7 @@ fn empty_post () -> Post =
     uri: "", cid: "", text: "", created_at: "",
     author: Author { did: "", handle: "", display_name: :none, avatar: :none },
     like_count: 0, reply_count: 0, repost_count: 0,
-    liked_by_me: false, reposted_by: false,
+    liked_by_me: false, reposted_by_me: false,
     like_rkey: :none, repost_rkey: :none, reply_ref: :none
   }
 
@@ -1019,7 +1019,7 @@ fn post_card (p: Post) -> component =
       button "{p.repost_count} 🔁"
         -> toggle_repost(p)
         style: :ghost
-        accessibility: if p.reposted_by then "Undo repost" else "Repost"
+        accessibility: if p.reposted_by_me then "Undo repost" else "Repost"
 
 fn toggle_like (p: Post) -> unit !api =
   if p.liked_by_me then
@@ -1030,7 +1030,7 @@ fn toggle_like (p: Post) -> unit !api =
     interaction.like(p.uri, p.cid)
 
 fn toggle_repost (p: Post) -> unit !api =
-  if p.reposted_by then
+  if p.reposted_by_me then
     match p.repost_rkey
       | :some rk -> interaction.unrepost(rk)
       | :none    -> unit

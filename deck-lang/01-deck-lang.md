@@ -58,7 +58,10 @@ true  false    -- bool
 unit           -- the unit value
 "hello"        -- str, UTF-8, double-quoted
 "line\nnext"   -- escape sequences: \n \t \\ \" \{
+0xFF  0x1A     -- byte (hex literal; 0x prefix required; value 0–255)
 ```
+
+`byte` literals are only valid where a `byte` value is expected — in a `[byte]` list literal, as an argument to a function typed `byte`, or in pattern arms matching a `byte` value. Assigning a hex literal that exceeds 255 is a load error.
 
 ### 2.6 String Interpolation
 Inside any double-quoted string, `{expr}` evaluates `expr` and calls `str()` on the result:
@@ -146,7 +149,21 @@ Result T E
 ```
 Either `:ok T` (success) or `:err E` (failure). `E` is typically an atom or an error domain type. Functions that can fail return `Result`. Functions that cannot fail do not. There are no exceptions — errors are values.
 
-### 3.6 Atoms and Atom Variants
+### 3.6 The `any` Type
+
+`any` is the dynamic type. It matches every value at the type-checking level and suppresses static type verification at the call site. It is an escape hatch for the type system, used exclusively in:
+
+- Builtin function signatures that genuinely accept any value (e.g., `str(v: any)`, `type_of(v: any)`)
+- OS capability return types where the schema is not known at load time (e.g., SQLite rows, JSON parse output, cache values)
+
+**Restrictions** — `any` is **not** valid as:
+- A field type in a `@type` declaration
+- The element type of a typed collection in a `@type` (`[any]` and `{str: any}` are valid only in capability signatures and local bindings, not in `@type` field declarations)
+- A `@stream` type parameter
+
+Pattern matching on a value of type `any` always requires either exhaustive atom coverage or a `_` wildcard. The loader cannot verify exhaustiveness for `any` — it will warn that it cannot statically confirm coverage.
+
+### 3.7 Atoms and Atom Variants
 
 Atoms are symbolic constants. They carry no value:
 ```
@@ -162,22 +179,28 @@ Atom variants carry a payload:
 
 Atom variants are constructed inline and destructured via pattern matching. They are how Deck expresses sum types without a separate `type` declaration for each variant.
 
-### 3.7 Named Record Types (`@type`)
-User-defined immutable record types. Declared with the `@type` annotation (see §8). Field access via `.`, update via `with`. Structurally typed — a map `{str: any}` is not the same as a declared `@type`, and they are not interchangeable.
+### 3.8 Named Record Types (`@type`)
+User-defined immutable record types. Declared with the `@type` annotation (see §4). Field access via `.`, update via `with`. Structurally typed — a map `{str: any}` is not the same as a declared `@type`, and they are not interchangeable.
 
-### 3.8 Effect-Annotated Return Types
-```
-T !capability_alias
-```
-Not a standalone type — a function return type qualifier. A function returning `float !temp` produces a float and performs the `temp` capability side effect. Functions without `!` are guaranteed pure. Multiple effects: `unit !http !store`. The interpreter verifies at load time that every `!alias` in a function signature is declared in `@use`.
+### 3.9 Effect-Annotated Return Types
 
-### 3.9 Stream Type
+Effect annotations appear after the return type and before `=` in a function definition:
+```
+fn fetch_profile (did: str) -> Result Profile str !api =
+  ...
+fn update_and_sync (v: float) -> unit !store !http =
+  ...
+```
+
+The syntax is `-> TypeAnnotation !alias1 !alias2`. The `!alias` qualifiers are not part of the type itself — they are a property of the function declaration. A function returning `float !temp` produces a float and performs the `temp` capability side effect. Functions without `!` are guaranteed pure. The interpreter verifies at load time that every `!alias` in a function signature is declared in `@use`.
+
+### 3.10 Stream Type
 ```
 Stream T
 ```
 A continuous, potentially infinite sequence of `T` values. Produced by OS capabilities (`watch` methods) and consumed via `@stream` declarations. Not a list — has no length, cannot be iterated imperatively.
 
-### 3.10 Component Type
+### 3.11 Component Type
 ```
 component
 ```
@@ -279,7 +302,7 @@ fn process (raw: float) -> str =
     offset   = 2.5
 ```
 
-`where` bindings are evaluated lazily, visible only within the function body, and may reference each other (evaluated in dependency order). Circular `where` references are a load error.
+`where` bindings are visible only within the function body and may reference each other. The loader builds a dependency graph among `where` bindings and topological-sorts them; bindings are evaluated in that order, not declaration order. Circular `where` references (A depends on B, B depends on A) are a load error reported at load time with the cycle listed. The evaluator receives them pre-sorted — no runtime dependency analysis needed.
 
 ---
 
@@ -431,7 +454,32 @@ raw_input
 |> process
 ```
 
-### 7.8 Error-Propagating Pipe `|>?`
+### 7.8 The `is` Operator
+
+`is` tests the identity or state of a value without binding it:
+
+```
+expr is :atom_name         -- true if expr is exactly that atom
+Machine is :state_name     -- true if Machine.state matches that state
+expr is TypeName           -- true if expr is a record of that @type
+```
+
+**Semantics:**
+- `v is :ok` — equivalent to `is_ok(v)` for a `Result`, or `v == :ok` for a plain atom
+- `App is :active` — equivalent to `match App.state | :active _ -> true | _ -> false`; tests the top-level atom of the current state, ignoring payload
+- `v is Post` — equivalent to checking that `type_of(v)` resolves to the `Post` `@type`
+
+`is` is a binary infix operator. Its precedence is equal to `==` (level 4). Both operands are evaluated; `is` is pure.
+
+```
+if state is :loading then spinner else column ...
+when App is :authenticated
+  button "Logout" -> auth.logout()
+```
+
+`is` never fails at runtime — it always produces `true` or `false`. It does not bind variables; for binding, use `match`.
+
+### 7.9 Error-Propagating Pipe `|>?`
 ```
 value |>? function
 ```
@@ -593,6 +641,9 @@ Circular dependencies are a load error. The loader reports the full cycle.
 - `@config`
 - `@on`
 - `@nav`
+- `@migration`
+
+Note: `app.deck` is also a `.deck` file, so annotations in the "any `.deck` file" column of the placement table (§10.6) are also valid in `app.deck`.
 
 ---
 
@@ -718,14 +769,23 @@ compare (a: T, b: T) -> atom   -- :lt | :eq | :gt
 
 ### 11.8 Type Inspection
 ```
-type_of  (v: any) -> str   -- "int"|"float"|"bool"|"str"|"byte"|"unit"
-                           -- "list"|"map"|"tuple"|"fn"|"atom"|"stream"
-                           -- "result_ok"|"result_err"|"opt_some"|"opt_none"
+type_of  (v: any) -> atom  -- :int | :float | :bool | :str | :byte | :unit
+                           -- :list | :map | :tuple | :fn | :atom | :stream
+                           -- :result_ok | :result_err | :opt_some | :opt_none
+                           -- :record (for @type values)
 is_int   (v: any) -> bool
 is_float (v: any) -> bool
 is_str   (v: any) -> bool
 is_list  (v: any) -> bool
 is_map   (v: any) -> bool
+```
+
+`type_of` returns an **atom**, not a string, so it integrates naturally with pattern matching:
+```
+match type_of(v)
+  | :int  -> "integer"
+  | :str  -> "string"
+  | _     -> "other"
 ```
 
 ### 11.9 Functional Utilities
@@ -737,7 +797,9 @@ flip      (f: (A,B)->C)      -> (B,A) -> C
 ```
 
 ### 11.10 Random (Impure Builtin)
-`random` is an intentional exception to the pure-by-default rule. It is available without `@use`, requires no `!effect` annotation, but is non-deterministic. The interpreter seeds it from OS entropy at startup. Functions using `random` do not need to declare it in their signatures. Use `random.seed(n)` in `@test` blocks for reproducibility.
+`random` is an intentional exception to the pure-by-default rule. It is available without `@use`, requires no `!effect` annotation, but is non-deterministic. Functions using `random` do not need to declare it in their signatures. Use `random.seed(n)` in `@test` blocks for reproducibility.
+
+The interpreter seeds `random` from OS hardware entropy during `deck_runtime_create()`, before any app code runs. The `random` module must be declared in the OS surface file (`.deck-os`) as a `@builtin random` block with the `@impure` modifier — see §3 of `03-deck-os`. On platforms without a hardware RNG, the OS author must provide a software PRNG seeded from another entropy source (boot timestamp, ADC noise, etc.).
 
 ```
 random.int    (min: int, max: int)     -> int
@@ -763,8 +825,14 @@ top_level    = annotation | fn_def | let_binding | type_def ;
 type_def     = "@type" TYPE_IDENT INDENT { field_decl } DEDENT ;
 field_decl   = IDENT ":" type_ann NEWLINE ;
 
-fn_def       = "fn" IDENT "(" param_list ")" "->" type_ann
-               [ "!" effect_list ] [ INDENT doc_ann DEDENT ] "=" expr ;
+-- Effect annotations follow the return type, before "=".
+-- The "!" applies to the function, not to the type.
+fn_def       = "fn" IDENT "(" param_list ")" "->" return_ann
+               [ fn_ann_block ] "=" expr ;
+return_ann   = type_ann { "!" IDENT } ;
+fn_ann_block = INDENT { fn_inline_ann } DEDENT ;
+fn_inline_ann= ( "@doc" STR_LIT | "@example" expr "==" expr ) NEWLINE ;
+
 let_binding  = "let" IDENT [ ":" type_ann ] "=" expr ;
 
 type_ann     = "int" | "float" | "bool" | "str" | "byte" | "unit"
@@ -777,10 +845,16 @@ type_ann     = "int" | "float" | "bool" | "str" | "byte" | "unit"
              | "Stream" type_ann
              | TYPE_IDENT ;
 
+range_lit    = INT_LIT ".." INT_LIT
+             | FLOAT_LIT ".." FLOAT_LIT ;
+-- Range literals are valid only in @config range: and @stream operators.
+-- They are NOT general expressions.
+
 expr         = let_expr | match_expr | if_expr | do_expr
              | pipe_expr | block_expr ;
 
-let_expr     = "let" IDENT [":" type_ann] "=" expr { NEWLINE let_expr } expr
+let_expr     = "let" IDENT [":" type_ann] "=" expr
+               { NEWLINE "let" IDENT [":" type_ann] "=" expr } NEWLINE expr
                [ "where" INDENT { let_binding NEWLINE } DEDENT ] ;
 
 match_expr   = "match" expr INDENT { "|" pattern [guard] "->" expr NEWLINE } DEDENT ;
@@ -789,24 +863,30 @@ guard        = "when" expr ;
 if_expr      = "if" expr "then" expr "else" expr ;
 
 do_expr      = "do" INDENT { do_stmt NEWLINE } DEDENT ;
-do_stmt      = let_binding | expr ;
+do_stmt      = let_binding | expr ;   -- non-let stmts must produce unit or Result unit E
 
+-- Pipe chains (left-associative, same precedence level).
 pipe_expr    = pipe_expr "|>" call_expr
              | pipe_expr "|>?" call_expr
-             | call_expr ;
+             | is_expr ;
+
+-- "is" has the same precedence as "==" (level 4).
+is_expr      = cmp_expr "is" ATOM
+             | cmp_expr "is" TYPE_IDENT
+             | cmp_expr ;
 
 call_expr    = call_expr "(" arg_list ")"
              | call_expr "." IDENT
              | call_expr "with" "{" field_update_list "}"
              | unary_expr ;
 
-primary_expr = INT_LIT | FLOAT_LIT | STR_LIT | INTERP_STR | MULTILINE_STR
+primary_expr = INT_LIT | FLOAT_LIT | BYTE_LIT | STR_LIT | INTERP_STR | MULTILINE_STR
              | BOOL_LIT | "unit" | IDENT | ATOM | atom_variant
              | TYPE_IDENT "{" field_init_list "}"
              | tuple_lit | list_lit | map_lit | lambda_expr
              | "(" expr ")" ;
 
-pattern      = "_" | INT_LIT | FLOAT_LIT | STR_LIT | BOOL_LIT
+pattern      = "_" | INT_LIT | FLOAT_LIT | BYTE_LIT | STR_LIT | BOOL_LIT
              | ATOM | ATOM pattern | ATOM "(" named_field_pats ")"
              | TYPE_IDENT "{" named_field_pats "}"
              | "(" pattern_list ")"

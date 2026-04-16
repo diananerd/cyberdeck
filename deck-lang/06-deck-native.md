@@ -422,9 +422,10 @@ static DeckValue* bmp280_read(
     deck_value_free(field_vals[1]);
     deck_value_free(field_vals[2]);
 
-    return deck_ok(record);
-    /* deck_ok copies record; caller owns the result */
-    deck_value_free(record);  /* free original after deck_ok copies */
+    /* Wrap in :ok, then free the unwrapped record (deck_ok copies it) */
+    DeckValue* result = deck_ok(record);
+    deck_value_free(record);
+    return result;   /* runtime takes ownership */
 }
 
 static DeckValue* bmp280_read_all(
@@ -979,18 +980,41 @@ static void http_download_done_cb(void* ctx_ptr, uint8_t* data, size_t len, int 
 
 ### 13.3 ISR-Safe Pattern
 
-On ISR (interrupt service routine), only push pre-allocated values or atoms:
+On ISR (interrupt service routine), only push pre-allocated values or atoms. Use `deck_fire_event_isr` which is ISR-safe (uses a lock-free ring buffer internally — no heap allocation, no mutex):
 
 ```c
-static DeckValue* IRAM_ATTR button_event_value = NULL;  /* pre-allocated at init */
+/* deck_bridge.h */
+
+/* ISR-safe variant of deck_fire_event. Uses a lock-free queue internally.
+   payload must be a pre-allocated, retained DeckValue* (e.g. a static atom).
+   The runtime releases its reference after dispatching.
+   ONLY call from ISR or from any thread where malloc is not safe. */
+void deck_fire_event_isr(
+    DeckRuntime* rt,
+    const char*  event_name,
+    DeckValue*   payload     /* NULL for no-payload events; must be pre-allocated */
+);
+```
+
+Usage example:
+
+```c
+static DeckValue* IRAM_ATTR s_btn_payload = NULL;  /* pre-allocated at init */
+
+void board_init_button_events(DeckRuntime* rt) {
+    /* Pre-allocate the payload value once at startup */
+    const char* names[] = { "id", "action" };
+    DeckValue*  vals[]  = { deck_int(0), deck_atom("press") };
+    s_btn_payload = deck_variant_named("hardware.button", names, vals, 2);
+    deck_value_retain(s_btn_payload);  /* kept alive across ISR calls */
+}
 
 void IRAM_ATTR gpio_isr_handler(void* arg) {
-    int pin = (int)(intptr_t)arg;
-    /* deck_fire_event uses a lock-free queue internally */
-    deck_fire_event_isr(global_rt, "hardware.button",
-                        button_event_value);  /* must be pre-allocated */
+    deck_fire_event_isr(global_rt, "hardware.button", s_btn_payload);
 }
 ```
+
+For events with dynamic payload (e.g., variable pin or action), use `deck_dispatch_main` from the ISR to do the allocation on the main loop, then fire `deck_fire_event`.
 
 ---
 
@@ -1407,9 +1431,10 @@ assert(deck_value_equal(expected, deck_get_ok_val(actual)));
 | `deck_stream_push` | Push next value in a stream |
 | `deck_stream_error` | Signal stream error |
 | `deck_stream_end` | Signal stream completed |
-| `deck_fire_event` | Fire a no-payload OS event |
-| `deck_fire_event_map` | Fire an OS event with named fields |
-| `deck_dispatch_main` | Queue a callback on the main loop |
+| `deck_fire_event` | Fire an OS event (thread-safe, not ISR-safe) |
+| `deck_fire_event_map` | Fire an OS event with named fields (thread-safe) |
+| `deck_fire_event_isr` | Fire an OS event from an ISR (lock-free, pre-allocated payload only) |
+| `deck_dispatch_main` | Queue a callback on the main loop (ISR-safe) |
 
 ### 20.3 Value Lifecycle
 

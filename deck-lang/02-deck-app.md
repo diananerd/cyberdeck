@@ -38,6 +38,8 @@ An annotation is `@keyword` followed by an indented body. Annotations are not ca
 | `@example` | | ✓ |
 | `@private` | | ✓ |
 
+`app.deck` is also a `.deck` file for annotation placement purposes. Annotations in the "Any `.deck` file" column are also valid in `app.deck`.
+
 ---
 
 ## 3. @app — Identity
@@ -117,7 +119,9 @@ Declares which sensitive capabilities require user/OS authorization and why. Pre
 
 `reason:` is mandatory and shown verbatim in the OS permission dialog — write it for a user, not a developer.
 
-If a permission is denied: the capability behaves as `optional` and absent. Calls return `:err :permission`. The app does not crash.
+**Load-time enforcement**: If a `@use` entry references a capability that has `@requires_permission` in the OS surface, it **must** appear in `@permissions`. Omitting it is a load error unless the capability is declared `optional` in `@use` (in which case the loader emits a warning instead, since the developer may have intentionally skipped it).
+
+**Runtime behavior**: If the user denies a permission at the OS dialog, the capability behaves identically to an `optional` capability that is currently absent. Calls return `:err :permission` as a `Result` value. The app does not crash.
 
 ---
 
@@ -296,6 +300,10 @@ StreamName.recent(n)     -- [T]  (last n values, oldest first)
     PressureAlerts
   -- Type: Stream str (both must be same type)
 ```
+
+**`combine_latest` semantics**: does not emit until every source stream has produced at least one value. After that, emits a new tuple each time any source emits, using the most recent value from each source. The type is `Stream (T₁, T₂, ...)` where Tₙ is the element type of the nth source. Up to 8 sources.
+
+**`merge` semantics**: emits each value from any source as it arrives. All sources must have the same element type T. The resulting type is `Stream T`. Values from different sources are interleaved in arrival order.
 
 ---
 
@@ -617,6 +625,21 @@ Declares the complete navigation structure. Views exist at exactly one position 
 **`modal`**: Views presented over current content. Dismissed with `nav.back`.
 **`tab`**: Views in a persistent tab bar. Switching tabs is stateless.
 
+**Tab `icon:` atoms** — the following atoms are guaranteed to map to a native icon on all compliant OS implementations. The OS author may add platform-specific atoms; unknown atoms render as a generic `:menu` icon with a load-time warning.
+
+| Atom | Meaning |
+|---|---|
+| `:home` | Home / dashboard |
+| `:search` | Search |
+| `:notifications` | Notifications / bell |
+| `:profile` | User profile / person |
+| `:settings` | Settings / gear |
+| `:compose` | Compose / new item |
+| `:feed` | Feed / list |
+| `:favorites` | Favorites / star |
+| `:history` | History / clock |
+| `:menu` | Hamburger menu (generic fallback) |
+
 A route may not appear in more than one section. The nav topology is validated at load time:
 - All referenced views must exist
 - All `with:` params must match the view's `param` declarations
@@ -650,8 +673,8 @@ nav.replace(:route)              -- replace current in stack (no back entry)
 ### 14.1 Scheduling
 
 **`every:`** only: runs unconditionally at each interval.
-**`when:`** only: runs once when conditions first become true.
-**Both**: runs at each interval if all conditions are met.
+**`when:`** only: runs once per false→true transition of the condition. If the condition becomes false and then true again, the task runs again. If you need "run exactly once ever", track completion in NVS.
+**Both**: runs at each interval only when all `when:` conditions are currently true.
 **Multiple `when:` clauses**: all must be true (logical AND).
 
 ### 14.2 Priority and Battery
@@ -689,7 +712,9 @@ Available operations inside `@migration`:
 - `nvs.*` — NVS operations
 - `config.set(field: str, value: any)` — set config to new default
 
-If a migration fails, the app does not start. The OS reports the failure.
+**Ordering and overlap**: When updating, the OS identifies all `@migration` blocks whose `from:` range matches the installed version. They are sorted by specificity (most specific first: `"1.2.3"` before `"1.2.x"` before `"1.x"` before `"<2.0"`). If two blocks have equal specificity, they run in declaration order. Multiple blocks may match and all run. The OS tracks which blocks have run by a hash of `(app.id, from_range_string)` — a block never runs twice on the same device.
+
+If a migration fails (returns `:err` or panics), the app does not start. The OS reports the failure with the migration's `from:` range and the error. The migration is not re-attempted on subsequent launches; the failed state is reported to the user until a new app version is installed.
 
 ---
 

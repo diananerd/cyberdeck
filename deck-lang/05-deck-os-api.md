@@ -82,7 +82,7 @@ db.exec(
 
 ### 2.3 Row Access Helpers
 
-Rows are `{str: any}` maps. These pure builtins extract typed fields safely:
+Rows are `{str: any}` maps. The `row` builtin module (declared in `03-deck-os §3`) provides pure helpers that extract typed fields safely. They are always in scope with no `@use` required:
 
 ```
 row.int   (row: {str: any}, col: str) -> int?
@@ -90,6 +90,8 @@ row.float (row: {str: any}, col: str) -> float?
 row.str   (row: {str: any}, col: str) -> str?
 row.bool  (row: {str: any}, col: str) -> bool?
 ```
+
+All four return `:none` if the column is absent or if the value is SQL NULL. They do not throw.
 
 ### 2.4 Transactions
 
@@ -207,7 +209,10 @@ High-level HTTP client with session state, response caching, retry logic, and au
 
 ```
 @capability api_client
-  configure     (opts: ApiConfig)                -> unit
+  configure     (opts: ApiConfig)                -> Result unit api.Error
+  -- Returns :err :invalid_config if base_url is malformed or timeout is zero.
+  -- Must be called before any request method; requests before configure return
+  -- :err :not_configured.
   get           (path: str)                      -> Result ApiResponse api.Error
   get           (path: str, opts: ReqOpts)       -> Result ApiResponse api.Error
   post          (path: str, body: any)           -> Result ApiResponse api.Error
@@ -224,7 +229,8 @@ High-level HTTP client with session state, response caching, retry logic, and au
   invalidate_prefix (prefix: str)                -> unit
 
   @errors
-    :not_configured  "api_client.configure() not called"
+    :invalid_config  "Configuration is malformed (bad URL or zero timeout)"
+    :not_configured  "api_client.configure() not called before request"
     :offline         "No network connection"
     :timeout         "Request timed out"
     :unauthorized    "401 Authentication failed"
@@ -336,22 +342,27 @@ MQTT pub/sub client. The OS manages connection, reconnection, and QoS bookkeepin
 
 ## 8. AES Encryption (`crypto.aes`)
 
-Symmetric encryption. Required for any key material — do not store session tokens or secrets in NVS or storage.local as plaintext.
+Symmetric encryption using **AES-CBC with PKCS#7 padding**. Required for any key material — do not store session tokens or secrets in NVS or storage.local as plaintext.
 
 ```
 @capability crypto.aes
   encrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
+  -- AES-CBC, PKCS#7 padding. key: 16, 24, or 32 bytes. iv: exactly 16 bytes.
+  -- Returns the ciphertext (length = ceil(len(data)/16)*16).
   decrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
-  gen_key (bits: int)                             -> [byte]   -- 128, 192, or 256
-  gen_iv  ()                                      -> [byte]   -- 16 random bytes
+  -- Strips PKCS#7 padding. Returns :err :decrypt_failed if padding is invalid
+  -- (wrong key or corrupted ciphertext).
+  gen_key (bits: int)                             -> [byte]   -- bits: 128, 192, or 256
+  gen_iv  ()                                      -> [byte]   -- 16 random bytes from OS entropy
 
   @errors
     :invalid_key    "Key must be 16, 24, or 32 bytes"
-    :invalid_iv     "IV must be 16 bytes"
-    :decrypt_failed "Wrong key or corrupted data"
+    :invalid_iv     "IV must be exactly 16 bytes"
+    :invalid_bits   "bits must be 128, 192, or 256"
+    :decrypt_failed "Wrong key or corrupted/padded data"
 ```
 
-The hash functions in `03-deck-os §3` (sha256, hmac_sha256) are builtins and do not require `@use`. `crypto.aes` is a capability because it uses OS-level secure storage for key material on some platforms.
+The hash functions in `03-deck-os §3` (`sha256`, `hmac_sha256`) are builtins and do not require `@use`. `crypto.aes` is a capability because it uses OS-level secure storage for key material on some platforms.
 
 ---
 

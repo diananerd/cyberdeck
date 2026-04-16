@@ -43,6 +43,12 @@ Written once by the OS/board author. Compiled into the OS image or placed at a k
   version: str
   arch:    atom   -- :arm32 | :arm64 | :riscv32 | :riscv64 | :x86 | :x64
 
+@include "relative/path/to/other.deck-os"
+  -- Inserts all declarations from the referenced file as if they were written
+  -- inline at this position. Path is relative to the including file.
+  -- Circular includes are a fatal parse error.
+  -- Useful for splitting large surfaces into per-subsystem files.
+
 @builtin module_name
   fn_name (param: Type) -> ReturnType
   ...
@@ -142,12 +148,10 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   query_parse   (s: str)                    -> {str: str}
   json       (v: any)                       -> str
   from_json  (s: str)                       -> any?
-  str        (v: any)                       -> str
-  int        (s: str)                       -> int?
-  float      (s: str)                       -> float?
-  bool       (s: str)                       -> bool?
   bytes      (s: str)                       -> [byte]
   from_bytes (b: [byte])                    -> str?
+  -- NOTE: str(), int(), float(), bool() are global builtins (01-deck-lang §11.1),
+  -- not members of the text module. Do not call them as text.str(), text.int(), etc.
 
 @builtin time
   now           ()                              -> Timestamp
@@ -203,6 +207,31 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   error (msg: str) -> unit   -- always captured
   inspect (label: str, value: any) -> any
   assert  (condition: bool, msg: str) -> unit
+  -- assert behavior: in debug mode (log_level "debug"), false condition causes
+  -- a runtime error with the message and suspends in debugger if DAP is active.
+  -- In production (log_level "warn" or "error"), behaves as log.error(msg) with no crash.
+
+@builtin random
+  -- Non-deterministic. @impure — no @use or !effect required but results vary.
+  -- Seeded from hardware entropy during deck_runtime_create().
+  int    (min: int, max: int)     -> int   @impure   -- min..max inclusive
+  float  ()                       -> float @impure   -- 0.0..1.0
+  float  (min: float, max: float) -> float @impure
+  bool   ()                       -> bool  @impure
+  pick   (list: [T])              -> T?    @impure   -- :none if list empty
+  pick_n (list: [T], n: int)      -> [T]   @impure   -- sampled without replacement
+  shuffle(list: [T])              -> [T]   @impure
+  uuid   ()                       -> str   @impure   -- UUID v4
+  bytes  (n: int)                 -> [byte]@impure
+  seed   (n: int)                 -> unit             -- deterministic; use in @test only
+
+@builtin row
+  -- Pure helpers for extracting typed fields from SQLite result rows ({str: any}).
+  -- Always in scope; no @use required.
+  int   (row: {str: any}, col: str) -> int?
+  float (row: {str: any}, col: str) -> float?
+  str   (row: {str: any}, col: str) -> str?
+  bool  (row: {str: any}, col: str) -> bool?
 ```
 
 ---
@@ -357,10 +386,16 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
 
 ```
 @capability display.notify
-  send    (msg: str)                   -> unit
-  send    (msg: str, level: atom)      -> unit
-  -- level: :info | :warning | :error | :success
-  dismiss ()                           -> unit
+  send    (msg: str)                         -> unit   -- defaults to :info
+  send    (msg: str, level: NotifLevel)      -> unit
+  dismiss ()                                 -> unit
+
+@type NotifLevel = :info | :warning | :error | :success
+  -- :info    — neutral informational message
+  -- :warning — amber/yellow; something to be aware of
+  -- :error   — red; an operation failed
+  -- :success — green; an operation succeeded
+  -- Unknown atoms passed as level are treated as :info with a runtime warning.
 
 @capability display.screen
   brightness (level: float)            -> unit   -- 0.0..1.0
@@ -452,6 +487,9 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   read   (pin: int)                      -> Result bool gpio.Error
   write  (pin: int, high: bool)          -> Result unit gpio.Error
   watch  (pin: int)                      -> Stream bool
+  -- watch emits on both rising and falling edges.
+  -- The emitted bool is the new pin level: true = HIGH, false = LOW.
+  -- The current state is NOT emitted at subscription time; only on change.
   @errors
     :invalid_pin  "Pin not valid on this hardware"
     :permission   "GPIO access restricted"
@@ -607,10 +645,11 @@ void deck_bridge_app_ready();
 void deck_bridge_app_suspended();
 void deck_bridge_app_terminated(const char* reason);
 
-/* Rendering */
+/* Rendering — ComponentNode is defined in 04-deck-runtime §4.2 (AST node types).
+   The bridge receives the diffed subtree, not the full tree on every call. */
 void deck_bridge_render(
   const char*    view_name,
-  ComponentNode* tree
+  ComponentNode* tree       /* opaque to this header; defined in runtime internals */
 );
 
 void deck_bridge_handle_input(
@@ -622,28 +661,21 @@ void deck_bridge_handle_input(
 
 ### 7.1 Value Representation
 
+> **Canonical definition**: The `DeckType` enum and `DeckValue` struct are defined authoritatively in `06-deck-native §4.1`. That definition supersedes the abbreviated form below. The abbreviated form is kept here as a quick conceptual reference for bridge implementors reading this document first.
+
 ```c
+/* Abbreviated — see 06-deck-native §4.1 for the full, normative definition */
 typedef enum {
   DECK_INT, DECK_FLOAT, DECK_BOOL, DECK_STR, DECK_BYTE,
-  DECK_UNIT, DECK_ATOM, DECK_LIST, DECK_MAP, DECK_TUPLE,
-  DECK_RESULT_OK, DECK_RESULT_ERR, DECK_OPT_SOME, DECK_OPT_NONE,
-  DECK_OPAQUE, DECK_STREAM
+  DECK_UNIT, DECK_ATOM,
+  DECK_VARIANT,   /* covers :ok, :err, :some, :none, and all atom variants */
+  DECK_LIST, DECK_MAP, DECK_TUPLE, DECK_RECORD,
+  DECK_OPAQUE, DECK_STREAM, DECK_DURATION, DECK_TIMESTAMP
 } DeckType;
-
-typedef struct DeckValue {
-  DeckType type;
-  union {
-    int64_t     int_val;
-    double      float_val;
-    bool        bool_val;
-    uint8_t     byte_val;
-    struct { char* data; size_t len; }   str_val;
-    struct { struct DeckValue* items; int count; } list_val;
-    struct { struct DeckValue* inner; }  wrapped_val;  /* ok, err, some */
-    void*       opaque;
-  };
-} DeckValue;
+/* Full struct with all union members: see 06-deck-native §4.1 */
 ```
+
+**Overload resolution**: When a capability declares multiple methods with the same name (e.g., `get(url)` and `get(url, headers)`), the bridge selects the overload by argument count (`argc`). If two overloads have the same arity, the first argument's `DeckType` is used as a secondary discriminator. If ambiguity remains after both criteria, it is a `.deck-os` authoring error (caught by the loader at startup).
 
 ### 7.2 Threading
 
@@ -653,12 +685,16 @@ The bridge may invoke callbacks from any thread. The interpreter queues all call
 
 ## 8. Condition Evaluation
 
-The interpreter evaluates `when:` conditions continuously in response to OS events. Conditions reference OS state, not app logic. The interpreter subscribes to relevant OS events to trigger re-evaluation efficiently — no polling.
+The interpreter evaluates `when:` conditions continuously in response to OS events and machine state changes. The interpreter subscribes to relevant OS events to trigger re-evaluation efficiently — no polling.
 
 | Condition | Re-evaluated on |
 |---|---|
 | `network is :connected` | `os.network_change` event |
+| `network is :offline` | `os.network_change` event |
 | `battery > N%` | `system.battery.watch()` stream |
-| `alias is :available` | `os.permission_change`, hardware events |
-| `App is :state` | every `send()` to that machine |
-| `time.hour is :night` | `os.time_change` event |
+| `battery < N%` | `system.battery.watch()` stream |
+| `alias is :available` | `os.permission_change` event |
+| `alias is :unavailable` | `os.permission_change` event |
+| `App is :state_name` | every `send()` to the named machine (internal event) |
+
+`when:` condition expressions are pure read-only expressions. They may call `@pure`-marked capability methods (e.g., `ble.is_connected(conn)`, `system.battery.level()`), access `@config` values, and use the `is` operator. They may **not** contain `!effect` calls, `send()`, `do` blocks, or `match` on mutable state.

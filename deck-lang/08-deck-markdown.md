@@ -26,9 +26,12 @@ Markdown is not an afterthought in Deck — when installed, it is structurally i
 
 ## 2. .deck-os Surface Definition
 
+The `@include` directive is defined in `03-deck-os §2.1`. It inserts all declarations from the referenced file as if they were written inline. Path is relative to the including file.
+
 ```
 -- markdown.deck-os
--- Include this file from your main .deck-os via @include
+-- Include this file from your main .deck-os via:
+--   @include "markdown.deck-os"
 
 -- ── Types ────────────────────────────────────────────────────────────────────
 
