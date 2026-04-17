@@ -55,6 +55,40 @@ static bool t_if(const char *name)
 static bool t_pow(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("2 ** 10", &e); CHECK(v && v->as.i == 1024, "1024"); deck_release(v); (void)e; return true; }
 
+/* ---- builtin builtins: math + text + bytes + conversions ---- */
+static bool t_math_abs(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("math.abs(-7)", &e); CHECK(v && v->as.i == 7, "7"); deck_release(v); (void)e; return true; }
+static bool t_math_min(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("math.min(3, 5)", &e); CHECK(v && v->as.i == 3, "3"); deck_release(v); (void)e; return true; }
+static bool t_math_max(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("math.max(3, 5)", &e); CHECK(v && v->as.i == 5, "5"); deck_release(v); (void)e; return true; }
+static bool t_math_floor(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("math.floor(2.7)", &e); CHECK(v && v->as.i == 2, "2"); deck_release(v); (void)e; return true; }
+static bool t_math_ceil(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("math.ceil(2.1)", &e); CHECK(v && v->as.i == 3, "3"); deck_release(v); (void)e; return true; }
+static bool t_text_lower(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("text.lower(\"ABC\")", &e); CHECK(v && v->as.s.len == 3 && memcmp(v->as.s.ptr, "abc", 3) == 0, "abc"); deck_release(v); (void)e; return true; }
+static bool t_text_len(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("text.len(\"hello\")", &e); CHECK(v && v->as.i == 5, "5"); deck_release(v); (void)e; return true; }
+static bool t_text_starts_with(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("text.starts_with(\"hello\", \"he\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
+static bool t_text_ends_with(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("text.ends_with(\"hello\", \"lo\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
+static bool t_text_contains(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("text.contains(\"hello\", \"ell\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
+static bool t_conv_str_int(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("str(42)", &e); CHECK(v && v->as.s.len == 2 && memcmp(v->as.s.ptr, "42", 2) == 0, "42"); deck_release(v); (void)e; return true; }
+static bool t_conv_int_str(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("int(\"99\")", &e); CHECK(v && v->as.i == 99, "99"); deck_release(v); (void)e; return true; }
+static bool t_conv_float_int(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("float(5)", &e); CHECK(v && v->type == DECK_T_FLOAT && v->as.f == 5.0, "5.0"); deck_release(v); (void)e; return true; }
+static bool t_conv_bool_str(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("bool(\"\")", &e); CHECK(v && !v->as.b, "false"); deck_release(v); (void)e; return true; }
+static bool t_conv_roundtrip(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("int(str(123))", &e); CHECK(v && v->as.i == 123, "123"); deck_release(v); (void)e; return true; }
+static bool t_time_duration(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("time.duration(100, 20)", &e); CHECK(v && v->as.i == 80, "80"); deck_release(v); (void)e; return true; }
+
 #define APP_HDR_DL1 \
     "@app\n" \
     "  name: \"X\"\n" \
@@ -95,9 +129,25 @@ static const case_t CASES[] = {
     { "concat",        t_concat },
     { "neg",           t_neg },
     { "if",            t_if },
-    { "pow",           t_pow },
-    { "hello",         t_hello },
-    { "match_wild",    t_match_wild },
+    { "pow",              t_pow },
+    { "math_abs",         t_math_abs },
+    { "math_min",         t_math_min },
+    { "math_max",         t_math_max },
+    { "math_floor",       t_math_floor },
+    { "math_ceil",        t_math_ceil },
+    { "text_lower",       t_text_lower },
+    { "text_len",         t_text_len },
+    { "text_starts_with", t_text_starts_with },
+    { "text_ends_with",   t_text_ends_with },
+    { "text_contains",    t_text_contains },
+    { "conv_str_int",     t_conv_str_int },
+    { "conv_int_str",     t_conv_int_str },
+    { "conv_float_int",   t_conv_float_int },
+    { "conv_bool_str",    t_conv_bool_str },
+    { "conv_roundtrip",   t_conv_roundtrip },
+    { "time_duration",    t_time_duration },
+    { "hello",            t_hello },
+    { "match_wild",       t_match_wild },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

@@ -4,13 +4,17 @@
 #include "deck_loader.h"
 #include "drivers/deck_sdi_time.h"
 #include "drivers/deck_sdi_info.h"
+#include "drivers/deck_sdi_nvs.h"
+#include "drivers/deck_sdi_fs.h"
 
 #include "esp_log.h"
 
 #include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
+#include <time.h>
 
 static const char *TAG = "deck_interp";
 
@@ -147,17 +151,319 @@ static deck_value_t *b_text_upper(deck_value_t **args, uint32_t n, deck_interp_c
     return deck_new_str(buf, L);
 }
 
+/* ---- math.* ---- */
+static double numf(deck_value_t *v) { return v->type == DECK_T_INT ? (double)v->as.i : v->as.f; }
+static bool   is_num(deck_value_t *v) { return v && (v->type == DECK_T_INT || v->type == DECK_T_FLOAT); }
+
+static deck_value_t *b_math_abs(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.abs needs number"); return NULL; }
+    if (args[0]->type == DECK_T_INT) {
+        int64_t x = args[0]->as.i; return deck_new_int(x < 0 ? -x : x);
+    }
+    double x = args[0]->as.f; return deck_new_float(x < 0 ? -x : x);
+}
+static deck_value_t *b_math_min(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0]) || !is_num(args[1])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.min needs numbers"); return NULL; }
+    if (args[0]->type == DECK_T_INT && args[1]->type == DECK_T_INT)
+        return deck_new_int(args[0]->as.i < args[1]->as.i ? args[0]->as.i : args[1]->as.i);
+    double a = numf(args[0]), b = numf(args[1]);
+    return deck_new_float(a < b ? a : b);
+}
+static deck_value_t *b_math_max(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0]) || !is_num(args[1])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.max needs numbers"); return NULL; }
+    if (args[0]->type == DECK_T_INT && args[1]->type == DECK_T_INT)
+        return deck_new_int(args[0]->as.i > args[1]->as.i ? args[0]->as.i : args[1]->as.i);
+    double a = numf(args[0]), b = numf(args[1]);
+    return deck_new_float(a > b ? a : b);
+}
+static deck_value_t *b_math_floor(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.floor needs number"); return NULL; }
+    if (args[0]->type == DECK_T_INT) return deck_new_int(args[0]->as.i);
+    return deck_new_int((int64_t)floor(args[0]->as.f));
+}
+static deck_value_t *b_math_ceil(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.ceil needs number"); return NULL; }
+    if (args[0]->type == DECK_T_INT) return deck_new_int(args[0]->as.i);
+    return deck_new_int((int64_t)ceil(args[0]->as.f));
+}
+static deck_value_t *b_math_round(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.round needs number"); return NULL; }
+    if (args[0]->type == DECK_T_INT) return deck_new_int(args[0]->as.i);
+    return deck_new_int((int64_t)round(args[0]->as.f));
+}
+
+/* ---- text.* ---- */
+static deck_value_t *b_text_lower(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.lower expects str"); return NULL; }
+    char buf[256]; uint32_t L = args[0]->as.s.len < 255 ? args[0]->as.s.len : 255;
+    for (uint32_t i = 0; i < L; i++) {
+        char ch = args[0]->as.s.ptr[i];
+        buf[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch;
+    }
+    return deck_new_str(buf, L);
+}
+static deck_value_t *b_text_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.len expects str"); return NULL; }
+    return deck_new_int((int64_t)args[0]->as.s.len);
+}
+static deck_value_t *b_text_starts_with(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.starts_with expects (str, str)"); return NULL; }
+    if (args[1]->as.s.len > args[0]->as.s.len) return deck_retain(deck_false());
+    return deck_retain(memcmp(args[0]->as.s.ptr, args[1]->as.s.ptr, args[1]->as.s.len) == 0 ? deck_true() : deck_false());
+}
+static deck_value_t *b_text_ends_with(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.ends_with expects (str, str)"); return NULL; }
+    if (args[1]->as.s.len > args[0]->as.s.len) return deck_retain(deck_false());
+    const char *tail = args[0]->as.s.ptr + args[0]->as.s.len - args[1]->as.s.len;
+    return deck_retain(memcmp(tail, args[1]->as.s.ptr, args[1]->as.s.len) == 0 ? deck_true() : deck_false());
+}
+static deck_value_t *b_text_contains(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.contains expects (str, str)"); return NULL; }
+    if (args[1]->as.s.len == 0) return deck_retain(deck_true());
+    if (args[1]->as.s.len > args[0]->as.s.len) return deck_retain(deck_false());
+    uint32_t limit = args[0]->as.s.len - args[1]->as.s.len;
+    for (uint32_t i = 0; i <= limit; i++) {
+        if (memcmp(args[0]->as.s.ptr + i, args[1]->as.s.ptr, args[1]->as.s.len) == 0)
+            return deck_retain(deck_true());
+    }
+    return deck_retain(deck_false());
+}
+
+/* ---- bytes.* ---- */
+static deck_value_t *b_bytes_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_BYTES) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.len expects bytes"); return NULL; }
+    return deck_new_int((int64_t)args[0]->as.bytes.len);
+}
+
+/* ---- time.* ---- */
+static deck_value_t *b_time_duration(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0]) || !is_num(args[1])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.duration needs numbers"); return NULL; }
+    int64_t a = args[0]->type == DECK_T_INT ? args[0]->as.i : (int64_t)args[0]->as.f;
+    int64_t b = args[1]->type == DECK_T_INT ? args[1]->as.i : (int64_t)args[1]->as.f;
+    return deck_new_int(a - b);
+}
+static deck_value_t *b_time_to_iso(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.to_iso needs epoch seconds"); return NULL; }
+    int64_t epoch_s = args[0]->type == DECK_T_INT ? args[0]->as.i : (int64_t)args[0]->as.f;
+    time_t t = (time_t)epoch_s;
+    struct tm tm; gmtime_r(&t, &tm);
+    char buf[32];
+    int k = snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                     tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return deck_new_str(buf, (uint32_t)k);
+}
+
+/* ---- nvs.* ---- */
+static deck_value_t *b_nvs_get(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get(ns, key)"); return NULL; }
+    char out[128]; memcpy(out, args[0]->as.s.ptr, args[0]->as.s.len); out[args[0]->as.s.len] = 0;
+    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
+    char val[128]; val[0] = 0;
+    deck_sdi_err_t rc = deck_sdi_nvs_get_str(out, key, val, sizeof(val));
+    if (rc == DECK_SDI_OK) return deck_new_str_cstr(val);
+    if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_none();
+    set_err(c, DECK_RT_INTERNAL, 0, 0, "nvs.get failed: %s", deck_sdi_strerror(rc));
+    return NULL;
+}
+static deck_value_t *b_nvs_set(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR ||
+        !args[2] || args[2]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set(ns, key, str)"); return NULL; }
+    char ns[64]; memcpy(ns, args[0]->as.s.ptr, args[0]->as.s.len); ns[args[0]->as.s.len] = 0;
+    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
+    char val[128]; memcpy(val, args[2]->as.s.ptr, args[2]->as.s.len); val[args[2]->as.s.len] = 0;
+    deck_sdi_err_t rc = deck_sdi_nvs_set_str(ns, key, val);
+    if (rc != DECK_SDI_OK) { set_err(c, DECK_RT_INTERNAL, 0, 0, "nvs.set failed: %s", deck_sdi_strerror(rc)); return NULL; }
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_nvs_delete(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.delete(ns, key)"); return NULL; }
+    char ns[64]; memcpy(ns, args[0]->as.s.ptr, args[0]->as.s.len); ns[args[0]->as.s.len] = 0;
+    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
+    deck_sdi_nvs_del(ns, key);
+    return deck_retain(deck_unit());
+}
+
+/* ---- fs.* ---- */
+static deck_value_t *b_fs_exists(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_STR) return deck_retain(deck_false());
+    char path[128]; memcpy(path, args[0]->as.s.ptr, args[0]->as.s.len); path[args[0]->as.s.len] = 0;
+    deck_sdi_err_t rc = deck_sdi_fs_exists(path, NULL);
+    return deck_retain(rc == DECK_SDI_OK ? deck_true() : deck_false());
+}
+static deck_value_t *b_fs_read(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.read(path)"); return NULL; }
+    char path[128]; memcpy(path, args[0]->as.s.ptr, args[0]->as.s.len); path[args[0]->as.s.len] = 0;
+    char buf[512]; size_t sz = sizeof(buf);
+    deck_sdi_err_t rc = deck_sdi_fs_read(path, buf, &sz);
+    if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_none();
+    if (rc != DECK_SDI_OK) { set_err(c, DECK_RT_INTERNAL, 0, 0, "fs.read failed: %s", deck_sdi_strerror(rc)); return NULL; }
+    deck_value_t *inner = deck_new_str(buf, (uint32_t)sz);
+    if (!inner) return NULL;
+    deck_value_t *some = deck_new_some(inner);
+    deck_release(inner);
+    return some;
+}
+
+/* ---- type conversions (bare ident calls) ---- */
+static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0]) return deck_new_str_cstr("");
+    char buf[64];
+    switch (args[0]->type) {
+        case DECK_T_STR:   return deck_retain(args[0]);
+        case DECK_T_INT:   snprintf(buf, sizeof(buf), "%lld", (long long)args[0]->as.i); return deck_new_str_cstr(buf);
+        case DECK_T_FLOAT: snprintf(buf, sizeof(buf), "%g", args[0]->as.f); return deck_new_str_cstr(buf);
+        case DECK_T_BOOL:  return deck_new_str_cstr(args[0]->as.b ? "true" : "false");
+        case DECK_T_ATOM:  snprintf(buf, sizeof(buf), ":%s", args[0]->as.atom); return deck_new_str_cstr(buf);
+        case DECK_T_UNIT:  return deck_new_str_cstr("unit");
+        default:           return deck_new_str_cstr("?");
+    }
+}
+static deck_value_t *b_to_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0]) return deck_new_int(0);
+    switch (args[0]->type) {
+        case DECK_T_INT:   return deck_retain(args[0]);
+        case DECK_T_FLOAT: return deck_new_int((int64_t)args[0]->as.f);
+        case DECK_T_BOOL:  return deck_new_int(args[0]->as.b ? 1 : 0);
+        case DECK_T_STR: {
+            char buf[64]; uint32_t L = args[0]->as.s.len < 63 ? args[0]->as.s.len : 63;
+            memcpy(buf, args[0]->as.s.ptr, L); buf[L] = 0;
+            return deck_new_int(strtoll(buf, NULL, 10));
+        }
+        default: set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "int() unsupported type"); return NULL;
+    }
+}
+static deck_value_t *b_to_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0]) return deck_new_float(0);
+    switch (args[0]->type) {
+        case DECK_T_INT:   return deck_new_float((double)args[0]->as.i);
+        case DECK_T_FLOAT: return deck_retain(args[0]);
+        case DECK_T_STR: {
+            char buf[64]; uint32_t L = args[0]->as.s.len < 63 ? args[0]->as.s.len : 63;
+            memcpy(buf, args[0]->as.s.ptr, L); buf[L] = 0;
+            return deck_new_float(strtod(buf, NULL));
+        }
+        default: set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "float() unsupported type"); return NULL;
+    }
+}
+static deck_value_t *b_to_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    return deck_retain(deck_is_truthy(args[0]) ? deck_true() : deck_false());
+}
+
 static const builtin_t BUILTINS[] = {
+    /* log */
     { "log.info",               b_log_info,          1, 1 },
     { "log.warn",               b_log_warn,          1, 1 },
     { "log.error",              b_log_error,         1, 1 },
+
+    /* time */
     { "time.now",               b_time_now,          0, 0 },
+    { "time.duration",          b_time_duration,     2, 2 },
+    { "time.to_iso",            b_time_to_iso,       1, 1 },
+
+    /* system.info */
     { "system.info.device_id",  b_info_device_id,    0, 0 },
     { "system.info.free_heap",  b_info_free_heap,    0, 0 },
     { "system.info.deck_level", b_info_deck_level,   0, 0 },
+
+    /* text */
     { "text.upper",             b_text_upper,        1, 1 },
+    { "text.lower",             b_text_lower,        1, 1 },
+    { "text.len",               b_text_len,          1, 1 },
+    { "text.starts_with",       b_text_starts_with,  2, 2 },
+    { "text.ends_with",         b_text_ends_with,    2, 2 },
+    { "text.contains",          b_text_contains,     2, 2 },
+
+    /* bytes */
+    { "bytes.len",              b_bytes_len,         1, 1 },
+
+    /* math */
+    { "math.abs",               b_math_abs,          1, 1 },
+    { "math.min",               b_math_min,          2, 2 },
+    { "math.max",               b_math_max,          2, 2 },
+    { "math.floor",             b_math_floor,        1, 1 },
+    { "math.ceil",              b_math_ceil,         1, 1 },
+    { "math.round",             b_math_round,        1, 1 },
+
+    /* nvs */
+    { "nvs.get",                b_nvs_get,           2, 2 },
+    { "nvs.set",                b_nvs_set,           3, 3 },
+    { "nvs.delete",             b_nvs_delete,        2, 2 },
+
+    /* fs (read-only) */
+    { "fs.exists",              b_fs_exists,         1, 1 },
+    { "fs.read",                b_fs_read,           1, 1 },
+
     { NULL, NULL, 0, 0 },
 };
+
+/* Bare-ident builtins: str(), int(), float(), bool() type conversions. */
+static const builtin_t BARE_BUILTINS[] = {
+    { "str",   b_to_str,   1, 1 },
+    { "int",   b_to_int,   1, 1 },
+    { "float", b_to_float, 1, 1 },
+    { "bool",  b_to_bool,  1, 1 },
+    { NULL, NULL, 0, 0 },
+};
+
+static const builtin_t *find_bare_builtin(const char *name)
+{
+    for (const builtin_t *b = BARE_BUILTINS; b->name; b++)
+        if (strcmp(b->name, name) == 0) return b;
+    return NULL;
+}
 
 static const builtin_t *find_builtin(const char *name)
 {
@@ -458,6 +764,25 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
 static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)
 {
     const ast_node_t *fn = n->as.call.fn;
+    /* Bare ident: type conversions str/int/float/bool. */
+    if (fn && fn->kind == AST_IDENT) {
+        const builtin_t *b = find_bare_builtin(fn->as.s);
+        if (b) {
+            uint32_t argc = n->as.call.args.len;
+            if ((int)argc < b->min_arity || (int)argc > b->max_arity) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col, "%s: arity", b->name);
+                return NULL;
+            }
+            deck_value_t *args[4] = {0};
+            for (uint32_t i = 0; i < argc; i++) {
+                args[i] = deck_interp_run(c, env, n->as.call.args.items[i]);
+                if (!args[i]) { for (uint32_t k = 0; k < i; k++) deck_release(args[k]); return NULL; }
+            }
+            deck_value_t *r = b->fn(args, argc, c);
+            for (uint32_t i = 0; i < argc; i++) deck_release(args[i]);
+            return r;
+        }
+    }
     if (fn && fn->kind == AST_DOT) {
         char full[96];
         if (build_cap_name(fn, full, sizeof(full))) {
