@@ -31,6 +31,9 @@ deck_err_t deck_runtime_init(size_t heap_limit_bytes);
 /* Runtime-level selftest — exercises allocator round-trip + invariants. */
 deck_err_t deck_runtime_selftest(void);
 
+/* Lexer selftest — 30+ token sequence cases. */
+deck_err_t deck_lexer_run_selftest(void);
+
 #ifdef __cplusplus
 }
 #endif

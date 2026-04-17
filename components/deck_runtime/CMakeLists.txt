@@ -3,6 +3,8 @@ idf_component_register(
          "src/deck_types.c"
          "src/deck_alloc.c"
          "src/deck_intern.c"
+         "src/deck_lexer.c"
+         "src/deck_lexer_test.c"
          "src/deck_runtime.c"
     INCLUDE_DIRS "include"
     REQUIRES log deck_sdi esp_hw_support
