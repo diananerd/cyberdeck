@@ -15,6 +15,7 @@
 #include "driver/usb_serial_jtag.h"
 
 #include "deck_sdi_registry.h"
+#include "drivers/deck_sdi_nvs.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -59,7 +60,13 @@ void app_main(void)
     log_device_id();
 
     deck_sdi_registry_init();
+    ESP_ERROR_CHECK(deck_sdi_nvs_register_esp32() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     deck_sdi_log_registered();
+
+    deck_sdi_err_t nvs_st = deck_sdi_nvs_selftest();
+    if (nvs_st != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "NVS selftest FAILED: %s", deck_sdi_strerror(nvs_st));
+    }
 
     log_heap("idle");
 
