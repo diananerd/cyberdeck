@@ -1,0 +1,12 @@
+menu "Deck SDI"
+
+config DECK_SDI_SELFTEST
+    bool "Run SDI driver selftests at boot"
+    default y
+    help
+        If enabled, main runs each registered driver's selftest after
+        registration. Useful during development to catch driver
+        regressions early; disable for smaller images / faster boot on
+        release builds.
+
+endmenu

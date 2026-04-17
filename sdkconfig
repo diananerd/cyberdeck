@@ -3632,6 +3632,13 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
+# Deck SDI
+#
+# default:
+CONFIG_DECK_SDI_SELFTEST=y
+# end of Deck SDI
+
+#
 # ESP LCD TOUCH
 #
 # default:

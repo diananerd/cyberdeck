@@ -19,6 +19,7 @@
 #include "drivers/deck_sdi_fs.h"
 #include "drivers/deck_sdi_info.h"
 #include "drivers/deck_sdi_time.h"
+#include "drivers/deck_sdi_shell.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -40,6 +41,27 @@ static void log_heap(const char *label)
     ESP_LOGI(TAG, "Heap %s: internal=%u bytes, spiram=%u bytes",
              label, (unsigned)internal, (unsigned)spiram);
 }
+
+#if CONFIG_DECK_SDI_SELFTEST
+static void run_one(const char *name, deck_sdi_err_t (*fn)(void))
+{
+    deck_sdi_err_t r = fn();
+    if (r != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "%s selftest FAILED: %s", name, deck_sdi_strerror(r));
+    }
+}
+
+static void run_sdi_selftests(void)
+{
+    ESP_LOGI(TAG, "--- SDI selftests ---");
+    run_one("nvs",   deck_sdi_nvs_selftest);
+    run_one("fs",    deck_sdi_fs_selftest);
+    run_one("info",  deck_sdi_info_selftest);
+    run_one("time",  deck_sdi_time_selftest);
+    run_one("shell", deck_sdi_shell_selftest);
+    ESP_LOGI(TAG, "--- SDI selftests done ---");
+}
+#endif
 
 void app_main(void)
 {
@@ -67,24 +89,12 @@ void app_main(void)
     ESP_ERROR_CHECK(deck_sdi_fs_register_spiffs() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(deck_sdi_info_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(deck_sdi_time_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_shell_register_stub() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     deck_sdi_log_registered();
 
-    deck_sdi_err_t nvs_st = deck_sdi_nvs_selftest();
-    if (nvs_st != DECK_SDI_OK) {
-        ESP_LOGE(TAG, "NVS selftest FAILED: %s", deck_sdi_strerror(nvs_st));
-    }
-    deck_sdi_err_t fs_st = deck_sdi_fs_selftest();
-    if (fs_st != DECK_SDI_OK) {
-        ESP_LOGE(TAG, "FS selftest FAILED: %s", deck_sdi_strerror(fs_st));
-    }
-    deck_sdi_err_t info_st = deck_sdi_info_selftest();
-    if (info_st != DECK_SDI_OK) {
-        ESP_LOGE(TAG, "INFO selftest FAILED: %s", deck_sdi_strerror(info_st));
-    }
-    deck_sdi_err_t time_st = deck_sdi_time_selftest();
-    if (time_st != DECK_SDI_OK) {
-        ESP_LOGE(TAG, "TIME selftest FAILED: %s", deck_sdi_strerror(time_st));
-    }
+#if CONFIG_DECK_SDI_SELFTEST
+    run_sdi_selftests();
+#endif
 
     log_heap("idle");
 
