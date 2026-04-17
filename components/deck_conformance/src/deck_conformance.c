@@ -2,14 +2,17 @@
 #include "deck_runtime.h"
 #include "deck_alloc.h"
 #include "deck_intern.h"
+#include "deck_interp.h"
 #include "drivers/deck_sdi_info.h"
 #include "drivers/deck_sdi_time.h"
+#include "drivers/deck_sdi_fs.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -32,6 +35,102 @@ static row_t ROWS[] = {
 };
 
 #define N_ROWS (sizeof(ROWS) / sizeof(ROWS[0]))
+
+/* --- .deck test runner -------------------------------------------------
+ *
+ * Each deck_test_t points to a .deck bundled in the apps SPIFFS. We run it
+ * via deck_runtime_run_on_launch() while teeing ESP_LOG output into a
+ * capture buffer, then search for the sentinel line the test emits on
+ * success (canonical form: "DECK_CONF_OK:<name>"). Tests keep their noise
+ * low: capture buffer is 3 KB, intentionally small because the main task
+ * stack canary is sensitive and conformance runs at boot.
+ */
+
+typedef struct {
+    const char *name;
+    const char *path;      /* logical path passed to deck_sdi_fs_read —
+                            * driver prepends /deck mount point */
+    const char *sentinel;  /* expected substring in the log stream */
+    bool        passed;
+} deck_test_t;
+
+static deck_test_t DECK_TESTS[] = {
+    { "sanity", "/conformance/sanity.deck", "DECK_CONF_OK:sanity", false },
+};
+
+#define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))
+
+#define LOG_CAP_BYTES 3072
+static char             s_log_cap[LOG_CAP_BYTES];
+static size_t           s_log_len;
+static bool             s_capturing;
+static vprintf_like_t   s_prev_vprintf;
+
+static int conf_vprintf_hook(const char *fmt, va_list ap)
+{
+    if (s_capturing) {
+        va_list copy;
+        va_copy(copy, ap);
+        size_t avail = (LOG_CAP_BYTES - 1) - s_log_len;
+        if (avail > 0) {
+            int w = vsnprintf(s_log_cap + s_log_len, avail, fmt, copy);
+            if (w > 0) {
+                s_log_len += (size_t)w < avail ? (size_t)w : avail;
+                s_log_cap[s_log_len] = '\0';
+            }
+        }
+        va_end(copy);
+    }
+    return vprintf(fmt, ap);
+}
+
+static void capture_begin(void)
+{
+    s_log_len = 0;
+    s_log_cap[0] = '\0';
+    s_prev_vprintf = esp_log_set_vprintf(conf_vprintf_hook);
+    s_capturing = true;
+}
+
+static void capture_end(void)
+{
+    s_capturing = false;
+    esp_log_set_vprintf(s_prev_vprintf);
+}
+
+/* Buffer for .deck source — static to keep main task stack shallow. */
+#define DECK_TEST_SRC_CAP (16 * 1024)
+static char s_deck_src[DECK_TEST_SRC_CAP];
+
+static bool run_deck_test(deck_test_t *t)
+{
+    size_t n = DECK_TEST_SRC_CAP - 1;
+    deck_sdi_err_t rr = deck_sdi_fs_read(t->path, s_deck_src, &n);
+    if (rr != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "  test %s: FAIL — fs.read %s (%s)",
+                 t->name, t->path, deck_sdi_strerror(rr));
+        return false;
+    }
+    s_deck_src[n] = '\0';
+
+    capture_begin();
+    deck_err_t rc = deck_runtime_run_on_launch(s_deck_src, (uint32_t)n);
+    capture_end();
+
+    if (rc != DECK_RT_OK && rc != DECK_LOAD_OK) {
+        ESP_LOGE(TAG, "  test %s: FAIL — runtime error %s",
+                 t->name, deck_err_name(rc));
+        return false;
+    }
+
+    if (strstr(s_log_cap, t->sentinel) == NULL) {
+        ESP_LOGE(TAG, "  test %s: FAIL — sentinel \"%s\" not in log",
+                 t->name, t->sentinel);
+        return false;
+    }
+
+    return true;
+}
 
 /* Writes the JSON-line report to /deck/reports/dl1-<monotonic_ms>.json.
  * SPIFFS mount point is /deck (see deck_sdi_fs_spiffs.c); directories are
@@ -89,6 +188,19 @@ deck_err_t deck_conformance_run(void)
                  ROWS[i].passed ? "PASS" : "FAIL");
     }
 
+    /* --- .deck tests from SPIFFS --- */
+    uint32_t deck_pass = 0, deck_fail = 0;
+    if (N_DECK_TESTS > 0) {
+        ESP_LOGI(TAG, "--- .deck tests (%u) ---", (unsigned)N_DECK_TESTS);
+        for (size_t i = 0; i < N_DECK_TESTS; i++) {
+            DECK_TESTS[i].passed = run_deck_test(&DECK_TESTS[i]);
+            if (DECK_TESTS[i].passed) deck_pass++; else deck_fail++;
+            ESP_LOGI(TAG, "  %-24s %s",
+                     DECK_TESTS[i].name,
+                     DECK_TESTS[i].passed ? "PASS" : "FAIL");
+        }
+    }
+
     size_t heap_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     long   heap_delta = (long)heap_before - (long)heap_after;
 
@@ -96,6 +208,7 @@ deck_err_t deck_conformance_run(void)
     int  n = snprintf(json, sizeof(json),
       "{\"deck_level\":%d,\"deck_os\":%d,\"runtime\":\"%s\",\"edition\":%d,"
        "\"suites_total\":%u,\"suites_pass\":%u,\"suites_fail\":%u,"
+       "\"deck_tests_total\":%u,\"deck_tests_pass\":%u,\"deck_tests_fail\":%u,"
        "\"heap_used_during_suite\":%ld,"
        "\"intern_count\":%u,\"intern_bytes\":%u,"
        "\"deck_alloc_peak\":%u,\"deck_alloc_live\":%u,"
@@ -105,6 +218,7 @@ deck_err_t deck_conformance_run(void)
       deck_sdi_info_runtime_version(),
       deck_sdi_info_edition(),
       (unsigned)N_ROWS, (unsigned)passed, (unsigned)failed,
+      (unsigned)N_DECK_TESTS, (unsigned)deck_pass, (unsigned)deck_fail,
       heap_delta,
       (unsigned)deck_intern_count(),
       (unsigned)deck_intern_bytes(),
@@ -121,7 +235,7 @@ deck_err_t deck_conformance_run(void)
     ESP_LOGI(TAG, "%s", json);
     persist_report(json, (size_t)n);
 
-    if (failed > 0) return DECK_LOAD_INTERNAL;
+    if (failed > 0 || deck_fail > 0) return DECK_LOAD_INTERNAL;
     ESP_LOGI(TAG, "=== DL1 CONFORMANCE: PASS ===");
     return DECK_RT_OK;
 }
