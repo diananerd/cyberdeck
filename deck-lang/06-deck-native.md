@@ -1786,3 +1786,396 @@ case DVC_CHART:
 ```
 
 This is a developer-time warning, not a user-visible error. The Deck app is not notified and does not need to handle it — the content tree is always fully evaluated regardless of what the bridge can render.
+
+---
+
+## 22. CyberDeck LVGL Bridge: UI/UX Implementation Reference
+
+This section documents the concrete implementation decisions made by the CyberDeck LVGL bridge. It is a reference for this specific bridge — not a Deck runtime requirement. Other bridges (web, voice, watch) make entirely different decisions for the same semantic nodes.
+
+The CyberDeck board is a Waveshare ESP32-S3-Touch-LCD-4.3 (800×480 px RGB LCD, capacitive touch). The bridge renders using **LVGL 8.4** running on Core 1. The runtime task runs on Core 0. All LVGL API calls from the bridge require `ui_lock()` / `ui_unlock()`.
+
+---
+
+### 22.1 Design Language
+
+The CyberDeck bridge implements a **terminal-aesthetic GUI** — not a literal terminal, but a GUI with terminal visual grammar: monochromatic themes, outlined widgets, monospace-adjacent fonts, ALL-CAPS labels, black backgrounds.
+
+#### Colors
+
+Three theme sets, selected at runtime via the OS settings app. All themes share the same structure; only accent values differ.
+
+| Field | Green (Matrix) | Amber (Retro) | Neon (Cyberpunk) |
+|---|---|---|---|
+| `primary` | `#00FF41` | `#FFB000` | `#FF00FF` |
+| `primary_dim` | `#004D13` | `#4D3500` | dimmed magenta |
+| `bg_dark` | `#000000` | `#000000` | `#000000` |
+| `bg_card` | `#0A0A0A` | `#0A0A0A` | `#0A0A0A` |
+| `text_dim` | 50% primary opacity | 50% primary opacity | 50% primary opacity |
+| `secondary` | — | — | `#00FFFF` |
+| `accent` | — | — | `#FF0055` |
+
+Usage rules:
+- `primary` — active state, selected item, value text, focused borders, data values
+- `primary_dim` — inactive borders, disabled items, unimplemented stubs
+- `text_dim` — secondary info, captions, sub-labels (`LV_OPA_60`)
+- `bg_card` (`#0A0A0A`) — slightly raised surfaces (cards) to separate from pure-black background
+- Overlay backdrops: `LV_OPA_50` (confirm dialog), `LV_OPA_70` (loading screen)
+- Press feedback: `LV_OPA_20` bg fill on tap
+- Button press state: invert — bg becomes `primary`, text becomes `bg_dark`
+
+#### Typography
+
+Montserrat, all labels ALL-CAPS except toast messages.
+
+| Alias | Font | Use |
+|---|---|---|
+| `CYBERDECK_FONT_SM` | Montserrat 18 | Statusbar, captions, secondary text, dim labels, toasts |
+| `CYBERDECK_FONT_MD` | Montserrat 24 | Body text, list rows, data values, button labels |
+| `CYBERDECK_FONT_LG` | Montserrat 32 | App card icons |
+| `CYBERDECK_FONT_XL` | Montserrat 40 | System time, launcher icons, PIN dots |
+
+Field labels end with a colon-space: `"SSID:"`, `"IP:"`. The product name in the status bar is always the literal string `"CYBERDECK"`.
+
+Do not use Unicode arrows or bullets (→, ◀, ●) as string literals — only `LV_SYMBOL_*` macros or canvas-drawn graphics. Montserrat does not include those codepoints.
+
+#### Spacing
+
+| Context | Value |
+|---|---|
+| Content area padding | 16 px all sides |
+| Row gap in flex column | 14 px |
+| Section gap (unrelated groups) | 18 px transparent spacer |
+| List item padding | 12 px vertical / 8 px horizontal |
+| Grid gap | 12–16 px |
+| Dialog body padding | 24 px |
+| Dialog body row gap | 16 px |
+| Toast padding | 12 px horizontal / 6 px vertical |
+| Button row gap | 8 px |
+
+#### Borders and Radius
+
+| Widget | Border width | Radius | Side |
+|---|---|---|---|
+| Container / card | 2 px | 12–16 px | all |
+| Button | 2 px | 12 px | all |
+| Toast | 1 px | 2 px | all |
+| Dialog | 1 px | 2 px | all |
+| Text input | — | 8 px | all |
+| List item row | 1 px | 0 | BOTTOM only |
+| Navbar | 2 px | 0 | TOP (portrait) / LEFT (landscape) |
+| Scrollbar | 2 px wide | 0 | — |
+
+---
+
+### 22.2 Screen Structure
+
+Every `@flow` state transition results in a full screen replacement. The bridge maintains a screen per active state (LVGL `lv_scr_load()` — instant, no animation).
+
+Each screen has three LVGL layers stacked top-to-bottom:
+
+```
+┌───────────────────────────────────┐
+│  Statusbar  (height: 36 px)       │  lv_obj docked to top
+├───────────────────────────────────┤
+│                                   │
+│  Content area  (scrollable)       │  ui_common_content_area()
+│  flex column, pad_all=16,         │  fills remaining height
+│  pad_row=14                       │
+│                                   │
+├───────────────────────────────────┤
+│  Navbar  (height/width: 60 px)    │  docked to bottom (portrait)
+└───────────────────────────────────┘  or right edge (landscape)
+```
+
+In **landscape**, the navbar shifts to the right edge; the statusbar gains a right-side border. The bridge rebuilds all active screens via `ui_activity_recreate_all()` on rotation events — each screen reconstructs itself from current machine state (no intent data assumed non-NULL on recreate).
+
+**Statusbar** always shows: time, battery icon/percent, WiFi indicator, Bluetooth indicator. Title field shows the app name from `AppInfo.name`, ALL-CAPS. Reading from `app_state_get()` — never from a service directly.
+
+**Navbar** renders: back (left), home (center), task-switcher (right). Back is blocked by the OS nav lock when the lockscreen is active.
+
+---
+
+### 22.3 Semantic Node → LVGL Widget Mapping
+
+The bridge's `render_fn` traverses the `DeckViewContent*` tree and produces LVGL widgets:
+
+| DVC Node | LVGL rendering |
+|---|---|
+| `DVC_GROUP` | Section header label (`CYBERDECK_FONT_SM`, `text_dim`) + flex column container with `bg_card` background, 2 px `primary_dim` border, radius 12 |
+| `DVC_LIST` | Scrollable `lv_obj` flex column; each item is a row with 1 px bottom border, pad 12/8 |
+| `DVC_FORM` | Same as DVC_LIST but the action row (CANCEL / SAVE) is appended at the bottom by the bridge |
+| `DVC_DATA` | `lv_label` with `CYBERDECK_FONT_MD`, `primary` color |
+| `DVC_RICH_TEXT` | Multi-line `lv_label`, `CYBERDECK_FONT_MD`, `primary` color; markdown rendered as plain text with `*bold*` stripped (full markdown via §8 Deck Markdown capability when available) |
+| `DVC_STATUS` | Two-line pair: dim label (`CYBERDECK_FONT_SM`) above, primary value (`CYBERDECK_FONT_MD`) |
+| `DVC_MEDIA` | `lv_img` widget; asset resolved via `deck_asset_path()`. If loading fails: alt-text rendered as `DVC_DATA`. No network image loading on this bridge. |
+| `DVC_CHART` | Not supported on this bridge — logged once per view, node skipped |
+| `DVC_PROGRESS` | `lv_bar`, `primary` fill, `primary_dim` background |
+| `DVC_LOADING` | Full-screen semi-transparent overlay (`LV_OPA_70`) on `lv_layer_top()` with blinking `"_"` cursor at `CYBERDECK_FONT_XL`, centered (adjusted for navbar) |
+| `DVC_ERROR` | `lv_label` with `accent`/`#FF0055` color, `CYBERDECK_FONT_MD`, centered |
+| `DVC_NAVIGATE` | Tappable list row: label `CYBERDECK_FONT_MD` left, `LV_SYMBOL_RIGHT` right. On tap → `intent_fn("navigate", route_atom)` |
+| `DVC_TRIGGER` | Outlined button (`ui_common_btn`); full-width if alone, inline in button row if among siblings |
+| `DVC_CONFIRM` | Outlined button; on tap → OS confirm dialog on `lv_layer_top()` (not app-side) → on confirm → `intent_fn(name, deck_bool(true))` |
+| `DVC_CREATE` | Same as `DVC_NAVIGATE` but with `LV_SYMBOL_PLUS` prefix |
+| `DVC_TOGGLE` | `lv_switch`, `primary` when ON. On change → `intent_fn(name, deck_bool(state))` |
+| `DVC_RANGE` | `lv_slider` with min/max; label above shows current value. On release → `intent_fn(name, deck_float(val))` |
+| `DVC_CHOICE` | Tappable row showing current value; tap opens a list overlay on `lv_layer_top()`. On select → `intent_fn(name, value_atom)` |
+| `DVC_MULTISELECT` | Same as DVC_CHOICE but allows multiple selections; overlay shows checkmarks |
+| `DVC_TEXT` | `lv_textarea` with `CYBERDECK_FONT_MD`; keyboard shown on `on_resume` (never on `on_create`). On submit → `intent_fn(name, deck_str(text))` |
+| `DVC_PASSWORD` | Same as DVC_TEXT but `lv_textarea_set_password_mode(ta, true)` |
+| `DVC_PIN` | Grid of 4–8 `lv_btn` numpad keys + dot display. Dots use `LV_SYMBOL_BULLET` (filled) / `"-"` (empty). On complete → `intent_fn(name, deck_str(pin))` |
+| `DVC_DATE` | Tappable row showing formatted date; tap opens date picker overlay |
+| `DVC_SEARCH` | `lv_textarea` styled as search field with `LV_SYMBOL_SEARCH` prefix. On change → `intent_fn(name, deck_str(text))` per keystroke |
+| `DVC_SHARE` | Tappable row with `LV_SYMBOL_UPLOAD`; on tap → OS share sheet (system capability) |
+| `DVC_FLOW` | Renders the active step's children inline; machine name and active state stored in bridge's render context for diffing |
+
+**Clickable objects rule**: every `lv_obj` with `LV_OBJ_FLAG_CLICKABLE` must also clear `LV_OBJ_FLAG_CLICK_FOCUSABLE` to prevent the stuck-pressed visual bug.
+
+---
+
+### 22.4 Navigation: @flow States as Screens
+
+The bridge maintains its own back stack independent of the runtime's flow history:
+
+```c
+typedef struct {
+    lv_obj_t*   screen;      /* LVGL screen object */
+    char        state_name[32];
+    void*       state;       /* bridge-side screen state */
+    BridgeScreenCbs cbs;     /* on_create, on_resume, on_pause, on_destroy */
+} BridgeActivity;
+
+BridgeActivity g_activity_stack[4];  /* max depth 4; [0] = launcher always */
+int            g_activity_depth = 0;
+```
+
+**State transition → screen push**: when `render_fn` is called with a new state (detected by comparing `state_name` against the top of the bridge stack), the bridge pushes a new `BridgeActivity`, calls `lv_scr_load()`, and calls `on_create`.
+
+**`nav_back_fn` callback**: the bridge pops the top `BridgeActivity` — calls `on_destroy` on the popped screen (unregisters event handlers, deletes timers, frees state), then calls `lv_scr_load()` on the new top, then calls `on_resume`. Load order is always: load new screen first, destroy old screen after — prevents dangling `disp->act_scr`.
+
+**Maximum depth 4**: if depth is 4 when a new state arrives, the bridge evicts slot [1] (never [0] = launcher, never the current top), shifts remaining entries down, then pushes the new screen.
+
+**No animations**: `lv_scr_load()` with no transition. The terminal aesthetic foregoes slide/fade between screens. Only toasts and the loading overlay animate (fade-in + timer dismiss).
+
+**Rotation** (`EVT_DISPLAY_ROTATED`): calls `on_destroy` + `on_create` on every active screen. Screens reconstruct from current machine state and `app_state_get()` — never from intent data (may be NULL on recreate).
+
+---
+
+### 22.5 Lists and Collections
+
+`DVC_LIST` → scrollable flex column (`LV_FLEX_FLOW_COLUMN`). The bridge renders all items; pagination is not used on this display (480 px is manageable). If `deck_node_more()` is true, a `"LOAD MORE"` button is appended.
+
+`DVC_GROUP` → section with an 18 px transparent spacer above it (via `ui_common_section_gap()`), followed by a dim section label. Nested groups increase padding by 8 px. Dividers (`ui_common_divider()`) are valid only inside list containers, not between groups.
+
+**Grid layout** (used by Launcher for app icons): `LV_FLEX_FLOW_ROW_WRAP`, center-aligned. 5 columns in landscape, 3 columns in portrait. Cell: flex column, icon `CYBERDECK_FONT_LG` on top, name `CYBERDECK_FONT_SM` below, gap 4 px. Implemented by the Launcher's bridge screen — not a generic DVC node.
+
+---
+
+### 22.6 Forms and Input
+
+`DVC_FORM` renders all children, then appends a primary action button at the bottom. The bridge infers the submit label from the form's first `DVC_TRIGGER` child if present, otherwise uses `"SAVE"`.
+
+**Action row pattern** (bottom of screen):
+```
+ui_common_spacer(content)          ← absorbs remaining space
+lv_obj_t* row = ui_common_action_row(content);
+lv_obj_t* sec = ui_common_btn(row, "CANCEL");
+lv_obj_t* pri = ui_common_btn(row, submit_label);
+ui_common_btn_style_primary(pri);  ← filled, right-aligned
+```
+
+**Auto-save vs explicit save**:
+- Non-destructive interactions (`DVC_TOGGLE`, `DVC_RANGE`, `DVC_CHOICE`): bridge calls `intent_fn` immediately on each change. No Save button.
+- Text inputs (`DVC_TEXT`, `DVC_PASSWORD`): bridge calls `intent_fn` on keyboard confirm (checkmark), not on every keystroke. The textarea shows a blinking cursor at `primary` color.
+- Destructive actions (`DVC_CONFIRM`): always require explicit confirmation via OS dialog.
+
+**Keyboard timing rule**: never show the software keyboard in `on_create`. Show it in `on_resume` — the screen must be the active display before the keyboard appears.
+
+---
+
+### 22.7 Overlays: Toasts, Dialogs, Loading
+
+All overlays render on `lv_layer_top()`, independent of the activity stack.
+
+**Toast** (`deck_bridge_show_toast(msg, duration_ms)`):
+- Centered in content area (shifted by `UI_NAVBAR_THICK/2` for navbar)
+- `bg_card` fill, 1 px `primary` border, radius 2, pad 12/6
+- `CYBERDECK_FONT_SM`, `text` color
+- Durations: success/confirmation → 1200–1500 ms; informational → 2000 ms
+
+**Confirm dialog** (triggered by OS for `DVC_CONFIRM` and `@on back :confirm`):
+- Semi-transparent black backdrop (`LV_OPA_50`)
+- Dialog box: 380 px wide, `bg_dark` fill, 1 px `primary_dim` border, radius 2
+- Title polygon: 28 px canvas at top, parallelogram shape (`A(0,0)─B(W-1,0)─C(W-H,H-1)─D(0,H-1)`), fill `primary_dim`. Title text: `CYBERDECK_FONT_SM`, bold-by-double-draw. Canvas buffer heap-allocated with `lv_mem_alloc`, freed before dialog backdrop deletion (on dismiss).
+- Body: `pad_all=24`, `pad_row=16`, description at `CYBERDECK_FONT_MD`, `primary` color
+- Buttons: [CANCEL] outline, [OK] filled primary. On dismiss: free canvas buffer → delete backdrop → invoke callback (in that order, so callback can safely push activities).
+
+**Loading overlay** (`DVC_LOADING`):
+- Full-screen semi-transparent black (`LV_OPA_70`)
+- `"_"` cursor at `CYBERDECK_FONT_XL`, `primary` color, centered (adjusted for navbar)
+- Blinks at 500 ms via `lv_timer`
+- Automatically shown by the bridge when the runtime emits `VCLoading {}` during `@on launch`
+
+---
+
+### 22.8 Bridge Initialization and Thread Safety
+
+The LVGL bridge runs on Core 1 as `lvgl_task`. The runtime runs on Core 0 as `deck_runtime_task`. `render_fn` is called from the runtime task — it must acquire `ui_lock(timeout_ms)` before touching any LVGL object.
+
+```c
+void cyberdeck_render_fn(const char* view_name,
+                          DeckViewContent* content,
+                          void* ctx) {
+    if (!ui_lock(50)) {
+        /* Could not acquire lock in 50ms — runtime will retry on next cycle */
+        DECK_LOG_WARN("render_fn: ui_lock timeout for view '%s'", view_name);
+        return;
+    }
+    /* Traverse content tree, update LVGL widgets */
+    bridge_update_screen(view_name, content, (BridgeCtx*)ctx);
+    ui_unlock();
+}
+```
+
+Event handlers (touch callbacks registered by the bridge on LVGL objects) execute on Core 1. They call `intent_fn` directly — `intent_fn` is thread-safe (it enqueues a MSG to the runtime queue).
+
+```c
+static void toggle_cb(lv_event_t* e) {
+    ToggleData* d = lv_event_get_user_data(e);
+    bool new_val  = lv_obj_has_state(d->sw, LV_STATE_CHECKED);
+    DeckValue* v  = deck_bool(new_val);
+    d->cfg->intent_fn(d->view_name, d->field_name, v, d->cfg->render_ctx);
+    deck_value_free(v);
+}
+```
+
+Timers created by the bridge (scroll refresh, toast dismiss, loading blink) run on Core 1 and may not call `intent_fn` directly — they must enqueue to the bridge's own message queue which is processed on Core 1 before the LVGL tick.
+
+---
+
+## 23. Service Instance Lifecycle
+
+This section documents how OS/bridge services integrate with the app lifecycle. Every capability that maintains in-memory state (`api_client`, `cache`, `mqtt`, `db` connection pool, `network.http` session, TLS trust map) must implement these hooks.
+
+### 23.1 Capability Instance Model
+
+Each app gets its own **capability instance** for every capability it declares in `@use`. Instances are created when the app VM is loaded (Stage 4 of the Loader, after type checking) and destroyed when the VM is destroyed. They are never shared across apps.
+
+```c
+/* Every stateful capability registers a DeckCapLifecycle struct. */
+typedef struct DeckCapLifecycle {
+    /* Called once after the VM is loaded, before @on launch runs.
+       Use to initialize per-app state: sessions, caches, TLS trust map. */
+    void (*on_vm_load)(DeckCapInstance* inst, const char* app_id,
+                       DeckTlsTrustMap* trust_map);
+
+    /* Called when the app moves to foreground (first time or after resume).
+       May restart timers, re-open pooled connections, re-subscribe. */
+    void (*on_app_resume)(DeckCapInstance* inst);
+
+    /* Called when the app moves to background.
+       Should pause non-essential work (cache writes, heartbeat timers).
+       Must NOT cancel in-flight effects — those complete independently. */
+    void (*on_app_suspend)(DeckCapInstance* inst);
+
+    /* Called when the app is being destroyed (terminate or eviction).
+       Must cancel all timers, close connections, free all heap.
+       The runtime gives the app 500ms; this is called synchronously
+       within that window. Must not block. */
+    void (*on_vm_destroy)(DeckCapInstance* inst);
+} DeckCapLifecycle;
+```
+
+The runtime calls these in-order. `on_vm_load` always fires before `@on launch`. `on_vm_destroy` always fires after `@on terminate` completes (or after the 500ms window expires, whichever comes first).
+
+### 23.2 Lifecycle Event Sequence
+
+```
+App launch (deck_os_launch):
+  1. Loader stages 0-12 (asset verification, type checking, etc.)
+  2. For each capability instance: on_vm_load(inst, app_id, trust_map)
+     → api_client: initialize session, load trust map certs into TLS context
+     → cache: allocate memory region tagged with app_id
+     → mqtt: prepare client ID = "deck/{app_id}/{uuid}"
+     → db: open SQLite file at /sdcard/{app_id}/app.db
+  3. @on launch hook runs (may call effects)
+  4. @flow entry initialized, first render
+
+App suspend (deck_os_suspend):
+  1. @on suspend hook runs
+  2. For each capability instance: on_app_suspend(inst)
+     → api_client: pause retry timers; keep session/token in memory
+     → cache: pause TTL eviction timer
+     → mqtt: send MQTT PINGREQ to keep connection alive (or disconnect if battery: :efficient)
+  3. Heap snapshot → PSRAM
+
+App resume (deck_os_resume):
+  1. Heap restored from PSRAM
+  2. For each capability instance: on_app_resume(inst)
+     → api_client: resume retry timers; session/token still valid
+     → cache: resume TTL eviction timer
+     → mqtt: verify connection alive, reconnect if needed
+  3. @on resume hook runs
+  4. Navigation Manager re-renders current state
+
+App terminate (deck_os_terminate):
+  1. @on terminate hook runs (500ms max)
+  2. For each capability instance: on_vm_destroy(inst)
+     → api_client: cancel all pending requests; free session; discard TLS trust map
+     → cache: free memory region
+     → mqtt: MQTT DISCONNECT; free client
+     → db: close SQLite handle; flush WAL
+  3. VM heap freed
+  4. Process removed from registry
+```
+
+### 23.3 TLS Trust Map Handoff
+
+The trust map is built during Stage 0 (asset verification) from `@assets for_domain:` declarations and passed to `on_vm_load` as `DeckTlsTrustMap*`:
+
+```c
+typedef struct {
+    const char*    hostname;      /* exact or "*.prefix" */
+    const uint8_t* ca_cert_pem;   /* NULL if not declared */
+    size_t         ca_cert_len;
+    const uint8_t* client_cert_pem; /* NULL if no mutual TLS */
+    size_t         client_cert_len;
+} DeckTlsTrustEntry;
+
+typedef struct {
+    DeckTlsTrustEntry* entries;
+    int                count;
+} DeckTlsTrustMap;
+```
+
+The bridge resolves asset bytes at this point (before `@on launch`) using `deck_asset_bytes()`. The capability receives already-loaded PEM bytes — it does not need to call back into the asset system during request handling.
+
+`api_client` feeds these into its underlying TLS context (e.g., `esp_tls_cfg_t.cacert_buf`) keyed by hostname. On each outgoing connection, it looks up the hostname in its internal copy before the TLS handshake.
+
+### 23.4 In-Flight Effects at Suspend/Terminate
+
+**At suspend**: in-flight effects (`net.fetch!()`, `db.query!()`, etc.) continue running in their bridge tasks — they are not cancelled. When they complete:
+- The bridge enqueues `MSG_EFFECT_DONE { vm_id, result }`
+- `deck_runtime_task` receives it
+- If the VM is suspended: the result is held in `held_task_msgs` and applied when the VM resumes
+- The Deck continuation resumes normally when the app returns to foreground
+
+**At terminate**: in-flight effects are cancelled via `deck_vm_cancel_pending_effects()` (step 2 of the teardown sequence in §22.4). The bridge calls `esp_http_client_cleanup()` / abort on active tasks. Any queued `MSG_EFFECT_DONE` for the terminated VM is discarded by the runtime (VM ID no longer exists in the registry).
+
+### 23.5 Background Task Effects at Suspend
+
+Background tasks (`is_background = true`) that run while the app is suspended follow the same continuation model. When a background task triggers an effect (e.g., `net.fetch!()`):
+
+1. The effect dispatcher calls `on_vm_load` was already called — the capability instance is available in PSRAM (serialized with the heap snapshot)
+2. The bridge restores the capability's session state from the snapshot
+3. The effect runs in the bridge task
+4. On completion: `MSG_EFFECT_DONE` is enqueued; the runtime briefly restores the VM to apply the continuation (see §17.4)
+
+The capability instance state (session token, TLS context) is included in the PSRAM heap snapshot. Capabilities that hold OS-level handles (open file descriptors, socket handles) must implement `on_app_suspend` to save the handle metadata and `on_app_resume` to reopen them — raw OS handles cannot be serialized.
+
+### 23.6 What Services Must NOT Do
+
+- **Hold raw OS handles across suspend**: file descriptors, socket handles, timer handles are not serializable to PSRAM. Save metadata; reopen on resume.
+- **Assume app_id is stable after terminate**: once `on_vm_destroy` fires, the instance must not queue any new work for this app_id.
+- **Access the VM heap directly**: capability instances are C structs managed by the bridge. They must not call `deck_vm_*` functions from `on_app_suspend` or `on_vm_destroy` — those are called while the runtime lock is held and will deadlock.
+- **Block in on_vm_destroy**: the 500ms window is shared with `@on terminate`. Capability teardown must be non-blocking (cancel and return; let pending callbacks fire into a dead VM and be discarded).

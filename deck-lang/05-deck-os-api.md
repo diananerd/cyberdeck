@@ -269,6 +269,7 @@ High-level HTTP client with session state, response caching, retry logic, and au
 - `json` field in `ApiResponse` is auto-populated if `Content-Type: application/json`
 - Rate limiting: on 429, the client reads `Retry-After` and defers retry automatically (counts as one of `retry_count`)
 - Caching: responses with `cache_ttl` set are cached by path; `invalidate` clears by exact path, `invalidate_prefix` by prefix
+- **TLS cert resolution**: before opening any TLS connection, `api_client` checks the app's TLS trust map (built at load time from `@assets for_domain:` declarations). If the target hostname matches an entry, the associated CA cert and/or client cert are applied automatically — no need to pass them in `configure()` or per-request options. Explicit `tls_ca_cert` in a request overrides the trust map for that call.
 
 `api_client` requires `@permissions network.http reason: "..."`.
 

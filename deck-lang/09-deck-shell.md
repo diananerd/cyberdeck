@@ -16,7 +16,7 @@ El runtime gestiona exactamente **una instancia de app activa en pantalla** en u
 │              Display (OS Bridge)                │
 ├─────────────────────────────────────────────────┤
 │         App activa (foreground)                 │
-│         su @machine nav, sus machines           │
+│         su @flow de entrada, sus @machine       │
 ├─────────────────────────────────────────────────┤
 │  App suspendida  │  App suspendida  │   ...      │
 ├─────────────────────────────────────────────────┤
@@ -32,7 +32,7 @@ El runtime gestiona exactamente **una instancia de app activa en pantalla** en u
 
 ## 2. El Stack de Apps del OS
 
-Distinto del `@machine` de navegación de una app individual, el OS mantiene su propio stack de apps:
+Distinto del `@flow` de entrada de una app individual, el OS mantiene su propio stack de apps:
 
 ```
 OS App Stack (top = foreground):
@@ -58,21 +58,21 @@ OS App Stack (top = foreground):
 El botón/gesto de back tiene una semántica de dos niveles:
 
 **Nivel 1 — Dentro de la app (primero):**
-El runtime verifica si el `@machine` Nav de la app activa está en un estado distinto al `initial`. Si sí, el runtime dispara la transición `to history` del Nav machine — la app consume el evento, el OS nunca lo ve. El bridge restaura el contexto visual anterior.
+El runtime verifica si el `@flow` de entrada de la app activa tiene history disponible (ha visitado estados distintos al `initial` via transiciones `to history`). Si sí, el runtime dispara la transición `to history` — la app consume el evento, el OS nunca lo ve. El bridge restaura el contexto visual anterior.
 
 ```
-@machine Nav de Notes.app — estados visitados:
+@flow Nav de Notes.app — estados visitados:
   [2]  :reader    ← activo
   [1]  :editor
   [0]  :list      ← initial (root)
 
-Back #1 → Nav machine revierte a :editor  (to history, dentro de la app)
-Back #2 → Nav machine revierte a :list    (to history, dentro de la app)
-Back #3 → OS nivel 2  (Nav machine está en :list = initial, no hay más history)
+Back #1 → flow revierte a :editor  (to history, dentro de la app)
+Back #2 → flow revierte a :list    (to history, dentro de la app)
+Back #3 → OS nivel 2  (flow está en :list = initial, no hay más history)
 ```
 
 **Nivel 2 — App en su root:**
-Cuando la app está en el root de su `@machine` de navegación, el runtime evalúa en este orden:
+Cuando la app está en el estado initial de su `@flow` de entrada, el runtime evalúa en este orden:
 
 1. ¿La app declaró `@on back`? → ejecuta ese hook; si retorna `:handled`, el OS no hace nada más
 2. ¿La app declaró `@on back` y retorna `:unhandled`? → continúa al paso 3
@@ -132,6 +132,7 @@ El Task Manager puede:
 apps.running ()               -> [AppInfo]
 apps.suspended ()             -> [AppInfo]
 apps.installed ()             -> [AppInfo]
+apps.search! (query: str)     -> [AppInfo]   -- busca por nombre/id entre installed()
 apps.bring_to_front (id: str) -> unit
 apps.launch (id: str)         -> Result unit system.Error
 apps.launch_url (id: str, url: str) -> Result unit system.Error
@@ -176,6 +177,9 @@ typedef struct DeckVMInstance {
     Timestamp    suspended_at;
     uint8_t*     thumbnail;         /* PNG capturado al suspender */
     size_t       thumbnail_size;
+    /* Main tasks hold their MSG_TASK_RUN messages here while suspended;
+       re-enqueued to the runtime queue when the VM is next foregrounded. */
+    QueueHandle_t held_task_msgs;   /* FreeRTOS queue, capacity = task count */
 } DeckVMInstance;
 ```
 
@@ -249,7 +253,7 @@ void deck_os_on_back_button(DeckOSRuntime* rt) {
 
     /* Paso 1: ¿Puede la app consumir el back internamente? */
     if (deck_vm_nav_can_go_back(app->vm)) {
-        /* El nav machine de la app tiene history > root */
+        /* El @flow de entrada de la app tiene history > root */
         deck_vm_nav_go_back(app->vm);
         return;
     }
@@ -292,20 +296,19 @@ static void deck_os_return_to_previous(DeckOSRuntime* rt) {
 }
 ```
 
-### 5.2 Modals y el Back Button
+### 5.2 Estados "Modal" y el Back Button
 
-Los modals del `@machine` de una app tienen interacción especial con el back button:
+En el modelo `@flow`, no existe la keyword `modal:`. Cualquier estado que el bridge presente visualmente como un modal (sheet, overlay, diálogo) es simplemente un estado del `@flow` de la app. La transición `to history` lo revierte igual que cualquier otro estado.
 
 ```
-@machine Nav de la app — con modal:
-  modal: :compose       ← estado modal activo
-  stack: [:timeline]    ← debajo del modal
+@flow Nav de la app — estado :compose activo (bridge lo presenta como modal):
+  history: [:timeline]    ← estados visitados antes de :compose
 
-Back → Nav machine revierte :compose a :timeline vía to history
+Back → runtime emite FLOW_BACK → bridge revierte :compose a :timeline
      → no suspende la app, no va al OS
 ```
 
-El runtime evalúa en orden: modals primero, history stack después, OS al final.
+El runtime evalúa en orden: history del flow primero, `@on back` hook después, OS al final.
 
 ### 5.3 Deep Links
 
@@ -346,19 +349,20 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
   name:    "Home"
   id:      "system.launcher"
   version: "1.0.0"
+  entry:   Launcher
 
 @use
   system.apps   as apps
   system.shell  as shell
   storage.local as store
-  ./flows/home_view
-  ./flows/task_switcher_view
-  ./flows/search_view
+  ./flows/home_flow
+  ./flows/task_switcher_flow
+  ./flows/search_flow
 
-@machine Launcher
-  state :home
-  state :task_switcher
-  state :search (query: str)
+@flow Launcher
+  state :home          flow: HomeFlow
+  state :task_switcher flow: TaskSwitcherFlow
+  state :search        flow: SearchFlow
 
   initial :home
 
@@ -366,41 +370,27 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
     from :home
     to   :task_switcher
 
-  transition :dismiss_tasks  from :task_switcher  to :home
+  transition :dismiss_tasks   from :task_switcher  to :home
+
   transition :show_search
     from :home
-    to   :search (query: "")
-  transition :update_query (query: str)
-    from :search _
-    to   :search (query: query)
-  transition :dismiss_search  from :search _  to :home
+    to   :search
+
+  transition :dismiss_search  from :search  to :home
 
 @on launch
   shell.set_status_bar(true)
   shell.set_navigation_bar(true)
 
 @on resume
-  Launcher.send(:dismiss_tasks)
-  Launcher.send(:dismiss_search)
-
-@machine Nav
-  state :home
-  state :search
-
-  initial :home
-  root: HomeView
-
-  push
-    :search -> SearchView
-
-  modal
-    :tasks -> TaskSwitcherView
+  Launcher.send!(:dismiss_tasks)
+  Launcher.send!(:dismiss_search)
 ```
 
 ```deck
--- launcher/flows/home_view.deck
+-- launcher/flows/home_flow.deck
 
-@flow HomeView
+@flow HomeFlow
 
   step :idle _ ->
     content =
@@ -419,23 +409,22 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
         list
           items: apps.installed!()
           item app ->
-            navigate
+            trigger
               label: app.name
               icon:  match app.icon | :some s -> s | :none -> "?"
-              to:    :app_launched
-              params: (app_id: app.id)
+              -> apps.launch!(app.id)
         trigger
           label: "Apps recientes"
           -> Launcher.send!(:show_tasks)
         trigger
           label: "Buscar"
-          -> Nav.send!(:search)
+          -> Launcher.send!(:show_search)
 ```
 
 ```deck
--- launcher/flows/task_switcher_view.deck
+-- launcher/flows/task_switcher_flow.deck
 
-@flow TaskSwitcherView
+@flow TaskSwitcherFlow
 
   step :visible _ ->
     content =
@@ -459,6 +448,148 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
               message: "Close {app.name}?"
               -> apps.kill!(app.id)
 ```
+
+```deck
+-- launcher/flows/search_flow.deck
+
+@flow SearchFlow
+
+  step :active (query: str = "") ->
+    content =
+      group
+        input
+          label: "BUSCAR"
+          value: query
+          -> q -> SearchFlow.send!(:update (query: q))
+        list
+          items: apps.search!(query)
+          item app ->
+            trigger
+              label: app.name
+              icon:  match app.icon | :some s -> s | :none -> "?"
+              -> apps.launch!(app.id)
+        trigger
+          label: "Cancelar"
+          -> Launcher.send!(:dismiss_search)
+
+  transition :update (query: str)
+    from :active _
+    to   :active (query: query)
+```
+
+---
+
+## 6.1 El Task Manager
+
+El Task Manager es la segunda app del sistema, con `app.id: "system.taskmanager"`. Siempre está instalada — es la única app que puede mostrar el árbol de procesos y forzar cierres. Se activa mediante un gesto largo en el botón Home o un botón dedicado según el `.deck-os` del board.
+
+A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser suspendido por presión de memoria — aunque el OS lo prioriza sobre apps de usuario.
+
+```deck
+-- taskmanager/app.deck
+
+@app
+  name:    "Task Manager"
+  id:      "system.taskmanager"
+  version: "1.0.0"
+  entry:   TaskManager
+
+@use
+  system.apps   as apps
+  system.tasks  as tasks
+  system.shell  as shell
+
+@stream ProcessSnapshot
+  from: tasks.cpu_watch()
+
+@flow TaskManager
+  state :process_list  flow: ProcessListFlow
+  state :app_detail    flow: AppDetailFlow
+
+  initial :process_list
+
+  transition :show_detail (app_id: str)
+    from :process_list
+    to   :app_detail (app_id: app_id)
+
+  transition :back
+    from :app_detail _
+    to   history
+
+@on launch
+  shell.set_status_bar(true)
+  shell.set_navigation_bar(true)
+```
+
+```deck
+-- taskmanager/flows/process_list_flow.deck
+
+@flow ProcessListFlow
+
+  step :idle _ ->
+    content =
+      group
+        list
+          items: ProcessSnapshot.last() |> unwrap_opt_or([])
+                   |> filter(p -> p.kind is :main)
+          item p ->
+            group
+              data: "{p.app_id}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%"
+              list
+                items: ProcessSnapshot.last() |> unwrap_opt_or([])
+                         |> filter(bg -> bg.app_id == p.app_id
+                                      and bg.kind is :background)
+                item bg ->
+                  group
+                    data: "  ↳ {unwrap_opt(bg.task_name)}  {bg.state}  {bg.heap_kb} KB"
+                    confirm
+                      label:   "Stop task"
+                      message: "Cancelar {unwrap_opt(bg.task_name)}?"
+                      -> tasks.kill_task!(bg.app_id, unwrap_opt(bg.task_name))
+              when not p.app_id == "system.launcher"
+                navigate
+                  label: "Ver detalle"
+                  to:    :show_detail
+                  params: (app_id: p.app_id)
+              when not p.app_id == "system.launcher"
+                confirm
+                  label:   "Kill {p.app_id}"
+                  message: "Forzar cierre de {p.app_id}?"
+                  -> tasks.kill!(p.app_id)
+```
+
+```deck
+-- taskmanager/flows/app_detail_flow.deck
+
+@flow AppDetailFlow
+
+  step :idle (app_id: str) ->
+    let storage = tasks.storage!(app_id)
+    content =
+      group
+        data: "App: {app_id}"
+        group
+          data: "Almacenamiento local: {storage.local_kb} KB"
+          data: "Base de datos: {storage.db_kb} KB"
+          data: "NVS: {storage.nvs_bytes} bytes"
+        list
+          items: ProcessSnapshot.last() |> unwrap_opt_or([])
+                   |> filter(p -> p.app_id == app_id)
+          item p ->
+            group
+              data: "{p.kind}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%  uptime {p.uptime_ms}ms"
+              when p.kind is :background
+                confirm
+                  label:   "Stop {unwrap_opt(p.task_name)}"
+                  message: "Cancelar este background task?"
+                  -> tasks.kill_task!(p.app_id, unwrap_opt(p.task_name))
+        confirm
+          label:   "Kill app"
+          message: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
+          -> tasks.kill!(app_id)
+```
+
+**Protecciones del OS**: el Task Manager no puede matar al Launcher (`system.launcher`) ni a sí mismo. El bridge de `system.tasks.kill()` verifica el `app_id` y retorna `:unauthorized` si alguno de los dos es el objetivo.
 
 ---
 
@@ -523,6 +654,69 @@ La capability `system.shell` está disponible únicamente para apps cuyo `app.id
   stack     : str
   occurred  : Timestamp
 ```
+
+### 7.1 system.apps — App Lifecycle Capability
+
+```
+@capability system.apps
+  running         ()                          -> [AppInfo]
+  suspended       ()                          -> [AppInfo]
+  installed       ()                          -> [AppInfo]
+  search!         (query: str)                -> [AppInfo]
+  bring_to_front  (id: str)                   -> unit
+  launch!         (id: str)                   -> Result unit system.Error
+  launch_url!     (id: str, url: str)         -> Result unit system.Error
+  kill            (id: str)                   -> unit
+
+  @errors
+    :not_found     "App not installed"
+    :already_front "App is already in foreground"
+    :unauthorized  "Only system apps can use this capability"
+
+@type AppInfo
+  id           : str
+  name         : str
+  version      : str
+  icon         : str?
+  thumbnail    : [byte]?
+  suspended_at : Timestamp?
+  is_launcher  : bool
+```
+
+### 7.2 system.tasks — Process Monitor Capability
+
+```
+@capability system.tasks
+  tree          ()                              -> [ProcessEntry]
+  kill          (app_id: str)                   -> unit
+  kill_task     (app_id: str, task_name: str)   -> unit
+  storage!      (app_id: str)                   -> StorageInfo
+  cpu_watch     ()                              -> Stream [ProcessEntry]
+  -- cpu_watch emits an updated snapshot every 5 s.
+
+  @errors
+    :not_found     "App or task not found"
+    :unauthorized  "Only system apps can use this capability"
+
+@type ProcessEntry
+  id         : str          -- "bsky.app" | "bsky.app:SyncPosts"
+  app_id     : str
+  kind       : :main | :background
+  task_name  : str?         -- nil for :main
+  state      : ProcessState
+  heap_kb    : int
+  cpu_pct    : float        -- rolling 5 s average (0.0–100.0)
+  uptime_ms  : int
+
+@type ProcessState = :running | :suspended | :waiting_effect | :idle | :dead
+
+@type StorageInfo
+  local_kb   : int
+  db_kb      : int
+  nvs_bytes  : int
+```
+
+`system.tasks` is available only to apps whose `app.id` starts with `system.`. The Loader rejects any other app that declares it in `@use`.
 
 ---
 
@@ -1075,6 +1269,7 @@ typedef struct {
     esp_timer_handle_t timer;          /* NULL si no tiene every: */
     bool               cond_satisfied; /* última evaluación de when: */
     bool               running;        /* true mientras el body se ejecuta */
+    bool               is_background;  /* @task background: true — sobrevive suspension */
 } TaskEntry;
 ```
 
@@ -1128,6 +1323,51 @@ HTTP request completa (en task del bridge):
 ```
 
 Este modelo permite que las VMs esperen I/O sin bloquear el runtime para otros mensajes. El runtime es cooperativo a nivel de evaluador Deck, pero nunca bloquea el OS thread.
+
+### 17.4 Main Task vs Background Task — Ciclo de Vida en el Runtime
+
+El campo `background: bool` de `@task` cambia cómo el Scheduler maneja la tarea cuando la VM no está en foreground.
+
+**App en foreground**: ambos tipos ejecutan normalmente en `deck_runtime_task` cuando sus condiciones se cumplen.
+
+**App suspendida** — comportamiento diverge:
+
+*Main task (`is_background = false`):*
+```
+timer dispara → callback encola MSG_TASK_RUN { vm_id, task_name }
+  → deck_runtime_task lo recibe
+  → ¿VM suspendida? → sí
+  → mueve el mensaje a DeckVMInstance.held_task_msgs
+  → timer se re-arma para el próximo intervalo (el reloj sigue corriendo)
+
+App vuelve al foreground (deck_os_resume):
+  → se vacía held_task_msgs → mensajes re-encolados en runtime queue
+  → tasks se ejecutan en orden de llegada (lo antes posible)
+```
+
+*Background task (`is_background = true`):*
+```
+timer dispara → callback encola MSG_TASK_BG_RUN { vm_id, task_name }
+  → deck_runtime_task lo recibe
+  → ¿VM suspendida? → sí; no importa — el background task ejecuta igual
+  → restaura VM de PSRAM a SRAM (heap_snapshot → vm->heap)
+  → evalúa when: conditions en la VM restaurada
+  → si true: ejecuta el run_body en el evaluador
+     - efectos (!db, !net, !nvs) funcionan normalmente
+     - Machine.send() actualiza machine state en la VM
+     - NO se llama deck_bridge_render() — no hay UI mientras está suspendida
+  → re-serializa VM a PSRAM
+  → timer se re-arma
+
+App vuelve al foreground (deck_os_resume):
+  → Navigation Manager ve el machine state actualizado
+  → llama deck_bridge_render() con el contenido del nuevo estado
+  → el bridge muestra la UI actualizada sin que el dev escriba código de restauración
+```
+
+**Navegación intra-app no afecta tasks.** Cambiar de `:timeline` a `:compose` vía `to history` o cualquier transición del `@flow` no pausa ni detiene ningún `@task`. Los tasks corren a nivel de VM, no de flow state. El Condition Tracker sí re-evalúa condiciones `when:` cuando la machine cambia de estado — eso es lo único que la navegación afecta en el scheduler.
+
+**App terminada** (`@on terminate`): todos los timers se cancelan con `esp_timer_stop()` + `esp_timer_delete()`. El held_task_msgs se vacía y destruye. La VM no ejecuta más trabajo.
 
 ---
 
@@ -1309,7 +1549,7 @@ VM lanzada (deck_os_launch)
   → Durante @on launch: bridge muestra VCLoading {} automáticamente
     (el runtime emite un loading placeholder hasta que @on launch termina)
   → @on launch retorna
-  → @machine Nav inicializado en su initial state
+  → @flow de entrada inicializado en su initial state
   → Navigation Manager evalúa content= del initial state
   → deck_bridge_render() con el primer DeckViewContent*
   → Bridge crea widgets, muestra la pantalla
@@ -1514,3 +1754,169 @@ El teardown siempre ocurre en este orden exacto:
 ```
 
 El orden importa: primero se desregistra todo (pasos 2–5) para que no lleguen más eventos o callbacks mientras la VM se destruye en el paso 7. El destroy de la VM es siempre lo último porque los pasos 2–5 necesitan acceder a ella para cancelar sus suscripciones activas.
+
+---
+
+## 23. Modelo de Procesos: Task Manager
+
+### 23.1 Árbol de Procesos
+
+Cada app en el OS app stack se representa como un árbol de procesos. El root es el proceso main; los background tasks son sus hijos. Comparten `app_id` como namespace; kill del root mata todo el árbol.
+
+```
+OS Process Tree:
+
+social.bsky.app          kind: :main        [RUNNING]   heap: 128 KB  cpu: 2.3%
+  └── SyncPosts          kind: :background  [IDLE]      heap:   8 KB  cpu: 0.0%
+  └── PollNotifs         kind: :background  [WAITING]   heap:   6 KB  cpu: 0.1%
+
+reader.app               kind: :main        [SUSPENDED] heap:  64 KB  cpu: 0.0%
+
+system.launcher          kind: :main        [RUNNING]   heap:  32 KB  cpu: 0.1%
+```
+
+**IDs:**
+- Proceso main: `app_id` (e.g., `"social.bsky.app"`)
+- Background task: `app_id + ":" + task_name` (e.g., `"social.bsky.app:SyncPosts"`)
+
+El `kind: :main` agrupa toda la evaluación del `@flow` de entrada, los main tasks (`background: false`), y el effect context de la VM. Los background tasks son nodos independientes que comparten el mismo heap físico pero tienen su propio ciclo de vida.
+
+### 23.2 Contabilidad de CPU en el Runtime
+
+El evaluador incrementa un contador por cada instrucción despachada. Se añade `eval_cycles` y campos de ventana temporal a `DeckVMInstance`:
+
+```c
+typedef struct DeckVMInstance {
+    /* ... campos existentes ... */
+    uint64_t  eval_cycles_total;   /* ciclos acumulados desde el launch */
+    uint64_t  eval_cycles_window;  /* ciclos en la ventana de 5 s actual */
+    uint32_t  window_start_ms;     /* timestamp de inicio de la ventana */
+} DeckVMInstance;
+```
+
+Un `esp_timer` periódico de 5 s en el OS runtime calcula el porcentaje de CPU:
+
+```c
+static void cpu_accounting_timer_cb(void* arg) {
+    DeckOSRuntime* rt = (DeckOSRuntime*)arg;
+    uint32_t now_ms   = esp_timer_get_time() / 1000;
+
+    /* Actualizar stats de la VM foreground y todas las suspendidas */
+    for each vm in (rt->foreground, rt->suspended[], rt->launcher) {
+        uint32_t elapsed = now_ms - vm->window_start_ms;
+        if (elapsed == 0) continue;
+
+        /* Porcentaje = ciclos en la ventana / (elapsed_ms * ciclos_por_ms_max) */
+        float pct = (float)vm->eval_cycles_window
+                  / (float)(elapsed * DECK_MAX_CYCLES_PER_MS) * 100.0f;
+        vm->cpu_pct_snapshot = fminf(pct, 100.0f);
+
+        vm->eval_cycles_window = 0;
+        vm->window_start_ms    = now_ms;
+    }
+}
+```
+
+`DECK_MAX_CYCLES_PER_MS` es calibrado al iniciar el runtime (primer boot: benchmark de ciclos vacíos por ms en el hardware actual).
+
+### 23.3 Implementación de system.tasks.tree()
+
+El bridge implementa `tree()` como una lectura sincrónica del OS runtime state. Puede ser llamada desde el `deck_runtime_task` con `ui_lock` no necesario (no toca LVGL):
+
+```c
+DeckValue* deck_cap_tasks_tree(DeckRuntime* rt, DeckValue** args, int nargs) {
+    DeckOSRuntime* os = (DeckOSRuntime*)rt->os_ctx;
+    DeckValueList* list = deck_list_new();
+
+    /* Iterar todas las VMs: foreground, suspended, launcher */
+    DeckVMInstance* all_vms[] = { os->foreground, os->launcher };
+    /* + os->suspended[0..suspended_count-1] */
+
+    for each vm in all_vms {
+        /* Proceso main */
+        deck_list_push(list, make_process_entry(vm, NULL));
+
+        /* Background tasks */
+        DeckScheduler* sched = vm->vm->scheduler;
+        for (int i = 0; i < sched->task_count; i++) {
+            TaskEntry* t = &sched->tasks[i];
+            if (t->is_background && !t->dead)
+                deck_list_push(list, make_process_entry(vm, t));
+        }
+    }
+
+    return deck_list_to_value(list);
+}
+
+static DeckValue* make_process_entry(DeckVMInstance* vm, TaskEntry* task) {
+    bool is_bg = (task != NULL);
+    char id[96];
+    if (is_bg) snprintf(id, sizeof(id), "%s:%s", vm->app_id, task->name);
+    else        strncpy(id, vm->app_id, sizeof(id));
+
+    ProcessState state = is_bg
+        ? (task->running ? PROC_RUNNING : task->cond_satisfied ? PROC_IDLE : PROC_WAITING)
+        : vm_state_to_proc_state(vm->state);
+
+    return deck_record_new("ProcessEntry",
+        "id",        deck_str(id),
+        "app_id",    deck_str(vm->app_id),
+        "kind",      is_bg ? deck_atom("background") : deck_atom("main"),
+        "task_name", is_bg ? deck_str(task->name) : deck_none(),
+        "state",     deck_atom(proc_state_name(state)),
+        "heap_kb",   deck_int(is_bg ? task->heap_bytes / 1024
+                                    : (int)(vm->heap_size / 1024)),
+        "cpu_pct",   deck_float(vm->cpu_pct_snapshot),  /* bg tasks share VM cpu */
+        "uptime_ms", deck_int((int)(esp_timer_get_time()/1000 - vm->launch_time_ms)),
+        NULL);
+}
+```
+
+### 23.4 Kill Semántica
+
+```
+system.tasks.kill(app_id)
+  → deck_os_terminate(rt, vm)          ← secuencia completa de teardown (§22.4)
+  → aplica a main + todos los bg tasks
+  → bg tasks quedan dead en la misma llamada (sus timers se cancelan en paso 5)
+
+system.tasks.kill_task(app_id, task_name)
+  → find TaskEntry en vm->scheduler->tasks[] por nombre
+  → esp_timer_stop(entry->timer)
+  → esp_timer_delete(entry->timer)
+  → entry->dead = true; entry->running = false
+  → la VM sigue viva; el @flow de entrada sigue en pantalla
+  → no dispara @on terminate de la app
+  → el Condition Tracker elimina las when: conditions del task muerto
+```
+
+El task manager UI puede usar `system.tasks.kill_task()` para cancelar un sync que lleva demasiado tiempo sin matar la app entera. El runtime no dispara ningún hook en el task muerto — la limpieza es responsabilidad del bridge (cancelar el timer es suficiente; si el task estaba en mitad de un efecto, el effect dispatcher recibe un `MSG_EFFECT_DONE` que el runtime descarta al ver el task marcado como dead).
+
+### 23.5 cpu_watch: Stream de Actualizaciones
+
+`system.tasks.cpu_watch()` retorna un `Stream [ProcessEntry]` que emite cada 5 s (sincronizado con el timer de contabilidad de CPU). El task manager app puede declarar:
+
+```deck
+@stream ProcessSnapshot
+  from: tasks.cpu_watch()
+
+step :active _ ->
+  content =
+    list
+      items: ProcessSnapshot.recent(1) |> unwrap_opt_or([])
+      item p ->
+        group
+          data: "{p.id}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%"
+          when p.kind is :main
+            confirm
+              label:   "Kill {p.app_id}"
+              message: "Forzar cierre de {p.app_id}?"
+              -> tasks.kill!(p.app_id)
+          when p.kind is :background
+            confirm
+              label:   "Stop {p.task_name}"
+              message: "Cancelar background task {p.task_name}?"
+              -> tasks.kill_task!(p.app_id, unwrap_opt(p.task_name))
+```
+
+El stream no emite más frecuente que 5 s aunque el OS internamente muestree más rápido. La throttle está en el bridge que implementa la capability.

@@ -536,6 +536,114 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   commit   : str?
 ```
 
+### 4.9 Privileged System Capabilities
+
+These capabilities are available only to apps whose `app.id` starts with `"system."`. The Loader rejects any other app that declares them in `@use`. They expose the OS app stack and process monitor to system apps (Launcher, Task Manager, Lock Screen).
+
+```
+@capability system.apps
+  running         ()                        -> [AppInfo]
+  suspended       ()                        -> [AppInfo]
+  installed       ()                        -> [AppInfo]
+  search!         (query: str)              -> [AppInfo]
+  bring_to_front  (id: str)                 -> unit
+  launch!         (id: str)                 -> Result unit system.Error
+  launch_url!     (id: str, url: str)       -> Result unit system.Error
+  kill            (id: str)                 -> unit
+
+  @errors
+    :not_found     "App not installed"
+    :already_front "App is already in foreground"
+    :unauthorized  "Only system apps can use this capability"
+
+@type AppInfo
+  id           : str
+  name         : str
+  version      : str
+  icon         : str?
+  thumbnail    : [byte]?
+  suspended_at : Timestamp?
+  is_launcher  : bool
+
+@capability system.tasks
+  tree          ()                              -> [ProcessEntry]
+  kill          (app_id: str)                   -> unit
+  kill_task     (app_id: str, task_name: str)   -> unit
+  storage!      (app_id: str)                   -> StorageInfo
+  cpu_watch     ()                              -> Stream [ProcessEntry]
+  -- cpu_watch emits an updated [ProcessEntry] snapshot every 5 s.
+
+  @errors
+    :not_found     "App or task not found"
+    :unauthorized  "Only system apps can use this capability"
+
+@type ProcessEntry
+  id         : str          -- "bsky.app" | "bsky.app:SyncPosts"
+  app_id     : str
+  kind       : :main | :background
+  task_name  : str?         -- nil for :main entries
+  state      : ProcessState
+  heap_kb    : int
+  cpu_pct    : float        -- rolling 5 s average (0.0–100.0)
+  uptime_ms  : int
+
+@type ProcessState = :running | :suspended | :waiting_effect | :idle | :dead
+
+@type StorageInfo
+  local_kb   : int
+  db_kb      : int
+  nvs_bytes  : int
+
+@capability system.shell
+  -- Status and navigation bars
+  set_status_bar       (visible: bool)   -> unit
+  set_status_bar_style (style: atom)     -> unit
+  status_bar_height    ()                -> int   @pure
+  set_navigation_bar   (visible: bool)   -> unit
+  navigation_bar_height()                -> int   @pure
+
+  -- Display
+  set_brightness    (level: float)       -> unit
+  get_brightness    ()                   -> float @pure
+  set_always_on     (on: bool)           -> unit
+  screen_timeout    ()                   -> Duration @pure
+  set_screen_timeout(d: Duration)        -> unit
+
+  -- System state (read-only mirror, for system apps that need it without @use)
+  battery_level  ()  -> int   @pure
+  wifi_ssid      ()  -> str?  @pure
+  bluetooth_on   ()  -> bool  @pure
+  storage_available() -> int  @pure
+
+  -- OS app stack control
+  push_app       (id: str)  -> unit
+  pop_to_launcher()         -> unit
+
+  -- Notifications and crash
+  post_notification    (opts: SysNotifOpts) -> unit
+  clear_notification   (id: str)            -> unit
+  clear_all_notifications ()               -> unit
+  report_crash         (info: CrashInfo)   -> unit
+
+  @errors
+    :unauthorized "Only system apps can use this capability"
+
+@type SysNotifOpts
+  id      : str
+  title   : str
+  message : str
+  app_id  : str
+  icon    : str?
+  url     : str?
+  expires : Duration?
+
+@type CrashInfo
+  app_id   : str
+  message  : str
+  stack    : str
+  occurred : Timestamp
+```
+
 ---
 
 ## 5. Events

@@ -886,6 +886,24 @@ send(:event, args)
 
 **No stack management in the runtime.** There is no push/pop/replace API in the Navigation Manager. The `@machine` and `@flow` state graphs replace the stack; `to history` is the only escape hatch for platform-level back navigation.
 
+### 9.3.1 `@flow` Hierarchical Evaluation
+
+When a `@flow` state references a sub-flow (`state :x flow: SubFlow`), the Navigation Manager resolves content hierarchically:
+
+```
+@flow Launcher in state :home (flow: HomeFlow)
+  → Navigation Manager looks up HomeFlow's active step
+  → Evaluates HomeFlow's active step content= body
+  → Wraps result in VCFlow { machine: "HomeFlow", active_state: :idle, children: [...] }
+  → Calls deck_bridge_render() with the VCFlow node as root content
+```
+
+The bridge receives the `VCFlow` node and renders the active step's content. It also receives the machine name and active state atom so it can apply appropriate transitions when the sub-flow changes state.
+
+When a sub-flow fires `to history`, the Navigation Manager checks whether there are previous states in the sub-flow's history. If the sub-flow is at its initial state, `to history` propagates to the parent flow (if any), or emits `FLOW_BACK` to the OS bridge as a cross-app back signal.
+
+**Depth is bounded.** `@flow` nesting is validated at load time (Stage 7). Circular `flow:` references are a load error. Maximum evaluated depth matches the evaluator's frame stack limit.
+
 ### 9.4 View Re-render Trigger
 
 Triggered by:

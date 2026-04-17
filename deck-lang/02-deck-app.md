@@ -935,6 +935,20 @@ Navigation topology is expressed through the structure of the root `@flow` (or `
 
 May use any `!effect` capability declared in `@use`. Runs in its own effect context. Unhandled errors are logged; the task is eligible to run again on the next trigger. Tasks do not crash the app.
 
+### 14.4 Task Lifecycle and App State
+
+Tasks are **app-level constructs**, not flow-level. Their lifecycle is tied to the app VM, not to which `@flow` state is currently active.
+
+**App in foreground**: all tasks (main and background) are eligible to run when their conditions are met.
+
+**App suspended** (OS backgrounds the app):
+- `background: false` (default — "main task"): the timer keeps ticking, but when it fires the runtime holds the pending run until the app is next foregrounded. The task doesn't execute while the app is suspended.
+- `background: true`: the task executes even while the app is suspended. The runtime temporarily restores the VM, runs the task body (including `!effect` calls and `Machine.send()`), then re-suspends. The UI does not re-render until the app returns to the foreground — but machine state is already up to date when it does, so no restoration code is needed.
+
+**Navigation is orthogonal to task scheduling.** Moving between flow states — navigating to `:compose`, going back via `to history`, entering a sub-flow — does not pause or affect any `@task`. The only thing navigation changes in the scheduler is that `when:` conditions referencing machine state are re-evaluated after each `Machine.send()` (see §8.3 of 04-deck-runtime.md).
+
+**App terminated**: all tasks stop immediately. Timers are cancelled. A background task in the middle of a run gets 500ms (same as `@on terminate`) before the VM is force-killed.
+
 ---
 
 ## 15. @migration — Data Evolution
@@ -1239,13 +1253,15 @@ Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesi
 ```deck
 @assets
   required:
-    icon:        assets/icon.png          as :icon
-    api_cert:    assets/certs/api.pem     as :api_cert
+    icon:         assets/icon.png                  as :icon
+    bsky_ca:      assets/certs/bsky_ca.pem         as :cert_bsky        for_domain: "bsky.social"
+    bsky_client:  assets/certs/bsky_client.pem     as :client_cert_bsky for_domain: "bsky.social"
+    plc_ca:       assets/certs/plc_ca.pem          as :cert_plc         for_domain: "plc.directory"
 
   optional:
-    splash:      assets/splash.png        as :splash
-    custom_font: assets/fonts/custom.ttf  as :custom_font
-    beep:        assets/audio/beep.wav    as :beep
+    splash:       assets/splash.png                as :splash
+    custom_font:  assets/fonts/custom.ttf          as :custom_font
+    beep:         assets/audio/beep.wav            as :beep
 
   data:
     seed_db: assets/data/seed.db  as :seed_db
@@ -1256,6 +1272,7 @@ Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesi
 - **`required:`** — deben existir al cargar. Si falta cualquiera, el Loader falla en Stage 0 listando todos los archivos ausentes. La app no se lanza.
 - **`optional:`** — pueden estar ausentes. En runtime, `asset(:name)` retorna `:err :not_found` si el archivo no existe. La app maneja esto normalmente.
 - **`data:`** — archivos copiados al app storage antes de que corra `@on launch`. `copy_to:` es relativo al directorio de storage de la app. `on: :first_launch` significa "copiar solo si el destino no existe todavía" — no sobreescribe datos del usuario en actualizaciones.
+- **`for_domain: "hostname"`** — asocia el cert al hostname dado. El OS construye un TLS trust map al cargar la app; `api_client` y `net.fetch!()` lo usan automáticamente. Ver §19.7.
 
 ### 19.3 Tipos de Asset
 
@@ -1264,8 +1281,8 @@ Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesi
 | `:icon` | PNG RGBA, 64×64 mínimo | Launcher grid, task switcher |
 | `:splash` | PNG, cualquier tamaño | Pantalla durante @on launch |
 | `:image_*` | PNG / JPEG | Nodos `VCMedia` |
-| `:cert_*` | PEM (CA certificate) | Pasado al TLS stack en `net.fetch!()` |
-| `:client_cert_*` | PEM (client certificate) | Mutual TLS en `net.fetch!()` |
+| `:cert_*` | PEM (CA certificate) | TLS trust map automático si tiene `for_domain:`; o pasado manualmente en `net.fetch!()` |
+| `:client_cert_*` | PEM (client certificate) | Mutual TLS — igual que `:cert_*` con `for_domain:`, o pasado manualmente |
 | `:font_*` | TTF / OTF | Fuente personalizada, registrada en el bridge renderer |
 | `:audio_*` | WAV / MP3 | `system.audio.play!()` capability |
 | `:seed_db` | SQLite 3 | Copiado a app storage en first launch |
@@ -1283,8 +1300,12 @@ media
   alt:    "App logo"
 
 -- En un @on hook o @task (con efectos)
-net.fetch!(url, tls_ca_cert: asset(:api_cert))
-net.fetch!(url, tls_ca_cert: asset(:api_cert), tls_client_cert: asset(:client_cert))
+-- Si el dominio tiene for_domain: en @assets, los certs se aplican automáticamente:
+net.fetch!("https://bsky.social/xrpc/app.bsky.feed.getTimeline")
+
+-- Para dominios sin for_domain:, o para override puntual:
+net.fetch!(url, tls_ca_cert: asset(:cert_bsky))
+net.fetch!(url, tls_ca_cert: asset(:cert_bsky), tls_client_cert: asset(:client_cert_bsky))
 ```
 
 `asset(name: atom) -> AssetRef` — retorna un handle opaco. No carga el archivo en el heap de Deck. El bridge resuelve el path real cuando la capability lo necesita. El heap de Deck nunca contiene los bytes crudos de imágenes, certs, ni audio, salvo que la app los pida explícitamente.
@@ -1331,7 +1352,34 @@ Stage 0: ASSET VERIFICATION (antes de todo lo demás)
     Si copy_to + on: :first_launch:
       Verificar si el destino existe en app storage
       Si no existe → encolar copia (el bridge la ejecuta antes de @on launch)
+  Para cada entry con for_domain::
+    Verificar que el átomo sea :cert_* o :client_cert_*
+    Si no → load error "for_domain: only valid on cert assets"
+    Añadir al TLS trust map del app: domain → {ca?, client?}
+    El trust map persiste en la instancia de capability (net, api_client)
+    hasta que el app termina — no se reconstruye en suspend/resume
 ```
+
+### 19.7 TLS Trust Map — Certs por Dominio
+
+Cuando una entrada de `@assets` declara `for_domain: "hostname"`, el OS construye un **TLS trust map** durante el Stage 0 y lo pasa a las capabilities `net` y `api_client` al inicializar la instancia de esa app. Desde ese momento:
+
+- Toda conexión TLS a ese hostname usa automáticamente el CA cert asociado (verificación de servidor)
+- Si hay un `:client_cert_*` con el mismo `for_domain:`, se usa también para mutual TLS sin que el código Deck lo especifique
+
+```
+TLS trust map (por instancia de app):
+  "bsky.social"    → { ca: AssetRef(:cert_bsky),  client: AssetRef(:client_cert_bsky) }
+  "plc.directory"  → { ca: AssetRef(:cert_plc),   client: nil }
+```
+
+**Matching de dominio:**
+- Exacto: `"bsky.social"` aplica solo a `bsky.social`, no a `cdn.bsky.social`
+- Wildcard: `"*.bsky.social"` aplica a cualquier subdominio directo (`cdn.bsky.social`, `api.bsky.social`), no al root ni a subdominios de segundo nivel
+
+**Override manual:** pasar `tls_ca_cert: asset(:name)` en `net.fetch!()` tiene precedencia sobre el trust map para esa llamada específica.
+
+**El trust map no persiste entre lanzamientos.** Es un artefacto de la instancia de capability en memoria — se destruye con la VM en `@on terminate`. No hay estado en NVS ni en storage. Cada launch reconstruye el trust map desde `@assets`.
 
 La verificación de assets ocurre antes del module graph (Stage 1), antes del OS surface (Stage 2), y antes de cualquier type checking. Una app que no puede cargar sus certificados no vale la pena parsear.
 
