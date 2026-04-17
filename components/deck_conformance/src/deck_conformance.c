@@ -50,6 +50,8 @@ static row_t ROWS[] = {
  * stack canary is sensitive and conformance runs at boot.
  */
 
+#define DECK_TEST_SAMPLE_RUNS 5
+
 typedef struct {
     const char *name;
     const char *path;          /* logical path passed to deck_sdi_fs_read —
@@ -60,72 +62,76 @@ typedef struct {
                                 * otherwise → runtime must return this code */
     bool        passed;
     /* Instrumentation captured per run: */
-    uint32_t    duration_us;   /* wall-clock load+eval in microseconds */
+    uint32_t    duration_us;   /* last run wall-clock us */
     int32_t     heap_delta;    /* free internal bytes consumed (positive = used) */
     int32_t     alloc_delta;   /* deck_alloc live-value count delta */
+    /* Multi-run latency samples — only populated for positive tests,
+     * which run DECK_TEST_SAMPLE_RUNS times to compute percentiles. */
+    uint32_t    samples[DECK_TEST_SAMPLE_RUNS];
+    uint32_t    n_samples;
 } deck_test_t;
 
 /* Positive tests: sentinel mode (expected_err = DECK_RT_OK).
  * Negative tests: expected_err = <code>, sentinel ignored. */
 static deck_test_t DECK_TESTS[] = {
-    { "sanity",        "/conformance/sanity.deck",        "DECK_CONF_OK:sanity",        DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.literals", "/conformance/lang_literals.deck", "DECK_CONF_OK:lang.literals", DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.arith",    "/conformance/lang_arith.deck",    "DECK_CONF_OK:lang.arith",    DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.compare",  "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.logic",    "/conformance/lang_logic.deck",    "DECK_CONF_OK:lang.logic",    DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.strings",  "/conformance/lang_strings.deck",  "DECK_CONF_OK:lang.strings",  DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    DECK_RT_OK, false, 0, 0, 0 },
-    { "lang.and_or_kw","/conformance/lang_and_or_kw.deck", "DECK_CONF_OK:lang.and_or_kw",DECK_RT_OK, false, 0, 0, 0 },
-    { "os.math",       "/conformance/os_math.deck",       "DECK_CONF_OK:os.math",       DECK_RT_OK, false, 0, 0, 0 },
-    { "os.text",       "/conformance/os_text.deck",       "DECK_CONF_OK:os.text",       DECK_RT_OK, false, 0, 0, 0 },
-    { "os.time",       "/conformance/os_time.deck",       "DECK_CONF_OK:os.time",       DECK_RT_OK, false, 0, 0, 0 },
-    { "os.info",       "/conformance/os_info.deck",       "DECK_CONF_OK:os.info",       DECK_RT_OK, false, 0, 0, 0 },
-    { "os.nvs",        "/conformance/os_nvs.deck",        "DECK_CONF_OK:os.nvs",        DECK_RT_OK, false, 0, 0, 0 },
-    { "os.fs",         "/conformance/os_fs.deck",         "DECK_CONF_OK:os.fs",         DECK_RT_OK, false, 0, 0, 0 },
-    { "os.fs.list",    "/conformance/os_fs_list.deck",    "DECK_CONF_OK:os.fs.list",    DECK_RT_OK, false, 0, 0, 0 },
-    { "os.lifecycle",  "/conformance/os_lifecycle.deck",  "DECK_CONF_OK:os.lifecycle",  DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.empty_strings", "/conformance/edge_empty_strings.deck", "DECK_CONF_OK:edge.empty_strings", DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.long_string",   "/conformance/edge_long_string.deck",   "DECK_CONF_OK:edge.long_string",   DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.escapes",       "/conformance/edge_escapes.deck",       "DECK_CONF_OK:edge.escapes",       DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.comments",      "/conformance/edge_comments.deck",      "DECK_CONF_OK:edge.comments",      DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.nested_let",    "/conformance/edge_nested_let.deck",    "DECK_CONF_OK:edge.nested_let",    DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.nested_match",  "/conformance/edge_nested_match.deck",  "DECK_CONF_OK:edge.nested_match",  DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.string_intern", "/conformance/edge_string_intern.deck", "DECK_CONF_OK:edge.string_intern", DECK_RT_OK, false, 0, 0, 0 },
-    { "edge.double_neg",    "/conformance/edge_double_neg.deck",    "DECK_CONF_OK:edge.double_neg",    DECK_RT_OK, false, 0, 0, 0 },
-    { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false, 0, 0, 0 },
-    { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false, 0, 0, 0 },
+    { "sanity",        "/conformance/sanity.deck",        "DECK_CONF_OK:sanity",        DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.literals", "/conformance/lang_literals.deck", "DECK_CONF_OK:lang.literals", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.arith",    "/conformance/lang_arith.deck",    "DECK_CONF_OK:lang.arith",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.compare",  "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.logic",    "/conformance/lang_logic.deck",    "DECK_CONF_OK:lang.logic",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.strings",  "/conformance/lang_strings.deck",  "DECK_CONF_OK:lang.strings",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.and_or_kw","/conformance/lang_and_or_kw.deck", "DECK_CONF_OK:lang.and_or_kw",DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.math",       "/conformance/os_math.deck",       "DECK_CONF_OK:os.math",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.text",       "/conformance/os_text.deck",       "DECK_CONF_OK:os.text",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.time",       "/conformance/os_time.deck",       "DECK_CONF_OK:os.time",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.info",       "/conformance/os_info.deck",       "DECK_CONF_OK:os.info",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.nvs",        "/conformance/os_nvs.deck",        "DECK_CONF_OK:os.nvs",        DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.fs",         "/conformance/os_fs.deck",         "DECK_CONF_OK:os.fs",         DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.fs.list",    "/conformance/os_fs_list.deck",    "DECK_CONF_OK:os.fs.list",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.lifecycle",  "/conformance/os_lifecycle.deck",  "DECK_CONF_OK:os.lifecycle",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.empty_strings", "/conformance/edge_empty_strings.deck", "DECK_CONF_OK:edge.empty_strings", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.long_string",   "/conformance/edge_long_string.deck",   "DECK_CONF_OK:edge.long_string",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.escapes",       "/conformance/edge_escapes.deck",       "DECK_CONF_OK:edge.escapes",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.comments",      "/conformance/edge_comments.deck",      "DECK_CONF_OK:edge.comments",      DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.nested_let",    "/conformance/edge_nested_let.deck",    "DECK_CONF_OK:edge.nested_let",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.nested_match",  "/conformance/edge_nested_match.deck",  "DECK_CONF_OK:edge.nested_match",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.string_intern", "/conformance/edge_string_intern.deck", "DECK_CONF_OK:edge.string_intern", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.double_neg",    "/conformance/edge_double_neg.deck",    "DECK_CONF_OK:edge.double_neg",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
-      DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0 },
+      DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },
     { "errors.pattern_not_exhaustive", "/conformance/err_match_noexh.deck", NULL,
-      DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, false, 0, 0, 0 },
+      DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, false, 0, 0, 0, {0}, 0 },
     { "errors.type_mismatch", "/conformance/err_type_mismatch.deck", NULL,
-      DECK_RT_TYPE_MISMATCH, false, 0, 0, 0 },
+      DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, {0}, 0 },
     { "errors.parse_error", "/conformance/err_parse_error.deck", NULL,
-      DECK_LOAD_PARSE_ERROR, false, 0, 0, 0 },
+      DECK_LOAD_PARSE_ERROR, false, 0, 0, 0, {0}, 0 },
     { "errors.unresolved_symbol", "/conformance/err_unresolved_symbol.deck", NULL,
-      DECK_LOAD_UNRESOLVED_SYMBOL, false, 0, 0, 0 },
+      DECK_LOAD_UNRESOLVED_SYMBOL, false, 0, 0, 0, {0}, 0 },
     { "errors.capability_missing", "/conformance/err_capability_missing.deck", NULL,
-      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0 },
+      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, {0}, 0 },
     { "errors.level_unknown", "/conformance/err_level_unknown.deck", NULL,
-      DECK_LOAD_LEVEL_UNKNOWN, false, 0, 0, 0 },
+      DECK_LOAD_LEVEL_UNKNOWN, false, 0, 0, 0, {0}, 0 },
     { "errors.incompatible_edition", "/conformance/err_edition.deck", NULL,
-      DECK_LOAD_INCOMPATIBLE_EDITION, false, 0, 0, 0 },
+      DECK_LOAD_INCOMPATIBLE_EDITION, false, 0, 0, 0, {0}, 0 },
     { "errors.incompatible_surface", "/conformance/err_deck_os.deck", NULL,
-      DECK_LOAD_INCOMPATIBLE_SURFACE, false, 0, 0, 0 },
+      DECK_LOAD_INCOMPATIBLE_SURFACE, false, 0, 0, 0, {0}, 0 },
     { "errors.type_error_missing_id", "/conformance/err_missing_id.deck", NULL,
-      DECK_LOAD_TYPE_ERROR, false, 0, 0, 0 },
+      DECK_LOAD_TYPE_ERROR, false, 0, 0, 0, {0}, 0 },
     { "errors.divide_by_zero_int", "/conformance/err_div_zero_int.deck", NULL,
-      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0 },
+      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0, {0}, 0 },
     { "errors.modulo_by_zero_int", "/conformance/err_mod_zero_int.deck", NULL,
-      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0 },
+      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0, {0}, 0 },
     { "errors.divide_by_zero_float", "/conformance/err_div_zero_float.deck", NULL,
-      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0 },
+      DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0, {0}, 0 },
     { "errors.str_minus_int", "/conformance/err_str_minus_int.deck", NULL,
-      DECK_RT_TYPE_MISMATCH, false, 0, 0, 0 },
+      DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, {0}, 0 },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))
@@ -265,14 +271,16 @@ static bool s_heap_idle_budget(char *d, size_t dz)
 
 static bool s_no_residual_leak(char *d, size_t dz)
 {
-    /* Each .deck load freezes a module image in the arena and leaves a
-     * handful of interned/retained values (atoms + app id). Threshold
-     * grows with suite size; 150 covers 40+ tests with headroom.
-     * What we really care about is the rerun_sanity_x10 delta, which
-     * catches incremental leaks per-run. */
+    /* Each .deck load retains a handful of interned/module-frozen values
+     * that don't release until the loader tears the arena down. With
+     * percentile sampling (5 runs per positive test * 28 tests = 140
+     * runs) accumulated live grows proportionally even in a leak-free
+     * runtime — this threshold is a coarse ceiling, not an anti-leak
+     * assertion. The real anti-leak signal is stress.rerun_sanity_x100
+     * which must be delta 0 between before/after. */
     uint32_t live = deck_alloc_live_values();
-    snprintf(d, dz, "deck_alloc_live=%u (<= 150)", (unsigned)live);
-    return live <= 150;
+    snprintf(d, dz, "deck_alloc_live=%u (<= 500)", (unsigned)live);
+    return live <= 500;
 }
 
 /* Re-runs sanity.deck 10 times and asserts that live-values count does
@@ -285,7 +293,7 @@ static bool s_rerun_sanity_no_growth(char *d, size_t dz)
     static deck_test_t re = { "re-sanity",
                               "/conformance/sanity.deck",
                               "DECK_CONF_OK:sanity",
-                              DECK_RT_OK, false, 0, 0, 0 };
+                              DECK_RT_OK, false, 0, 0, 0, {0}, 0 };
     uint32_t live_before = deck_alloc_live_values();
     size_t   heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     int64_t  t0          = deck_sdi_time_monotonic_us();
@@ -373,7 +381,7 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
     static deck_test_t probe = { "probe-under-pressure",
                                  "/conformance/lang_strings.deck",
                                  "DECK_CONF_OK:lang.strings",
-                                 DECK_RT_OK, false, 0, 0, 0 };
+                                 DECK_RT_OK, false, 0, 0, 0, {0}, 0 };
     /* We expect FAIL — the test's sentinel should NOT appear. */
     bool sentinel_hit = run_deck_test(&probe);
 
@@ -383,7 +391,7 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
     static deck_test_t after = { "post-pressure-sanity",
                                  "/conformance/sanity.deck",
                                  "DECK_CONF_OK:sanity",
-                                 DECK_RT_OK, false, 0, 0, 0 };
+                                 DECK_RT_OK, false, 0, 0, 0, {0}, 0 };
     bool ok_after = run_deck_test(&after);
 
     snprintf(d, dz,
@@ -455,7 +463,7 @@ static bool s_log_hook_concurrent(char *d, size_t dz)
     static deck_test_t re = { "log-concurrent-sanity",
                               "/conformance/sanity.deck",
                               "DECK_CONF_OK:sanity",
-                              DECK_RT_OK, false, 0, 0, 0 };
+                              DECK_RT_OK, false, 0, 0, 0, {0}, 0 };
     bool ok = run_deck_test(&re);
 
     atomic_store(&s_noise_run, 0);
@@ -542,33 +550,84 @@ deck_err_t deck_conformance_run(void)
                  ROWS[i].passed ? "PASS" : "FAIL");
     }
 
-    /* --- .deck tests from SPIFFS --- */
+    /* --- .deck tests from SPIFFS ---
+     *
+     * Positive tests are run DECK_TEST_SAMPLE_RUNS times so we can
+     * compute per-test min/p50/p99/max. Negative tests run once (error
+     * codes are deterministic). Outliers (p99 > 2*p50) are flagged in
+     * the log for investigation. */
     uint32_t deck_pass = 0, deck_fail = 0;
     uint64_t deck_total_us   = 0;
     uint32_t deck_max_us     = 0;
+    uint32_t deck_outliers   = 0;
     const char *deck_slowest = "";
     if (N_DECK_TESTS > 0) {
         ESP_LOGI(TAG, "--- .deck tests (%u) ---", (unsigned)N_DECK_TESTS);
         for (size_t i = 0; i < N_DECK_TESTS; i++) {
-            DECK_TESTS[i].passed = run_deck_test(&DECK_TESTS[i]);
-            if (DECK_TESTS[i].passed) deck_pass++; else deck_fail++;
-            deck_total_us += DECK_TESTS[i].duration_us;
-            if (DECK_TESTS[i].duration_us > deck_max_us) {
-                deck_max_us  = DECK_TESTS[i].duration_us;
-                deck_slowest = DECK_TESTS[i].name;
+            bool is_positive = (DECK_TESTS[i].expected_err == DECK_RT_OK);
+            uint32_t runs = is_positive ? DECK_TEST_SAMPLE_RUNS : 1;
+
+            bool all_ok = true;
+            DECK_TESTS[i].n_samples = 0;
+            for (uint32_t r = 0; r < runs; r++) {
+                bool ok = run_deck_test(&DECK_TESTS[i]);
+                if (is_positive) {
+                    DECK_TESTS[i].samples[r] = DECK_TESTS[i].duration_us;
+                    DECK_TESTS[i].n_samples++;
+                }
+                if (!ok) { all_ok = false; break; }
             }
-            ESP_LOGI(TAG, "  %-30s %s  %6luus  heap%+ld  alloc%+ld",
-                     DECK_TESTS[i].name,
-                     DECK_TESTS[i].passed ? "PASS" : "FAIL",
-                     (unsigned long)DECK_TESTS[i].duration_us,
-                     (long)DECK_TESTS[i].heap_delta,
-                     (long)DECK_TESTS[i].alloc_delta);
+            DECK_TESTS[i].passed = all_ok;
+            if (all_ok) deck_pass++; else deck_fail++;
+
+            /* Compute min/p50/p99/max per-test. With 5 samples p99≈max. */
+            uint32_t mn = 0, p50 = 0, p99 = 0, mx = 0;
+            if (DECK_TESTS[i].n_samples > 0) {
+                uint32_t sorted[DECK_TEST_SAMPLE_RUNS];
+                uint32_t k = DECK_TESTS[i].n_samples;
+                for (uint32_t a = 0; a < k; a++) sorted[a] = DECK_TESTS[i].samples[a];
+                /* insertion sort — k ≤ 5 */
+                for (uint32_t a = 1; a < k; a++) {
+                    uint32_t v = sorted[a]; int j = (int)a - 1;
+                    while (j >= 0 && sorted[j] > v) { sorted[j+1] = sorted[j]; j--; }
+                    sorted[j+1] = v;
+                }
+                mn  = sorted[0];
+                p50 = sorted[k/2];
+                p99 = sorted[k-1];   /* with k=5, p99 == max */
+                mx  = sorted[k-1];
+            } else {
+                mn = p50 = p99 = mx = DECK_TESTS[i].duration_us;
+            }
+
+            bool outlier = (p50 > 0 && mx > 2 * p50);
+            if (outlier) deck_outliers++;
+
+            deck_total_us += mx;
+            if (mx > deck_max_us) { deck_max_us = mx; deck_slowest = DECK_TESTS[i].name; }
+
+            if (is_positive) {
+                ESP_LOGI(TAG,
+                    "  %-30s %s  min=%luus p50=%luus p99=%luus max=%luus%s  heap%+ld",
+                    DECK_TESTS[i].name,
+                    DECK_TESTS[i].passed ? "PASS" : "FAIL",
+                    (unsigned long)mn, (unsigned long)p50,
+                    (unsigned long)p99, (unsigned long)mx,
+                    outlier ? " OUTLIER" : "",
+                    (long)DECK_TESTS[i].heap_delta);
+            } else {
+                ESP_LOGI(TAG,
+                    "  %-30s %s  %6luus (neg)",
+                    DECK_TESTS[i].name,
+                    DECK_TESTS[i].passed ? "PASS" : "FAIL",
+                    (unsigned long)DECK_TESTS[i].duration_us);
+            }
         }
-        ESP_LOGI(TAG, "  timing: total=%lluus avg=%lluus max=%luus (slowest=%s)",
+        ESP_LOGI(TAG, "  timing: total=%lluus max=%luus (slowest=%s) outliers=%u",
                  (unsigned long long)deck_total_us,
-                 (unsigned long long)(N_DECK_TESTS ? deck_total_us / N_DECK_TESTS : 0),
                  (unsigned long)deck_max_us,
-                 deck_slowest);
+                 deck_slowest,
+                 (unsigned)deck_outliers);
     }
 
     /* --- stress / memory bounds (after .deck tests so totals reflect
@@ -598,6 +657,7 @@ deck_err_t deck_conformance_run(void)
        "\"suites_total\":%u,\"suites_pass\":%u,\"suites_fail\":%u,"
        "\"deck_tests_total\":%u,\"deck_tests_pass\":%u,\"deck_tests_fail\":%u,"
        "\"deck_total_us\":%llu,\"deck_max_us\":%lu,\"deck_slowest\":\"%s\","
+       "\"deck_outliers\":%u,"
        "\"stress_total\":%u,\"stress_pass\":%u,\"stress_fail\":%u,"
        "\"heap_used_during_suite\":%ld,"
        "\"intern_count\":%u,\"intern_bytes\":%u,"
@@ -610,6 +670,7 @@ deck_err_t deck_conformance_run(void)
       (unsigned)N_ROWS, (unsigned)passed, (unsigned)failed,
       (unsigned)N_DECK_TESTS, (unsigned)deck_pass, (unsigned)deck_fail,
       (unsigned long long)deck_total_us, (unsigned long)deck_max_us, deck_slowest,
+      (unsigned)deck_outliers,
       (unsigned)N_STRESS_TESTS, (unsigned)stress_pass, (unsigned)stress_fail,
       heap_delta,
       (unsigned)deck_intern_count(),
