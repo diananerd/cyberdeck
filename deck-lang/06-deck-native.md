@@ -14,6 +14,8 @@ This document is for the developer writing those two things: an embedded firmwar
 
 Reading `03-deck-os` first is recommended. That document describes what the runtime expects from a bridge. This document describes how to implement one.
 
+> **For implementation-level concerns** that this doc references at API level (DeckValue ownership rules in detail, refcount semantics, threading model, mailbox IPC, capability registration order at boot, snapshot restore for opaque handles), see `11-deck-implementation.md §4, §5, §12, §19, §20`. For the formal Service Driver Interface that every platform implements (vtables, lifecycle, threading contracts, error vocabularies), see `12-deck-service-drivers.md`. For an end-to-end ESP-IDF integration showing how every capability listed in `03-deck-os` maps to a concrete `cap_*` C module on the CyberDeck board, see `13-deck-cyberdeck-platform.md §14.3`. For the component publishing strategy (each driver as its own GitHub repo + IDF Component) and how to port to a new SoC, see `14-deck-components.md`.
+
 ---
 
 ## 2. The Two Extension Points
@@ -2154,7 +2156,7 @@ The bridge resolves asset bytes at this point (before `@on launch`) using `deck_
 
 ### 23.4 In-Flight Effects at Suspend/Terminate
 
-**At suspend**: in-flight effects (`net.fetch!()`, `db.query!()`, etc.) continue running in their bridge tasks — they are not cancelled. When they complete:
+**At suspend**: in-flight effects (`net.get()`, `db.query()`, etc.) continue running in their bridge tasks — they are not cancelled. When they complete:
 - The bridge enqueues `MSG_EFFECT_DONE { vm_id, result }`
 - `deck_runtime_task` receives it
 - If the VM is suspended: the result is held in `held_task_msgs` and applied when the VM resumes
@@ -2164,7 +2166,7 @@ The bridge resolves asset bytes at this point (before `@on launch`) using `deck_
 
 ### 23.5 Background Task Effects at Suspend
 
-Background tasks (`is_background = true`) that run while the app is suspended follow the same continuation model. When a background task triggers an effect (e.g., `net.fetch!()`):
+Background tasks (`is_background = true`) that run while the app is suspended follow the same continuation model. When a background task triggers an effect (e.g., `net.get(url)`):
 
 1. The effect dispatcher calls `on_vm_load` was already called — the capability instance is available in PSRAM (serialized with the heap snapshot)
 2. The bridge restores the capability's session state from the snapshot

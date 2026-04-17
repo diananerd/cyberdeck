@@ -52,6 +52,7 @@ Defined once, only in `app.deck`.
   name:        str     -- display name shown to users
   id:          str     -- reverse-domain unique ID ("mx.lab.monitor")
   version:     str     -- semver: "MAJOR.MINOR.PATCH"
+  edition:     int     -- Deck language edition (calendar year, e.g. 2026); MANDATORY
   entry:       Name    -- root @machine or @flow that is the app entry point
   author:      str?
   license:     atom?   -- :mit | :apache2 | :gpl3 | :proprietary
@@ -65,7 +66,11 @@ The `id` is stable identity. If the OS has a previously installed app with the s
 
 `entry:` names the root `@machine` or `@flow`. The OS starts the app at its `initial` state. The root machine/flow defines the top-level navigation topology.
 
+`edition:` is the Deck language edition the app targets. **Mandatory.** It pins the syntax and semantics: an edition-2026 app uses `@machine`/`@flow`/no `if/then/else`; an edition-2027 app may differ. The runtime declares which editions it supports via `system.info.versions().editions_supported`. An app whose declared edition is outside that set fails to load with `:incompatible_edition` (see `15-deck-versioning §9`). If you don't know which edition to use, pick the current calendar year — the latest spec.
+
 The `@app` block is the app manifest. No separate manifest file exists.
+
+For OS surface, runtime, and capability version requirements, see the companion `@requires` annotation (§4A) and the full versioning model in `15-deck-versioning`.
 
 ---
 
@@ -100,6 +105,62 @@ alias is :unavailable
 App is :machine_state
 ```
 
+**Catalog snapshot.** Common capability paths and their typical aliasing pattern. The full surface lives in `03-deck-os §4`.
+
+```
+@use
+  -- Sensors (§4.1)
+  sensors.temperature  as temp
+  sensors.humidity     as humidity   optional
+  sensors.pressure     as pressure   optional
+  sensors.accelerometer as accel     optional
+  sensors.gyroscope    as gyro       optional
+  sensors.gps          as gps        optional
+  sensors.light        as light      optional
+
+  -- Storage (§4.2)
+  storage.local        as store
+  nvs                  as nvs
+  fs                   as fs
+  db                   as db
+
+  -- Network (§4.3)
+  network.http         as net
+  network.wifi         as wifi
+  network.socket       as sock       optional   -- raw TCP/UDP for protocol bring-up
+  api_client           as api
+  cache                as cache
+  mqtt                 as mqtt       optional
+  background_fetch     as bg
+
+  -- Display & Notifications (§4.4)
+  display.notify       as notify     -- transient toast (different from `notifications`)
+  display.screen       as screen
+  display.theme        as theme
+  notifications        as notif
+
+  -- BLE & external radios (§4.5)
+  ble                  as ble
+  bt_classic           as bt         -- external UART1 BT module on this board
+
+  -- System (§4.6)
+  system.info          as sysinfo
+  system.locale        as locale
+  system.time          as systime
+  system.audio         as audio      optional
+  system.battery       as battery
+  system.security      as security   -- system.* apps only
+
+  -- Hardware I/O (§4.7) — direct port access for advanced use
+  hardware.uart        as uart       optional
+
+  -- OTA & crypto (§4.8, §4.9)
+  ota                  as ota
+  crypto.aes           as aes
+```
+
+The `optional` keyword is the cheapest hedge against capability fragmentation across boards: declare it once, and any function call returns `:err :unavailable` automatically when the underlying hardware is missing — no branching required.
+
 ### 4.2 Local Modules
 
 ```
@@ -112,7 +173,78 @@ App is :machine_state
 Path is relative to `app.deck`. Module name = last path segment without extension. No qualifiers. Missing paths are a load error.
 
 ### 4.3 What @use Does Not Do
-Does not install, download, or version-constrain. The OS is monolithic — everything the app can use was compiled into the OS image. `@use` is a declaration of intent, not an acquisition.
+Does not install, download, or version-constrain. The OS is monolithic — everything the app can use was compiled into the OS image. `@use` is a declaration of intent, not an acquisition. **Version constraints belong in `@requires` (§4A), not in `@use`.**
+
+---
+
+## 4A. @requires — Compatibility Contract
+
+Declares the OS surface, runtime, and capability versions the app needs to run. Top-level annotation in `app.deck`. Optional but **strongly recommended** for any app published outside its author's own device.
+
+```
+@requires
+  deck_os: ">= 2"                   -- OS surface API level range; see 15-deck-versioning §5
+  runtime: ">= 1.0"                 -- Interpreter version range; see 15-deck-versioning §6
+  capabilities:
+    network.http:        ">= 2"     -- capability path : version range
+    storage.local:       "any"      -- "any" matches any version
+    notifications:       ">= 1"
+    sensors.accelerometer: optional -- declares as optional; absence is acceptable
+    ext.cyberdeck.battery_curve: ">= 1"   -- ext.* extension; vendor-specific
+```
+
+### 4A.1 Range syntax
+
+Supported operators:
+
+```
+">= N"       greater than or equal
+"> N"        strictly greater
+"<= N"       less than or equal
+"< N"        strictly less
+"== N"       exactly N (rarely correct; prefer ranges)
+"any"        any version
+optional     declared optional; runtime treats it like any with absence allowed
+```
+
+Versions are integers for `deck_os`, semver strings for `runtime`, integers for capability versions. Range expressions cannot mix ANDs/ORs in v1; if a more complex range is needed, declare the most restrictive form.
+
+### 4A.2 Defaults when omitted
+
+If `@requires` is absent or partially specified:
+
+- `deck_os`: inferred as the lowest API level that contains every capability the app uses (computed from `@use` declarations + capability surface metadata).
+- `runtime`: defaults to `>= 1.0`.
+- `capabilities`: any capability appearing in `@use` is implicitly required at version `>= 1`. Optional `@use` entries become optional capability requirements.
+
+Explicit declarations always override inferred ones.
+
+### 4A.3 What the loader does with `@requires`
+
+At app load time, the loader runs the compatibility check sequence in `15-deck-versioning §9.1`:
+
+1. Validates `edition` from `@app` against the runtime's supported editions.
+2. Validates `requires.deck_os` against the runtime's surface API level.
+3. Validates `requires.runtime` against the runtime's own version.
+4. For each `requires.capabilities` entry: looks up the registered driver, verifies it satisfies the version range (and any required `capability_flags`), and confirms permissions.
+
+Any failure produces a structured `LoadError` per `15-deck-versioning §9.2` with a `code`, `actor`, `message`, `fix`, and structured `detail` so the OS shell can render an actionable message to the right person.
+
+### 4A.4 Required flags
+
+For capabilities with optional features expressed as `capability_flags` (e.g. `network.http` may or may not support `:http2`), the app can require specific flags:
+
+```
+@requires
+  capabilities:
+    network.http: ">= 1"  flags: [:http2, :stream_body]
+```
+
+A driver missing any required flag yields `:incompatible_capability`. For graceful degradation, omit the flags from `@requires` and probe at runtime via `cap.has_flag(:flag_name)`.
+
+### 4A.5 Lock file (optional)
+
+A `deck.lock` companion file inside the bundle records the exact version envelope used at build / test time. The loader does not enforce that the lock matches at launch — that would defeat the purpose of compatibility ranges. Tools (`deck check`, `deck info`) use the lock for diagnostics. See `15-deck-versioning §15`.
 
 ---
 
@@ -139,7 +271,7 @@ Declares which sensitive capabilities require user/OS authorization and why. Pre
 | Capability path | What it gates |
 |---|---|
 | `notifications` | Registrar fuentes, post_local, recibir `@on os.notification`, y que el badge aparezca en el Launcher |
-| `network.http` | Cualquier llamada de red saliente (`net.fetch!()`, `api_client`) |
+| `network.http` | Cualquier llamada de red saliente (`net.get()`, `api_client`) |
 | `network.wifi` | Scan, connect, disconnect, forget — gestión de redes WiFi |
 | `storage.local` | Acceso a storage persistente del app |
 | `sensors.*` | Cualquier sensor de hardware |
@@ -181,6 +313,16 @@ Supported types: `int`, `float`, `bool`, `str`, `atom` (with `options:`).
 `range:` applies to `int` and `float`. `options:` applies to `atom`. The runtime enforces constraints — assigning a value outside the range is rejected.
 
 Config values are read-only from Deck code. Only the OS settings UI can change them. Changes are reflected immediately on next read.
+
+**Settings app integration:** The Settings app calls `system.apps.config_schema(app.id)` to discover config fields and render a native editor. When the user saves a change, the OS fires `os.config_change (field: str, value: any)` to the running app (see `03-deck-os §5`). Apps that need to react immediately should handle this event:
+
+```deck
+@on os.config_change
+  -- config.field_name already has the new value when this fires
+  log.info("config changed: {event.field} = {event.value}")
+```
+
+The `ConfigFieldInfo` type returned by `config_schema()` is derived automatically from `@config` — developers do not write it manually. See `03-deck-os §4.11`.
 
 ---
 
@@ -554,6 +696,8 @@ StreamName.recent(n)     -- [T]  (last n values, oldest first)
 | `suspend` | OS is suspending the app — must complete quickly |
 | `terminate` | App about to be killed — not guaranteed to run on force kill |
 | `back` | User pressed back while the app's root flow is at its initial state (no history to pop) |
+| `open_url` | OS routed a deep link URL matching one of the app's `@handles` patterns |
+| `crash_report` | The runtime caught an unrecoverable error in any app VM (system.crash_reporter only) |
 
 **`@on back` — root back interception:**
 
@@ -623,7 +767,7 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
     | _                -> unit
 ```
 
-**Notification events**: Apps that declare `notifications` in `@permissions` and register sources via `notif.register_source!()` receive OS events when new notifications arrive:
+**Notification events**: Apps that declare `notifications` in `@permissions` and register sources via `notif.register_source()` receive OS events when new notifications arrive:
 
 ```
 @on os.notification (entry: NotifEntry)
@@ -632,7 +776,39 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
   App.send(:new_notification (entry: entry))
 ```
 
-The hook fires even if the app is suspended — `svc_notifications` stores the entry in SQLite and the bridge delivers the event as a `MSG_OS_EVENT` to the VM. If the app is suspended, the bridge temporarily restores it for hook execution (same mechanism as `background: true` tasks — see §14.4). If the VM is destroyed (app terminated), the event is stored but not dispatched until the app re-launches and calls `notif.list!()`.
+The hook fires even if the app is suspended — `svc_notifications` stores the entry in SQLite and the bridge delivers the event as a `MSG_OS_EVENT` to the VM. If the app is suspended, the bridge temporarily restores it for hook execution (same mechanism as `background: true` tasks — see §14.4). If the VM is destroyed (app terminated), the event is stored but not dispatched until the app re-launches and calls `notif.list()`.
+
+**`@on open_url` — deep link entry point:**
+
+Fired when the OS routes a URL to this app. The URL must match one of the patterns declared in the app's `@handles` block (see §20). Pattern parameters are extracted by the bridge and passed in `params`.
+
+```
+@on open_url (url: str, params: {str: str})
+  -- url:    the full URL that was matched (e.g. "myapp://profile/abc123")
+  -- params: named segments extracted from the matched pattern
+  --         (e.g. { "id": "abc123" } for pattern "myapp://profile/{id}")
+  match params["id"]
+    | :some id -> App.send(:open_profile (id: id))
+    | :none    -> App.send(:open_root)
+```
+
+If the app is suspended when the URL arrives, the OS resumes it (same path as `system.apps.bring_to_front`) and then fires `@on open_url`. If the app is terminated, it is launched first; `@on launch` runs to completion before `@on open_url` is dispatched.
+
+If multiple installed apps register a `@handles` pattern matching the same URL, the OS shows a Choice Overlay (§5.5 of `10-deck-bridge-ui.md`) for the user to pick. There is no priority/ordering between apps — first install wins is **not** the rule; the user always disambiguates explicitly.
+
+**`@on crash_report` — system-only crash sink:**
+
+Restricted to the app whose `app.id` is `"system.crash_reporter"`. The OS fires this hook every time the runtime catches an unrecoverable error in any app VM. The Crash Reporter persists `info` via the `system.crashes` capability (§4.11 of `03-deck-os.md`).
+
+```
+@on crash_report (info: CrashInfo)
+  -- info: { app_id, message, stack, occurred }
+  -- The OS guarantees this hook runs even if the crashed app is the foreground app —
+  -- the bridge temporarily resumes the Crash Reporter VM to deliver the event.
+  CrashLog.send(:append (info: info))
+```
+
+A Loader error is raised at install time if any app other than `system.crash_reporter` declares `@on crash_report`.
 
 **Load-time validation**: Every event name in an `@on` hook must exist in the OS event registry (declared in `.deck-os`). An `@on` referencing an unknown event name is a **load error**.
 
@@ -781,6 +957,73 @@ progress value: float_expr  label: str_expr?
 ```
 
 `value` is `0.0..1.0`. An in-progress operation with measurable progress.
+
+**Markdown** — first-class. Two nodes, both purely semantic. The bridge infers density, fonts, code-block chrome, ToC visibility, image sizing, editor toolbar layout, preview placement, and every other presentation choice from the declared purpose, the content itself, and the device.
+
+```
+markdown content_expr
+  -- content_expr: str | MdDocument | MdPatch?
+  -- (types in 03-deck-os §3; pre-parse with md.parse() to control parser options
+  --  or share a parse across multiple views)
+
+  purpose:       :reading | :reference | :fragment   -- default :reading
+  -- Semantic intent for this content:
+  --   :reading   long-form prose meant to be read end-to-end (articles,
+  --              docs, AI responses, e-reader pages)
+  --   :reference lookup-style content the user scans (cookbook, manual,
+  --              README inside a card)
+  --   :fragment  small snippet inline within other content (chat bubble,
+  --              list-row body, status panel)
+  -- The bridge maps purpose to density, max-width, internal scroll behavior,
+  -- ToC inclusion, and code-block affordances. Apps never specify any of those.
+
+  on link  ->    expr        -- presence makes links tappable; event.url, event.text
+  on image ->    expr        -- presence makes images tappable; event.url, event.alt
+
+  scroll_to:     str?        -- semantic navigation: a heading id; reactive
+  accessibility: str?        -- accessible region label
+```
+
+```
+markdown_editor
+  value:         str_expr           -- current content (from machine state)
+  on change ->   expr               -- event.value: str
+  on cursor ->   expr?              -- presence = app reacts to cursor
+                                    --   event.cursor: int, event.formats: [atom]
+  on selection -> expr?             -- presence = app reacts to selection
+                                    --   event.selection: MdRange, event.text: str
+
+  placeholder:   str?               -- semantic content shown when empty
+  editor_state:  MdEditorState?     -- if set, the editor is externally controlled
+                                    --   via the markdown.editor_* capability
+                                    --   (03-deck-os §4.4); the bridge surfaces the
+                                    --   state but does not own it
+  accessibility: str?
+```
+
+Both nodes accept their content (`content_expr` / `value`) as raw `str` or pre-parsed `MdDocument`. The `markdown` node also accepts `MdPatch?` from `markdown.stream_parse` for incremental rendering of streamed content (AI chat responses, live document sync).
+
+**What the bridge decides** (every choice the app does NOT make):
+
+| Concern | Bridge inference rule on this device |
+|---|---|
+| Density / spacing | Derived from `purpose:` — `:reading` gets generous, `:fragment` gets tight |
+| Max width / readable measure | `:reading` gets a comfortable measure for the screen; `:reference` and `:fragment` fill their container |
+| Internal scroll vs container scroll | `:reading` may scroll internally if it exceeds the screen; `:fragment` always fills naturally |
+| Inline ToC | Auto-shown when `purpose: :reading` AND the document has ≥ 3 headings |
+| Code block "copy" affordance | Auto-shown when the device has a clipboard and the document has code blocks |
+| Code block syntax highlighting theme | Follows the global theme (`display.theme`); never per-node |
+| Image sizing | Bridge sizes images to the available width with a sensible cap; no app-side px |
+| Image fallback | Alt text shown when the asset is missing |
+| Editor toolbar visibility / layout | Bridge decides per device — touch-only with small screen may use long-press menus instead of a toolbar; tablet-class shows full toolbar |
+| Editor preview | Bridge picks `:none`/`:toggle`/`:side` based on screen size and orientation |
+| Editor line numbers | Off on touch devices; configurable in Settings for keyboard-driven devices |
+| Text selection | Enabled when the device supports it; never an app concern |
+| Virtual rendering | Engaged automatically when content size exceeds the device's render budget |
+
+The capability `markdown` (`03-deck-os §4.4`) provides programmatic editor-state operations (`editor_format`, `editor_undo`, `editor_select`, etc.) for apps that want explicit control of the editor. The view node still owns no presentation.
+
+**Tagged literals.** Markdown source can be authored inline using the `md"""..."""` tagged multi-line string (see `01-deck-lang §2.7`). Semantically identical to `"""..."""`; the tag is a hint to editors and language servers for syntax highlighting only.
 
 ---
 
@@ -1369,7 +1612,7 @@ Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesi
 - **`required:`** — deben existir al cargar. Si falta cualquiera, el Loader falla en Stage 0 listando todos los archivos ausentes. La app no se lanza.
 - **`optional:`** — pueden estar ausentes. En runtime, `asset(:name)` retorna `:err :not_found` si el archivo no existe. La app maneja esto normalmente.
 - **`data:`** — archivos copiados al app storage antes de que corra `@on launch`. `copy_to:` es relativo al directorio de storage de la app. `on: :first_launch` significa "copiar solo si el destino no existe todavía" — no sobreescribe datos del usuario en actualizaciones.
-- **`for_domain: "hostname"`** — asocia el cert al hostname dado. El OS construye un TLS trust map al cargar la app; `api_client` y `net.fetch!()` lo usan automáticamente. Ver §19.7.
+- **`for_domain: "hostname"`** — asocia el cert al hostname dado. El OS construye un TLS trust map al cargar la app; `api_client` y `net.get()` lo usan automáticamente. Ver §19.7.
 
 ### 19.3 Tipos de Asset
 
@@ -1378,17 +1621,25 @@ Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesi
 | `:icon` | PNG RGBA, 64×64 mínimo | Launcher grid, task switcher |
 | `:splash` | PNG, cualquier tamaño | Pantalla durante @on launch |
 | `:image_*` | PNG / JPEG | Nodos `VCMedia` |
-| `:cert_*` | PEM (CA certificate) | TLS trust map automático si tiene `for_domain:`; o pasado manualmente en `net.fetch!()` |
+| `:cert_*` | PEM (CA certificate) | TLS trust map automático si tiene `for_domain:`; o pasado manualmente en `net.get()` |
 | `:client_cert_*` | PEM (client certificate) | Mutual TLS — igual que `:cert_*` con `for_domain:`, o pasado manualmente |
 | `:font_*` | TTF / OTF | Fuente personalizada, registrada en el bridge renderer |
-| `:audio_*` | WAV / MP3 | `system.audio.play!()` capability |
+| `:audio_*` | WAV / MP3 | `system.audio.play()` capability |
 | `:seed_db` | SQLite 3 | Copiado a app storage en first launch |
 
 El nombre del átomo (`as :icon`, `as :api_cert`) es libre — lo define el developer. La convención de la tabla no es forzada por el Loader. La única excepción es `:icon`: el OS busca exactamente ese átomo para mostrar el ícono en el launcher.
 
 ### 19.4 Referenciando Assets en Deck Code
 
-El builtin `asset()` está siempre en scope — sin `@use`, sin `!effect`:
+Los tres builtins del módulo `assets` están siempre en scope cuando la app tiene un bloque `@assets` — sin `@use`, sin `!effect`. Son errores de compilación llamarlos desde una app sin `@assets`. Declaración formal en `03-deck-os §3`:
+
+| Builtin | Firma | Notas |
+|---|---|---|
+| `asset` | `(name: atom) -> AssetRef` | Pure. Falla en compilación si el átomo no está declarado en `@assets`. |
+| `asset_bytes` | `(name: atom) -> Result [byte] :not_found` | Carga el archivo completo en heap de Deck. Solo para assets pequeños. |
+| `asset_from_bytes` | `(data: [byte]) -> AssetRef` | Envuelve bytes en memoria como AssetRef efímero. El bridge copia los bytes. |
+
+`AssetRef` es un tipo opaco (`@opaque AssetRef` en `03-deck-os §3`). El Deck heap solo guarda el handle; el bridge resuelve el path real cuando la capability lo necesita. El heap nunca contiene bytes crudos de imágenes, certs, ni audio salvo llamada explícita a `asset_bytes`.
 
 ```deck
 -- En un content= body (contexto puro)
@@ -1398,41 +1649,32 @@ media
 
 -- En un @on hook o @task (con efectos)
 -- Si el dominio tiene for_domain: en @assets, los certs se aplican automáticamente:
-net.fetch!("https://bsky.social/xrpc/app.bsky.feed.getTimeline")
+net.get("https://bsky.social/xrpc/app.bsky.feed.getTimeline")
 
 -- Para dominios sin for_domain:, o para override puntual:
-net.fetch!(url, tls_ca_cert: asset(:cert_bsky))
-net.fetch!(url, tls_ca_cert: asset(:cert_bsky), tls_client_cert: asset(:client_cert_bsky))
+net.get(url, HttpOptions { tls_ca_cert: asset(:cert_bsky) })
+net.get(url, HttpOptions { tls_ca_cert: asset(:cert_bsky), tls_client_cert: asset(:client_cert_bsky) })
 ```
-
-`asset(name: atom) -> AssetRef` — retorna un handle opaco. No carga el archivo en el heap de Deck. El bridge resuelve el path real cuando la capability lo necesita. El heap de Deck nunca contiene los bytes crudos de imágenes, certs, ni audio, salvo que la app los pida explícitamente.
-
-Para acceso directo a bytes (necesario solo para formatos propios o procesamiento en Deck):
-
-```deck
-asset_bytes! (name: atom) -> Result [byte] :not_found
-```
-
-Carga el archivo completo como lista de bytes en el heap. Usar solo para assets pequeños. Para usos estándar (imágenes, certs, audio) pasar `AssetRef` — el bridge hace el I/O.
 
 ### 19.5 Assets Descargables
 
-Los assets que no van en el bundle se gestionan con `net` y `store` — no son `@assets`. El patrón habitual es fetch-and-cache:
+Los assets que no van en el bundle se gestionan con `net` y `fs` — no son `@assets`. El patrón habitual es fetch-and-cache:
 
 ```deck
-fn ensure_avatar (did: str) -> Result AssetRef net.Error =
-  let key = "avatar_{did}"
-  match store.get_bytes!(key)
-    | :ok bytes  -> :ok (asset_from_bytes(bytes))
-    | :err :not_found ->
-        match net.fetch!("https://cdn.bsky.app/img/avatar/{did}")
+fn ensure_avatar (did: str) -> Result AssetRef net.Error !net !fs =
+  let path = "avatars/{did}.png"
+  match fs.exists(path)
+    | true  -> :ok (asset_from_bytes(fs.read_bytes(path) |> unwrap_or([])))
+    | false ->
+        match net.get("https://cdn.bsky.app/img/avatar/{did}")
           | :ok r ->
-              store.set_bytes!(key, r.body)
-              :ok (asset_from_bytes(r.body))
+              do
+                fs.write_bytes(path, r.body_bytes)
+              :ok (asset_from_bytes(r.body_bytes))
           | :err e -> :err e
 ```
 
-`asset_from_bytes(bytes: [byte]) -> AssetRef` — envuelve bytes en memoria como un AssetRef efímero. El bridge retiene los bytes en su propio buffer; el heap de Deck solo guarda el handle.
+Para archivos grandes (firmware, bases de datos, video), usar `net.download(url, dest_path)` en lugar de `net.get()` — escribe directamente al filesystem sin pasar por el heap de Deck.
 
 ### 19.6 Verificación del Loader (Stage 0)
 
@@ -1474,13 +1716,13 @@ TLS trust map (por instancia de app):
 - Exacto: `"bsky.social"` aplica solo a `bsky.social`, no a `cdn.bsky.social`
 - Wildcard: `"*.bsky.social"` aplica a cualquier subdominio directo (`cdn.bsky.social`, `api.bsky.social`), no al root ni a subdominios de segundo nivel
 
-**Override manual:** pasar `tls_ca_cert: asset(:name)` en `net.fetch!()` tiene precedencia sobre el trust map para esa llamada específica.
+**Override manual:** pasar `tls_ca_cert: asset(:name)` en `HttpOptions` en `net.get()` / `net.post()` tiene precedencia sobre el trust map para esa llamada específica.
 
 **El trust map no persiste entre lanzamientos.** Es un artefacto de la instancia de capability en memoria — se destruye con la VM en `@on terminate`. No hay estado en NVS ni en storage. Cada launch reconstruye el trust map desde `@assets`.
 
 La verificación de assets ocurre antes del module graph (Stage 1), antes del OS surface (Stage 2), y antes de cualquier type checking. Una app que no puede cargar sus certificados no vale la pena parsear.
 
-### 19.7 Icono — Contrato Específico
+### 19.8 Icono — Contrato Específico
 
 El ícono (declarado `as: :icon`) tiene un contrato especial porque el OS lo usa cuando la app no está corriendo:
 
@@ -1491,3 +1733,88 @@ El ícono (declarado `as: :icon`) tiene un contrato especial porque el OS lo usa
 - **Átomo exacto**: debe declararse `as: :icon`. Cualquier otro nombre lo convierte en imagen ordinaria
 
 Apps sin `:icon` reciben el placeholder del sistema (el carácter `?` del bridge renderer del launcher).
+
+---
+
+## 20. @handles — Deep Link Patterns
+
+`@handles` declares the URL patterns that route to this app via `@on open_url` (§11). It is a **top-level annotation** in `app.deck` (not nested inside `@app`) and not allowed in any other `.deck` file in the bundle.
+
+```deck
+@handles
+  "myapp://profile/{id}"
+  "myapp://post/{uri}"
+  "https://myapp.example.com/profile/{id}"
+```
+
+### 20.1 Pattern Syntax
+
+A handler entry is a string literal with the following grammar:
+
+```
+pattern   ::= scheme "://" host? path?
+scheme    ::= identifier ("+" identifier)*
+host      ::= literal | "{" name "}"
+path      ::= ("/" segment)*
+segment   ::= literal | "{" name "}" | "{" name ":" kind "}"
+kind      ::= "rest"           -- captures the remainder of the path including slashes
+literal   ::= [a-zA-Z0-9._~%-]+
+name      ::= identifier
+```
+
+- `{name}` matches one path segment (no slashes) and binds it under `name`.
+- `{name:rest}` matches everything from that point (including slashes) and is allowed only as the last segment.
+- A pattern with no `{...}` placeholders matches exactly one URL.
+- The query string is never matched against the pattern. Query parameters are collected into `params` keyed by name (last-write-wins on duplicates).
+- Fragments (`#…`) are stripped before matching and not exposed.
+
+### 20.2 Resolution Order
+
+When a URL arrives:
+
+1. The OS scans the patterns of every installed app.
+2. Apps whose pattern matches the URL form the **candidate set**.
+3. **Candidate set size:**
+   - **0 candidates** → the OS shows a Toast `"NO APP HANDLES THIS URL"` (1500 ms) and discards the URL.
+   - **1 candidate** → the OS launches/resumes the app and fires `@on open_url`.
+   - **>1 candidate** → the OS shows a Choice Overlay (§5.5 of `10-deck-bridge-ui.md`) listing the candidate apps; the user picks one. There is no implicit priority based on install order, app id, or pattern specificity.
+
+Within a single app, if multiple patterns of the same app match, the **most specific** one wins (literal segments are scored higher than `{name}` segments; `{name:rest}` ranks lowest). If two patterns of the same app are equally specific the loader rejects the bundle at install time.
+
+### 20.3 Parameter Extraction
+
+The bridge builds a `{str: str}` map from the matched pattern:
+
+```deck
+@handles
+  "bsky://profile/{handle}/post/{rkey}"
+
+@on open_url (url: str, params: {str: str})
+  -- For url = "bsky://profile/alice.bsky.social/post/3kabc"
+  -- params = { "handle": "alice.bsky.social", "rkey": "3kabc" }
+  let handle = params["handle"] |> unwrap_opt
+  let rkey   = params["rkey"]   |> unwrap_opt
+  App.send(:open_thread (handle: handle, rkey: rkey))
+```
+
+Values are URL-decoded once before being placed into the map. Apps that need the raw URL inspect `url`.
+
+### 20.4 Validation Rules
+
+The Loader rejects an app at install time if:
+
+- A pattern fails to parse against the grammar above.
+- Two patterns within the same app are equally specific (ambiguous within the app).
+- A pattern references the `https`/`http` scheme without a host (`https:///foo` is invalid — the host segment is required for web schemes).
+- A pattern reserves a system scheme (`system://`, `deck://`, `os://`).
+- The app declares `@handles` but no `@on open_url` hook (or vice versa). Both must be present together.
+
+### 20.5 Privacy and Trust
+
+Deep links are an **untrusted entry point.** A URL can come from any app, an NFC tag, a QR scan, or a notification. The receiving app must validate `params` before performing destructive or sensitive actions. The OS does not authenticate the source of the URL.
+
+For `https://` patterns specifically, the OS does not verify that the receiving app actually owns the domain — there is no Universal Links / App Links equivalent on this platform. Apps that handle web URLs should treat them as informational links and never auto-execute privileged operations on receipt.
+
+### 20.6 Triggering a Deep Link from Another App
+
+Use `system.apps.launch_url(id, url)` from a privileged app (Launcher, Settings) to route a URL to a specific app, bypassing the candidate selection. From a regular app, `system.shell` is unavailable; a non-system app can only emit URLs by inviting the user to share/open them through the system Share Sheet (§5.12 of `10-deck-bridge-ui.md`).

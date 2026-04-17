@@ -24,6 +24,8 @@
 
 The bridge is the **only** platform-specific code. The interpreter and all `.deck` files are identical across platforms.
 
+> **Implementation references**: the abstract bridge protocol described here is implemented per-platform. For the interpreter side (capability registration timing, effect dispatch algorithm, async/sync semantics, IPC mailbox) see `11-deck-implementation.md §12, §19, §20`. For the formal hardware-agnostic Service Driver Interface (SDI) every platform implements, see `12-deck-service-drivers.md`. For the ESP32-S3 reference implementation mapping every capability listed in §4 to a concrete `cap_*` C module backed by ESP-IDF v6.0 components, see `13-deck-cyberdeck-platform.md §14.3`.
+
 ---
 
 ## 2. The .deck-os File
@@ -43,23 +45,42 @@ Written once by the OS/board author. Compiled into the OS image or placed at a k
   version: str
   arch:    atom   -- :arm32 | :arm64 | :riscv32 | :riscv64 | :x86 | :x64
 
+@const deck_os_version: int = N
+  -- The Surface API Level. Strictly increasing integer. Bumped on every
+  -- forwards-compatible expansion of the surface (new capability, new method,
+  -- new event, new atom variant). See 15-deck-versioning §5 for policy.
+  -- Apps target a range via `@requires deck_os: ">= N"` in app.deck.
+
+@const deck_editions_supported: [int] = [2026]
+  -- The set of language editions this surface is paired with. The runtime
+  -- declares its own editions_supported in system.info.versions(); the
+  -- intersection is what apps can target. See 15-deck-versioning §4.
+
 @include "relative/path/to/other.deck-os"
   -- Inserts all declarations from the referenced file as if they were written
   -- inline at this position. Path is relative to the including file.
   -- Circular includes are a fatal parse error.
-  -- Useful for splitting large surfaces into per-subsystem files.
-  -- Processed by the loader at Stage 2 (OS Surface Loading), depth-first.
 
 @builtin module_name
   fn_name (param: Type) -> ReturnType
   ...
 
 @capability capability.path
+  @version 1                       -- Capability surface version. Increments on
+                                   -- breaking changes to this capability's contract
+                                   -- (see 15-deck-versioning §11).
+  @flag :flag_name                 -- Optional features. Drivers report which they
+  @flag :other_flag                -- support via capability_flags; apps probe at
+                                   -- runtime. See 15-deck-versioning §13.
   method_name (params...) -> ReturnType
   method_name (params...) -> Stream Type
   @errors
     :atom  "description"
-  @requires_permission   -- if present, must appear in app's @permissions
+  @requires_permission             -- if present, must appear in app's @permissions
+  @deprecated since: N replacement: "other.capability"
+                                   -- Marks the capability as deprecated. The loader
+                                   -- emits a :deprecated_capability warning. See
+                                   -- 15-deck-versioning §10.
 
 @event event_name
 @event event_name (field: Type, ...)
@@ -243,6 +264,127 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   float (row: {str: any}, col: str) -> float?
   str   (row: {str: any}, col: str) -> str?
   bool  (row: {str: any}, col: str) -> bool?
+
+-- Opaque handle to an app asset declared in @assets.
+-- The bridge resolves the underlying file path when needed.
+-- The Deck heap never holds raw image / cert / audio bytes via this handle.
+@opaque AssetRef
+
+@builtin assets
+  -- Always in scope. No @use. No !effect.
+  -- Available only inside apps that have an @assets declaration;
+  -- calling from an app with no @assets block is a compile-time error.
+  asset      (name: atom)  -> AssetRef
+  -- Returns a handle to a declared asset. Pure — no I/O.
+  -- Fails at compile time if `name` is not declared in @assets.
+  -- For optional assets, returns the handle regardless; the bridge returns
+  -- :err :not_found at the point of use if the file is absent.
+
+  asset_bytes(name: atom)  -> Result [byte] :not_found
+  -- Loads the full asset file into a Deck [byte] list.
+  -- Use only for small assets (custom data formats, tiny fonts, etc.).
+  -- For images, certs, and audio, prefer passing an AssetRef to the
+  -- relevant capability — the bridge does the I/O without heap pressure.
+
+  asset_from_bytes(data: [byte]) -> AssetRef
+  -- Wraps an in-memory byte slice as an ephemeral AssetRef.
+  -- The bridge copies `data` into its own buffer; Deck retains only the handle.
+  -- Lifetime: the bridge holds the buffer until the AssetRef goes out of scope
+  -- (or the app terminates). Not backed by any file; only valid for capabilities
+  -- that accept AssetRef (e.g., system.audio, ui images).
+
+-- Markdown types. Used by @builtin md and @capability markdown (§4.4).
+@type MdDocument
+  source       : str
+  nodes        : [MdNode]
+  toc          : [MdHeading]
+  word_count   : int
+  image_urls   : [str]
+  front_matter : {str: any}?     -- populated when md.parse(opts: {"front_matter": true})
+
+@type MdNode
+  type     : atom
+  -- :heading | :paragraph | :code_block | :blockquote | :list | :list_item
+  -- :hr | :image | :table | :table_row | :table_cell | :html_block
+  -- :inline_code | :bold | :italic | :strikethrough | :link | :text
+  level    : int?           -- :heading only: 1–6
+  text     : str?           -- text-bearing nodes: raw text content
+  lang     : str?           -- :code_block only
+  url      : str?           -- :link, :image
+  alt      : str?           -- :image
+  title    : str?           -- :link title attribute
+  ordered  : bool?          -- :list: true = ordered, false = bullet
+  tight    : bool?          -- :list: items are tight (no blank lines between)
+  checked  : bool?          -- :list_item with GFM task syntax: - [ ] / - [x]
+  align    : atom?          -- :table_cell: :left | :center | :right | :none
+  is_header: bool?          -- :table_cell: true if in header row
+  children : [MdNode]
+
+@type MdHeading
+  level : int
+  text  : str
+  id    : str               -- URL-safe slug (e.g. "getting-started")
+  node  : MdNode
+
+@type MdRange
+  start : int               -- byte offset in source string
+  end   : int
+
+@type MdInlineFormat
+  type  : atom              -- :bold | :italic | :code | :strikethrough | :link
+  range : MdRange
+  url   : str?              -- for :link
+
+@type MdPatch
+  -- Incremental update from streaming render
+  type     : atom           -- :append | :replace | :finalize
+  text     : str?           -- new text appended (for :append)
+  document : MdDocument?    -- final full parse (for :finalize)
+
+@type MdEditorState
+  content       : str
+  cursor        : int       -- byte offset
+  selection     : MdRange?
+  history_len   : int       -- number of undoable actions
+  active_formats: [atom]    -- formats active at cursor: [:bold, :italic, ...]
+
+@builtin md
+  -- Pure markdown processing. Always in scope; no @use required.
+  -- For incremental / streaming parses and editor-state operations, see
+  -- @capability markdown in §4.4.
+  parse                   (src: str)                            -> MdDocument
+  parse                   (src: str, opts: {str: any})          -> MdDocument
+  -- opts keys (all optional, with defaults shown):
+  --   gfm_tables:   bool = true     GFM tables
+  --   gfm_tasks:    bool = true     - [ ] / - [x] task lists
+  --   smart_quotes: bool = false    "quotes" → "quotes"
+  --   allow_html:   bool = false    inline HTML passthrough
+  --   heading_ids:  bool = true     generate slug IDs for headings
+  --   front_matter: bool = false    YAML front matter parsing
+  to_plain                (src: str)                            -> str
+  to_html                 (src: str)                            -> str
+  excerpt                 (src: str, max_chars: int)            -> str
+  excerpt                 (src: str, max_chars: int, suffix: str) -> str
+  word_count              (src: str)                            -> int
+  reading_time            (src: str)                            -> Duration
+  reading_time            (src: str, wpm: int)                  -> Duration
+  headings                (src: str)                            -> [MdHeading]
+  headings                (doc: MdDocument)                     -> [MdHeading]
+  heading_id              (text: str)                           -> str
+  strip_images            (src: str)                            -> str
+  extract_links           (src: str)                            -> [(str, str)]
+  -- each tuple: (link_text, url)
+  extract_code            (src: str)                            -> [(lang: str, code: str)]
+  has_front_matter        (src: str)                            -> bool
+  front_matter            (src: str)                            -> {str: any}
+  body_after_front_matter (src: str)                            -> str
+  sanitize                (src: str)                            -> str
+  sanitize                (src: str, allow_html: bool)          -> str
+  node_text               (node: MdNode)                        -> str
+  -- recursive plain text
+  node_children           (node: MdNode, type: atom)            -> [MdNode]
+  toc_markdown            (doc: MdDocument)                     -> str
+  -- render the ToC as a markdown bullet list
 ```
 
 ---
@@ -329,32 +471,35 @@ Four complementary storage primitives — choose based on data size, durability 
     :full        "Storage is full"
     :permission  "Storage access denied"
     :corrupt     "Storage data is corrupted"
+  @requires_permission
 
 -- Flash NVS. Atomic per-key. Always survives power loss and filesystem corruption.
 -- Use for tokens, counters, feature flags, values that must never be lost.
 -- KEY LENGTH LIMIT: 15 characters maximum (ESP32 NVS driver constraint).
--- The bridge rejects calls with longer keys before they reach NVS — they do not
--- return :err; they produce a bridge-level error logged at WARN and the call is a no-op.
--- Use short, stable, versioned key names: "acc_token", "theme_v1", "pin_hash".
+-- Calls with keys longer than 15 characters return :err :invalid_key immediately,
+-- before reaching the NVS driver. Use short, stable, versioned key names:
+-- "acc_token", "theme_v1", "pin_hash".
 @capability nvs
   get       (key: str)                -> str?
   get_int   (key: str)                -> int?
   set       (key: str, value: str)    -> Result unit nvs.Error
   set_int   (key: str, value: int)    -> Result unit nvs.Error
   delete    (key: str)                -> Result unit nvs.Error
-  keys      ()                        -> [str]
+  keys      ()                        -> Result [str] nvs.Error
   clear     ()                        -> Result unit nvs.Error
   @errors
-    :full      "NVS partition full"
-    :not_found "Key does not exist"
+    :full        "NVS partition full"
+    :not_found   "Key does not exist"
+    :invalid_key "Key exceeds 15 characters (ESP32 NVS limit)"
+    :write_fail  "Flash write failed"
 
 -- SQLite database. One database file per app. Full SQL — transactions, indices, foreign keys.
 -- Use for structured data, search, relations. Backed by SD card.
 @capability db
   exec        (sql: str)                         -> Result unit db.Error
-  query!      (sql: str)                         -> Result [{str: any}] db.Error
-  query_one!  (sql: str)                         -> Result {str: any}? db.Error
-  scalar!     (sql: str)                         -> Result any? db.Error
+  query       (sql: str)                         -> Result [{str: any}] db.Error
+  query_one   (sql: str)                         -> Result {str: any}? db.Error
+  scalar      (sql: str)                         -> Result any? db.Error
   transaction (body: () -> Result unit db.Error) -> Result unit db.Error
   @errors
     :syntax   "SQL syntax error"
@@ -393,13 +538,32 @@ Four complementary storage primitives — choose based on data size, durability 
 ### 4.3 Network
 
 ```
+-- Per-request options for network.http calls.
+-- tls_ca_cert / tls_client_cert override the app's TLS trust map for this single call.
+-- Pass AssetRef values returned by asset() — bridge resolves to PEM bytes at call time.
+-- See 02-deck-app §19 for @assets declaration syntax.
+@type HttpOptions
+  headers         : {str: str}?
+  timeout         : Duration?
+  tls_ca_cert     : AssetRef?   -- PEM CA cert asset; overrides trust map for this call
+  tls_client_cert : AssetRef?   -- PEM client cert asset for mutual TLS
+
 @capability network.http
-  get    (url: str)                          -> Result Response network.Error
-  get    (url: str, headers: {str: str})     -> Result Response network.Error
-  post   (url: str, body: str)               -> Result Response network.Error
-  post   (url: str, body: str, headers: {str: str}) -> Result Response network.Error
-  put    (url: str, body: str)               -> Result Response network.Error
-  delete (url: str)                          -> Result Response network.Error
+  get      (url: str)                              -> Result Response network.Error
+  get      (url: str, opts: HttpOptions)           -> Result Response network.Error
+  post     (url: str, body: str)                   -> Result Response network.Error
+  post     (url: str, body: str, opts: HttpOptions)-> Result Response network.Error
+  put      (url: str, body: str)                   -> Result Response network.Error
+  put      (url: str, body: str, opts: HttpOptions)-> Result Response network.Error
+  delete   (url: str)                              -> Result Response network.Error
+  delete   (url: str, opts: HttpOptions)           -> Result Response network.Error
+  download (url: str, dest_path: str)              -> Result unit network.Error
+  -- Streams the response body directly to the filesystem at dest_path
+  -- (relative to the app's sandboxed /sdcard/{app.id}/ directory).
+  -- Use for large files (firmware, media, databases) that must not fit in Deck heap.
+  -- Progress events fire as os.download_progress during the transfer.
+  -- Requires @use network.http AND fs capabilities.
+  download (url: str, dest_path: str, opts: HttpOptions) -> Result unit network.Error
   @errors
     :offline        "No network connection"
     :timeout        "Request timed out"
@@ -413,9 +577,10 @@ Four complementary storage primitives — choose based on data size, durability 
   @requires_permission
 
 @type Response
-  status  : int
-  body    : str
-  headers : {str: str}
+  status     : int
+  body       : str
+  body_bytes : [byte]   -- raw response body (same data as body, as bytes)
+  headers    : {str: str}
 
 @opaque WsConn     -- WebSocket connection handle; bridge owns underlying connection
 
@@ -554,6 +719,36 @@ Four complementary storage primitives — choose based on data size, durability 
   set     (theme: ThemeName) -> unit
   -- Ignored for non-system apps. System apps call this to commit the new theme;
   -- bridge receives EVT_SETTINGS_CHANGED (key:"theme") and rebuilds all screens.
+
+-- Markdown — stateful operations (streaming, editor state). Pure markdown
+-- processing lives in @builtin md (§3). The `markdown` and `markdown_editor`
+-- view nodes (02-deck-app §12) consume both this capability and the builtin.
+@capability markdown
+  -- Streaming: incrementally parse a stream of string chunks (e.g. AI responses)
+  stream_parse   (source: Stream str)                    -> Stream MdPatch
+
+  -- Editor state machine — every operation returns a new immutable state
+  editor_new     (content: str)                          -> MdEditorState
+  editor_insert  (state: MdEditorState, text: str)       -> MdEditorState
+  editor_insert  (state: MdEditorState, text: str, at: int) -> MdEditorState
+  editor_delete  (state: MdEditorState, range: MdRange)  -> MdEditorState
+  editor_replace (state: MdEditorState, range: MdRange, text: str) -> MdEditorState
+  editor_format  (state: MdEditorState, format: atom)    -> MdEditorState
+  -- format atoms: :bold | :italic | :code | :strikethrough | :link
+  --               :heading_1..6 | :bullet_list | :ordered_list
+  --               :blockquote | :code_block
+  editor_format  (state: MdEditorState, format: atom, range: MdRange) -> MdEditorState
+  editor_undo    (state: MdEditorState)                  -> MdEditorState
+  editor_redo    (state: MdEditorState)                  -> MdEditorState
+  editor_move    (state: MdEditorState, direction: atom, by: atom) -> MdEditorState
+  -- direction: :forward | :backward; by: :char | :word | :line | :paragraph
+  editor_select  (state: MdEditorState, range: MdRange)  -> MdEditorState
+  editor_select_all (state: MdEditorState)               -> MdEditorState
+  editor_set_cursor (state: MdEditorState, offset: int)  -> MdEditorState
+
+  @errors
+    :parse_failed  "Markdown parse error (malformed document)"
+    :stream_closed "Source stream closed unexpectedly"
 ```
 
 ### 4.5 BLE
@@ -569,7 +764,12 @@ Four complementary storage primitives — choose based on data size, durability 
 
 @capability ble
   scan         (duration: Duration)              -> Result [BleDevice] ble.Error
+  -- Synchronous bounded scan; blocks until `duration` elapses and returns all discovered devices.
   scan_stream  ()                                -> Stream BleDevice
+  -- Continuous scan; each discovered device is emitted as a stream item.
+  -- Call stop_scan() to terminate. The stream closes when stop_scan() returns.
+  stop_scan    ()                                -> unit
+  -- Stops an in-progress scan_stream(). No-op if no scan is active.
   connect      (device_id: str)                  -> Result BleConn ble.Error
   disconnect   (conn: BleConn)                   -> Result unit ble.Error
   read         (conn: BleConn, service: str, char: str) -> Result [byte] ble.Error
@@ -595,10 +795,10 @@ Four complementary storage primitives — choose based on data size, durability 
 -- On CyberDeck: output routes to the external BT Classic module (UART1) if connected,
 -- otherwise the call fails with :no_output. There is no onboard speaker or headphone jack.
 @capability system.audio
-  play!   (asset: atom)                    -> Result unit system.audio.Error
+  play    (asset: atom)                    -> Result unit system.audio.Error
   -- Plays the asset referenced by the given atom (must be declared :audio_* in @assets).
   -- Blocks until playback completes or an error occurs. Call from a @task for async use.
-  stop!   ()                               -> unit
+  stop    ()                               -> unit
   -- Stops playback immediately. No-op if nothing is playing.
   volume  ()                               -> float
   -- Current volume 0.0..1.0. Reads from the external BT module's reported level.
@@ -640,6 +840,38 @@ Four complementary storage primitives — choose based on data size, durability 
   free_heap    ()  -> int
   uptime       ()  -> Duration
   cpu_freq_mhz ()  -> int
+  versions     ()  -> Versions
+  -- Returns the complete version envelope of the running system.
+  -- Apps use it for telemetry, conditional feature use, "about" screens.
+  -- The OS shell uses it for Settings → Device → Versions.
+  -- See 15-deck-versioning §12 for the full Versions and DriverVersionEntry types.
+
+@type Versions
+  edition_current      : int
+  editions_supported   : [int]
+  deck_os              : int
+  runtime              : str            -- semver string
+  runtime_build        : str            -- vendor build identifier (commit hash, etc.)
+  sdi_major            : int
+  sdi_minor            : int
+  drivers              : [DriverVersionEntry]
+  extensions           : [ExtensionEntry]
+  app_version          : str
+  app_id               : str
+
+@type DriverVersionEntry
+  capability           : str            -- "network.http"
+  driver_path          : str            -- "deck.driver.network.http"
+  capability_version   : int
+  impl_name            : str            -- "esp_idf_v6.0_lwip"
+  impl_version         : str            -- semver string
+  capability_flags     : [atom]         -- enabled flags as human-readable atoms
+  state                : :running | :degraded | :unavailable
+
+@type ExtensionEntry
+  name                 : str            -- "ext.cyberdeck.battery_curve"
+  level                : int
+  vendor               : str?
 
 @capability system.locale
   language          ()  -> str
@@ -808,15 +1040,19 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   running         ()                        -> [AppInfo]
   suspended       ()                        -> [AppInfo]
   installed       ()                        -> [AppInfo]
-  search!         (query: str)              -> [AppInfo]
-  bring_to_front     (id: str)              -> unit
-  launch!            (id: str)              -> Result unit system.Error
-  launch_url!        (id: str, url: str)    -> Result unit system.Error
-  kill               (id: str)              -> unit
+  search          (query: str)              -> [AppInfo]
+  bring_to_front  (id: str)                -> unit
+  launch          (id: str)                -> Result unit system.Error
+  launch_url      (id: str, url: str)      -> Result unit system.Error
+  kill            (id: str)                -> unit
   notif_counts_watch ()                     -> Stream [(app_id: str, unread: int)]
   -- Emits a full snapshot whenever the unread notification count changes for any app.
   -- Used by the Launcher to render badges on app grid icons.
   -- Only meaningful for system apps; user apps receive an empty stream.
+  config_schema (app_id: str)               -> [ConfigFieldInfo]
+  -- Returns the declared @config schema of the given app, with current values included.
+  -- Used by the Settings app to render per-app config screens.
+  -- Returns [] if the app has no @config entries.
 
   @errors
     :not_found     "App not installed"
@@ -832,11 +1068,20 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   suspended_at : Timestamp?
   is_launcher  : bool
 
+@type ConfigFieldInfo
+  name          : str
+  type          : atom        -- :int | :float | :bool | :str | :atom
+  default_value : any
+  current_value : any
+  range         : (float, float)?   -- min..max for int/float fields
+  options       : [atom]?           -- valid values for atom fields
+  unit          : str?              -- display unit label
+
 @capability system.tasks
   tree          ()                              -> [ProcessEntry]
   kill          (app_id: str)                   -> unit
   kill_task     (app_id: str, task_name: str)   -> unit
-  storage!      (app_id: str)                   -> StorageInfo
+  storage       (app_id: str)                   -> StorageInfo
   cpu_watch     ()                              -> Stream [ProcessEntry]
   -- cpu_watch emits an updated [ProcessEntry] snapshot every 5 s.
 
@@ -910,6 +1155,29 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   stack    : str
   occurred : Timestamp
 
+-- ─────────────────────────────────────────────────────────────────
+-- Crash history. Restricted to "system.crash_reporter" specifically
+-- (not all system.* apps). The Crash Reporter (09-deck-shell §12)
+-- receives every new crash via the @on crash_report hook (02-deck-app §11)
+-- and persists it. This capability is the read/clear surface over that
+-- store, and is what the Crash Reporter UI uses to render the crash list.
+-- ─────────────────────────────────────────────────────────────────
+@capability system.crashes
+  list             ()                                   -> [CrashInfo]
+  -- Most-recent-first. Bounded to the last N crashes (config: 50 default).
+  list_for_app     (app_id: str)                        -> [CrashInfo]
+  -- Filter by the originating app id.
+  count            ()                                   -> int
+  clear            ()                                   -> unit
+  clear_for_app    (app_id: str)                        -> unit
+  watch            ()                                   -> Stream CrashInfo
+  -- Emits a value every time a new crash is recorded.
+  -- Used by the Crash Reporter app to update its list reactively.
+
+  @errors
+    :unauthorized "Only system.crash_reporter can use this capability"
+    :io           "Crash log storage is unavailable"
+
 -- Lockscreen and PIN management. Available only to system.* apps (typically system.lockscreen
 -- and system.settings). The bridge calls app_manager_lock() to push the lockscreen activity.
 @capability system.security
@@ -938,16 +1206,16 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
 -- ─────────────────────────────────────────────────────────────────
 
 @capability notifications
-  list!             ()                           -> [NotifEntry]
-  unread_count!     ()                           -> int
-  mark_read!        (id: str)                    -> unit
-  mark_all_read!    ()                           -> unit
-  clear!            (id: str)                    -> unit
-  clear_all!        ()                           -> unit
-  post_local!       (opts: LocalNotifOpts)       -> Result str notifications.Error
-  register_source!  (src: NotifSource)           -> Result unit notifications.Error
-  unregister_source!(id: str)                    -> unit
-  sources!          ()                           -> [NotifSource]
+  list              ()                           -> [NotifEntry]
+  unread_count      ()                           -> int
+  mark_read         (id: str)                    -> unit
+  mark_all_read     ()                           -> unit
+  clear             (id: str)                    -> unit
+  clear_all         ()                           -> unit
+  post_local        (opts: LocalNotifOpts)       -> Result str notifications.Error
+  register_source   (src: NotifSource)           -> Result unit notifications.Error
+  unregister_source (id: str)                    -> unit
+  sources           ()                           -> [NotifSource]
 
   @errors
     :permission      "Requires @permissions notifications"
@@ -1048,10 +1316,52 @@ OS events are pushed to the interpreter — never polled. The interpreter routes
 -- Fired when the correct PIN is entered and the lockscreen is dismissed.
 @event os.storage_pressure
 @event os.permission_change (capability: str, granted: bool)
+@event os.config_change (field: str, value: any)
+-- Fired when the user changes a @config value via the Settings app.
+-- Only fired for the app whose @config was modified — other apps do not see it.
+-- The app should re-read config.field_name on next access; @config values update
+-- in-place (no restart required).
 @event os.notification   (entry: NotifEntry)
 -- Fired by svc_notifications when a new notification arrives for this app.
 -- Fires if app is in foreground or if it has a background:true @task.
 -- If app is terminated, notification is stored; event fires on next resume.
+@event os.download_progress (url: str, bytes_written: int, total_bytes: int, percent: float)
+-- Fired periodically during a network.http.download() call.
+-- total_bytes is 0 and percent is -1.0 if the server did not send Content-Length.
+-- Not fired for ota.download() — use ota.download_progress() stream instead.
+
+@event os.memory_pressure (level: atom)   -- :low | :critical
+-- Fired by the runtime memory monitor (09-deck-shell §19) when free heap
+-- crosses a configured threshold. :low → encourage cooperative cleanup
+-- (apps may flush caches); :critical → eviction is imminent. Apps that
+-- handle this event can drop large derived data and prepare for suspend.
+-- Fired to ALL running apps (foreground + suspended), not only the top app.
+
+@event os.app_launched   (app_id: str)
+-- Fired by the OS when any app is launched (foreground or relaunched from
+-- suspended). Restricted: only delivered to apps that have @use system.apps.
+-- Used by the Launcher and Task Manager to update their lists; normal apps
+-- never receive this event.
+
+@event os.app_suspended  (app_id: str)
+-- Fired by the OS when any app is suspended (sent to background by the
+-- user, by another launch, or by memory pressure eviction). Restricted:
+-- only delivered to apps that have @use system.apps. Counterpart of
+-- os.app_launched for the Task Manager / Launcher views.
+
+-- Markdown viewport / interaction events. Fired by the bridge for the
+-- `markdown` view node (02-deck-app §12).
+@event markdown.link_tap      (url: str, text: str)
+-- User tapped a [link text](url) in a rendered markdown body.
+
+@event markdown.image_tap     (url: str, alt: str)
+-- User tapped an inline image. The bridge does not auto-open the image;
+-- the app decides (e.g. zoom, share, save).
+
+@event markdown.heading_enter (id: str, level: int, text: str)
+@event markdown.heading_exit  (id: str)
+-- Fired as the user scrolls and headings enter/leave the viewport.
+-- Used by reader apps to highlight the current section in a sticky ToC.
 
 -- Physical hardware buttons (board-specific, declared by OS author)
 @event hardware.button (id: int, action: atom)   -- :press | :long_press | :release

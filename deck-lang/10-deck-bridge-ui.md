@@ -1,6 +1,8 @@
 # CyberDeck Bridge: UI Reference
 **Version 1.0 — Board: Waveshare ESP32-S3-Touch-LCD-4.3**
 
+> **Companion specs**: this doc covers the *semantic node catalog*, *UI services*, *UX patterns*, and *bridge inference rules* for the LVGL bridge. The *DVC wire format* (binary layout consumed here) lives in `11-deck-implementation.md §18`. The *render IPC* (when and how the runtime hands trees to this bridge) lives in `11-deck-implementation.md §19`. The bridge UI is itself a **service driver** (`deck.driver.bridge.ui` in `12-deck-service-drivers.md §6.3`); a different platform composes a different driver (raylib, SDL, terminal-mode, e-ink) for the same content. The *board-specific concretions* on this hardware (LVGL task placement, framebuffer sizing in PSRAM, GT911 driver, VSYNC callback) live in `13-deck-cyberdeck-platform.md §15`.
+
 ---
 
 ## Modelo fundamental
@@ -353,10 +355,56 @@ Single `lv_label`, `CYBERDECK_FONT_MD`, `primary` color. Used for standalone tex
 
 #### `DVC_RICH_TEXT` — Multi-line Text
 
-Multi-line `lv_label`, `CYBERDECK_FONT_MD`, `primary`. On this bridge:
-- Plain text is rendered as-is.
-- Markdown (bold, italic, headings, links) is rendered via the `deck_markdown` capability if available — see `08-deck-markdown.md`. If the capability is absent, raw markdown syntax is stripped and plain text is shown.
-- Links are rendered as tappable spans in `primary` color; tap fires `intent_fn("open_url", deck_str(url))`.
+Multi-line `lv_label`, `CYBERDECK_FONT_MD`, `primary`. Plain text rendered as-is. For markdown content, use the dedicated `DVC_MARKDOWN` node below — `DVC_RICH_TEXT` does **not** parse markdown.
+
+#### `DVC_MARKDOWN` — Rendered Markdown (first-class)
+
+The app passes raw markdown text, an `MdDocument`, or an `MdPatch` (streaming). The only attributes the app carries are `:purpose`, `:scroll_to`, `:accessibility`, and the `on link` / `on image` interaction intents (see `02-deck-app §12.3`). Every presentation choice on this board is bridge inference.
+
+**Inference rules on this board (Waveshare 800×480):**
+
+| Concern | `:purpose :reading` | `:purpose :reference` | `:purpose :fragment` |
+|---|---|---|---|
+| Body font | `CYBERDECK_FONT_MD` | `CYBERDECK_FONT_MD` | `CYBERDECK_FONT_SM` |
+| Heading scale | h1=`XL`, h2=`LG`, h3=`MD`+bold | h1=`LG`, h2=`MD`+bold, h3=`MD` | h1=h2=h3=`MD`+bold |
+| Line height | 1.6× | 1.4× | 1.2× |
+| Max readable measure | min(content_w, 640 px) | full container | full container |
+| Internal scroll | yes when content > viewport | no (inherits container scroll) | no |
+| Inline ToC | shown when ≥ 3 headings | shown when ≥ 5 headings + sticky | never |
+| Code block chrome | bordered card, lang label, copy button | bordered card, lang label, copy button | inline code styling only; block code rendered as `lv_label` mono |
+| Code block syntax colors | follows active `display.theme` palette | same | same |
+| Image sizing | scale-to-width, max 60% viewport height | scale-to-width, max 40% viewport height | inline icon-sized (24 px), tap to expand |
+| Image fallback | alt text in `text_dim` | alt text in `text_dim` | alt text only |
+| Link rendering | underlined, `primary` color | underlined, `primary` color | inline `primary` color, no underline |
+| Tap to follow link | when `on link ->` is present | same | same |
+| Selection | enabled (LVGL long-press selection) | enabled | disabled |
+| Virtual render | engaged above 10 000 chars | engaged above 5 000 chars | n/a |
+
+The bridge resolves `:scroll_to "heading-id"` reactively: when the value changes, it scrolls the rendered body to the target heading using `lv_obj_scroll_to_view(heading_obj, LV_ANIM_ON)`.
+
+`on link` / `on image` presence makes the corresponding elements tappable and routes taps through `intent_fn` with the matching event payload (`os.markdown.link_tap` / `os.markdown.image_tap` per `03-deck-os §5`).
+
+If the app passes a streaming `MdPatch?`, the bridge renders incrementally — completed blocks lock in, an in-progress block re-renders on each `:append`/`:replace`, and a blinking cursor `_` (`CYBERDECK_FONT_XL`, `primary`) is shown at the trailing edge until the stream finalizes.
+
+#### `DVC_MARKDOWN_EDITOR` — Markdown Editor (first-class)
+
+Read-write counterpart to `DVC_MARKDOWN`. The app provides only `value`, change/cursor/selection event handlers, optional `placeholder`, optional `editor_state` for programmatic control, and `accessibility`. The bridge owns every UI choice.
+
+**Inference rules on this board:**
+
+| Concern | Decision |
+|---|---|
+| Container | `lv_textarea` with markdown awareness; primary border, body font `CYBERDECK_FONT_MD` |
+| Toolbar | **Hidden by default on this touch-only device.** Format actions are available via long-press → `Choice Overlay Service` (§5.5) listing `:bold :italic :code :heading :bullet_list :ordered_list :blockquote :code_block :link`. |
+| Preview | Toggle accessible from the navbar's "secondary action" slot; switches the same content area between edit and rendered modes. Never split-side on this 800×480 screen. |
+| Line numbers | Off (touch device; the on-screen keyboard already consumes vertical space). |
+| Auto-suggestions | Off (no LSP on-device). |
+| Scroll | Internal LVGL scroll within the textarea container; gestures pass through unless they originate inside the textarea. |
+| Cursor blink | Standard LVGL textarea blink; respects `display.screen` brightness. |
+| Selection | Long-press to enter selection; drag handles in `primary` color. |
+| Keyboard | `Keyboard Service` (§5.4) raises automatically on `on_resume` per the no-keyboard-in-on_create rule. |
+| Placeholder | Rendered in `text_dim` only when `value` is empty. |
+| External state (`editor_state`) | When present, the bridge mirrors the canonical state from the runtime instead of holding its own; the textarea becomes a fully controlled component. Used when the app drives the editor via `markdown.editor_*` capability methods (e.g. macros, snippet expansion, undo/redo from external buttons). |
 
 #### `DVC_MEDIA` — Image
 
@@ -820,7 +868,7 @@ Badge circle: `primary` fill, `bg_dark` text, `CYBERDECK_FONT_SM`, radius = 50% 
 
 ---
 
-### 5.12 Progress Overlay Service
+### 5.11 Progress Overlay Service
 
 **Distinto del Loading Overlay (§5.3).** El Loading Overlay indica "algo está pasando, no sé cuánto falta". El Progress Overlay indica un avance medible — descarga de OTA, copia de archivos, sync inicial.
 
@@ -859,7 +907,7 @@ Full screen semi-transparent black (LV_OPA_70)
 
 ---
 
-### 5.11 Share Sheet Service
+### 5.12 Share Sheet Service
 
 **Trigger conditions:**
 - `DVC_SHARE` node tapped
@@ -1100,7 +1148,7 @@ The theme is applied at widget creation time (in `on_create`), not retroactively
 
 ---
 
-## 10.1 Lockscreen Bridge Contract
+## 10. Lockscreen Bridge Contract
 
 The lockscreen is a system activity (`APP_ID_LAUNCHER, screen_id=1`) managed by the OS, not a Deck flow. The bridge interacts with it as follows:
 
@@ -1116,7 +1164,7 @@ The lockscreen renders `DVC_PIN` (§4.3) with `length: 4` (default) or the lengt
 
 ---
 
-## 10. LVGL Gotchas Reference
+## 11. LVGL Gotchas Reference
 
 Issues specific to LVGL 8.4 on this bridge:
 

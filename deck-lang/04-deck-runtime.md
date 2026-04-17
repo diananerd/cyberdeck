@@ -7,6 +7,8 @@
 
 This document specifies the Deck interpreter internals for implementors. Each component is a distinct module with a clean interface. They can be built, tested, and understood independently. A student can implement a working lexer → parser → evaluator pipeline with zero OS or hardware dependency. Plugging in a mock bridge produces a fully functional test environment.
 
+> **Implementation contract**: this document covers the *high-level architecture*. The *implementation-level details* — exact algorithms (INDENT/DEDENT, pattern compilation, reactive cascade), wire formats (DeckValue binary layout, DVC tree, snapshot binary), threading model, refcount semantics, IPC framing, performance budgets — live in `11-deck-implementation.md`. On any algorithmic conflict, `11-deck-implementation` supersedes this doc.
+
 ---
 
 ## 2. Architecture
@@ -191,7 +193,9 @@ StateDecl       { name: atom, fields: [(name, type_ann)],
                   on_exit?: Expr }          -- hook evaluated on state exit
 TransDecl       { event, params, from_state, from_binding?, to_state,
                   to_fields: [(str, Expr)], guard?,
-                  watch?: Expr }            -- boolean condition for reactive firing
+                  watch?: Expr,             -- boolean condition for reactive firing
+                  before?: Expr,            -- effect evaluated after guard, before state change
+                  after?: Expr }            -- effect evaluated after state change
 FlowDecl        { name: TypeIdent?,        -- equivalent to MachineDecl with step blocks
                   steps: [StepDecl],        -- ordered step declarations
                   initial: atom }

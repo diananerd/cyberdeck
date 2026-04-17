@@ -85,6 +85,28 @@ let sql = """
 ```
 Interpolation works inside triple-quoted strings.
 
+**Tagged multi-line strings.** A bare identifier may prefix the opening triple-quote. The tag is **semantically a no-op** — the string value is identical to the untagged form — but it carries metadata for editors and language servers (typically syntax highlighting). The runtime strips the tag during lexing.
+
+```
+let post_body = md"""
+# Getting Started
+
+Install the interpreter:
+
+```sh
+deck run app.deck
+```
+"""
+
+-- Identical at runtime to:
+let post_body = """
+# Getting Started
+...
+"""
+```
+
+The `md` tag (hint: Markdown) is recognized everywhere. Other tags are reserved for future use; unknown tags are accepted (forward-compatible) and treated as plain multi-line strings. Tag identifiers must match `[a-z][a-z0-9_]*` and immediately precede `"""` with no whitespace.
+
 ### 2.8 Duration Literals
 ```
 500ms   1s   30s   5m   1h   12h   1d
@@ -704,7 +726,7 @@ fn to_fahrenheit (c: float) -> str = "{internal(c)}°F"
 ```
 
 ### 10.3 Module Graph Declaration
-The complete set of local modules used by an app is declared via `@use ./path` entries in `app.deck` (and **only** in `app.deck` — see `02-deck-app §10.7`). The loader resolves the full module graph starting from `app.deck`, walking all `@use ./path` entries transitively.
+The complete set of local modules used by an app is declared via `@use ./path` entries in `app.deck` (and **only** in `app.deck` — see `02-deck-app §4.2`). The loader resolves the full module graph starting from `app.deck`, walking all `@use ./path` entries transitively.
 
 Individual `.deck` files other than `app.deck` do **not** have their own `@use` annotations. Instead, they rely on the project-wide module graph established by `app.deck`. Any module declared in `app.deck`'s `@use` block is available to every file in the project by its module name:
 
@@ -765,6 +787,8 @@ Note: `app.deck` is also a `.deck` file, so annotations in the "any `.deck` file
 ## 11. Standard Vocabulary (Builtins)
 
 The following are always in scope, require no `@use`, and are pure (except `random`, documented as an impure builtin). Implemented by the interpreter, not the OS.
+
+**OS-level builtins** (`math`, `text`, `time`, `regex`, `bytes`, `crypto`, `log`, `random`, `row`) are also always in scope with no `@use` required, but are documented in `03-deck-os §3` because they are part of the OS surface and their implementations may use platform-specific optimizations (e.g., hardware AES for `crypto`). The builtins below are strictly language-level — they operate only on Deck values and never call into the bridge.
 
 ### 11.1 Type Conversion
 ```

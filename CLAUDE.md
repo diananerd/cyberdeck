@@ -15,17 +15,26 @@ The long-term goal is to run apps written in **Deck** — a purpose-built embedd
 | `GROUND-STATE.md` | Full audit of the current C API surface: what's implemented, what leaks ESP-IDF types, what's missing before Deck can run |
 | `APPS.md` | Planned app catalog with storage model, services consumed, and screens for each app |
 | `deck-lang/01-deck-lang.md` | Deck core language spec — syntax, types, effects, pattern matching |
-| `deck-lang/02-deck-app.md` | Deck app model — `@app`, `@use`, `@on`, `@nav`, lifecycle |
-| `deck-lang/03-deck-os.md` | OS bridge protocol and `.deck-os` surface file format |
-| `deck-lang/04-deck-runtime.md` | Interpreter internals — lexer, parser, evaluator, effect dispatcher |
+| `deck-lang/02-deck-app.md` | Deck app model — `@app`, `@use`, `@on`, `@machine`/`@flow`, lifecycle, `@handles` |
+| `deck-lang/03-deck-os.md` | OS surface, capabilities catalog, events, security model |
+| `deck-lang/04-deck-runtime.md` | High-level runtime architecture — lexer, parser, evaluator, dispatcher |
 | `deck-lang/05-deck-os-api.md` | High-level OS services exposed to Deck apps (SQLite, NVS, FS, HTTP, MQTT, OTA) |
 | `deck-lang/06-deck-native.md` | How to extend the runtime with C capabilities and events |
-| `deck-lang/07-deck-bluesky.md` | Reference Deck app: complete Bluesky ATProto client |
-| `deck-lang/08-deck-markdown.md` | Markdown as a first-class Deck capability |
 | `deck-lang/09-deck-shell.md` | OS shell integration — launcher, navigation, lifecycle, system events, service architecture |
 | `deck-lang/10-deck-bridge-ui.md` | CyberDeck LVGL bridge UI reference — component catalog, UI services, UX patterns, inference rules |
+| `deck-lang/11-deck-implementation.md` | Interpreter backend — algorithms, threading, memory, wire formats, snapshot/restore, IPC |
+| `deck-lang/12-deck-service-drivers.md` | Hardware-agnostic Service Driver Interface (SDI) — the formal C contract any platform implements to host Deck |
+| `deck-lang/13-deck-cyberdeck-platform.md` | ESP-IDF v6.0 reference implementation of the SDI on ESP32-S3 — boot, partitions, FS layout, capability mapping, power, OTA dual track |
+| `deck-lang/14-deck-components.md` | Component publishing model + cross-SoC porting guide — IDF Component Registry, repo strategy (one repo per component, git submodules), conformance suite |
+| `deck-lang/15-deck-versioning.md` | Versioning policy across the project — five version concepts (edition, surface API level, runtime semver, SDI semver, app semver), `@requires` annotation, structured load errors, runtime probing, deprecation pipeline, governance |
+| **App Annexes** | The bundled OS apps, in slot order. Each is a complete Deck spec for one app. |
+| `deck-lang/annex-a-launcher.md` | Annex A — Launcher (slot 0, `system.launcher`) |
+| `deck-lang/annex-b-task-manager.md` | Annex B — Task Manager (slot 1, `system.taskman`) |
+| `deck-lang/annex-c-settings.md` | Annex C — Settings (slot 2, `system.settings`) |
+| `deck-lang/annex-d-files.md` | Annex D — Files (slot 3, `system.files`) |
+| `deck-lang/annex-xx-bluesky.md` | Annex XX — Bluesky kitchen-sink demo app (SD-resident, no fixed slot; large reference app exercising many language and OS features) |
 
-When working on anything related to how apps are structured, what services they consume, or what the interpreter needs from the OS — consult `GROUND-STATE.md` first.
+When working on anything related to how apps are structured, what services they consume, or what the interpreter needs from the OS — consult `GROUND-STATE.md` first. For algorithmic detail (how the runtime actually works under the hood) consult `11-deck-implementation.md`. For the abstract SDI contract that defines what a platform must implement, consult `12-deck-service-drivers.md`. For ESP-IDF integration concretions (FreeRTOS task layout, partition table, SD layout, boot sequence, OTA dual track) consult `13-deck-cyberdeck-platform.md`. For how everything is packaged and published as IDF Components (each in its own GitHub repo) and how to port to other SoCs, consult `14-deck-components.md`. For all version concerns (compatibility check at load, error codes, who-bumps-what, deprecation policy, runtime probing API) consult `15-deck-versioning.md`.
 
 ## Build & Flash Commands
 

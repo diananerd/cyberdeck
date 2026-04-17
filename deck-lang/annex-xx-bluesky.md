@@ -1,5 +1,11 @@
-# Annex A — Bluesky ATProto Client
-**Complete Deck Implementation**
+# Annex XX — Bluesky ATProto Client
+**Kitchen-Sink Reference App**
+
+> **What this annex is.** Bluesky is a deliberately large, realistic Deck app — the closest thing the project has to a stress test. It exercises almost every language feature and OS capability simultaneously: authentication state machines, paginated lists, infinite scroll, real-time-feeling UI from polled data, background token refresh, deep links, signed/unsigned posts, image rendering, time formatting, error recovery, offline cache, the lot. If a refactor of the language or runtime breaks Bluesky, it almost certainly breaks something in production.
+>
+> **It is not the next app on the build roadmap.** The bundled apps (Annexes A–D: Launcher, Task Manager, Settings, Files) come first. Several other apps not yet specified (catalogued in `APPS.md`) come after. Bluesky sits at the end of the alphabet by intent — it is "Annex XX" with no fixed slot. When ready, it will install on SD as `social.bsky.app`, signed by the community key, like any other third-party app.
+>
+> **Use this annex as a syntax reference.** When you want to see how a real Deck app structures its `@app`, `@requires`, `@machine`, `@flow`, `@stream`, `@task`, `@migration`, `@on`, content bodies, and capability use across many `.deck` files, read this annex end-to-end. The patterns here are the load-bearing examples the docs site links to.
 
 ---
 
@@ -141,6 +147,7 @@ bluesky/
   cache           as cache
   display.notify  as notify
   api_client      as api
+  system.info     as sysinfo
   ./types
   ./utils/xrpc
   ./utils/time_ago
@@ -1306,9 +1313,13 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
 
   transition :got_results (posts: [Post], users: [Profile])
     from :searching s
-    to   match (len(posts) + len(users) == 0)
-      | true  -> :no_results (query: s.query)
-      | false -> :results (query: s.query, posts: posts, users: users)
+    when: len(posts) + len(users) == 0
+    to   :no_results (query: s.query)
+
+  transition :got_results (posts: [Post], users: [Profile])
+    from :searching s
+    when: len(posts) + len(users) > 0
+    to   :results (query: s.query, posts: posts, users: users)
 
   transition :failed (message: str)
     from :searching s
@@ -1380,7 +1391,7 @@ fn do_search (q: str) -> unit !api =
               toggle :notifications  state: config.notifications  on -> unit
             group "App"
               config.bsky_host
-              sys.app_version()
+              sysinfo.app_version()
             confirm "Sign Out"  message: "Sign out of Bluesky?"  -> do_logout()
         | _ -> loading
 

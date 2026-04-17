@@ -1,6 +1,8 @@
 # Deck OS Shell Integration
 **Version 2.0 — Launcher, Navigation, Lifecycle, and System Events**
 
+> **Implementation references**: this doc describes the *abstract shell model* — what a launcher / lockscreen / task manager are, how the OS app stack behaves, how memory pressure cascades, how background tasks resume suspended VMs. The *abstract platform contract* (which services exist, their C vtables, their error vocabularies) lives in `12-deck-service-drivers.md`. The *concrete numbers and ESP-IDF bindings* (FreeRTOS task layout, memory pressure thresholds in KB, eviction algorithm, ESP-IDF event mapping, the list of svc_* modules, OTA dual track) live in `13-deck-cyberdeck-platform.md §5, §9, §10, §14`. The *runtime-internal mechanics* of snapshot/restore, mailbox IPC, panic isolation, and reactive cascade live in `11-deck-implementation.md §14, §16, §17, §19`.
+
 ---
 
 ## 1. El Modelo Fundamental
@@ -132,7 +134,7 @@ El Task Manager puede:
 apps.running ()               -> [AppInfo]
 apps.suspended ()             -> [AppInfo]
 apps.installed ()             -> [AppInfo]
-apps.search! (query: str)     -> [AppInfo]   -- busca por nombre/id entre installed()
+apps.search (query: str)      -> [AppInfo]   -- busca por nombre/id entre installed()
 apps.bring_to_front (id: str) -> unit
 apps.launch (id: str)         -> Result unit system.Error
 apps.launch_url (id: str, url: str) -> Result unit system.Error
@@ -319,19 +321,27 @@ Una app puede ser lanzada desde otra app o desde el sistema con una URL:
 @handles
   "bsky://profile/{did}"
   "bsky://post/{uri}"
-  "bsky://search?q={query}"
+  "bsky://search"
 
--- Handler:
-@on open_url (url: str)
-  let parts = text.split(url, "://")
-  match parts
-    | ["bsky", path] -> handle_bsky_path(path)
-    | _              -> unit
+-- Handler — el bridge extrae los segmentos {…} del pattern matched
+-- y los entrega en `params`. Los parámetros de query string se
+-- incluyen también, pero NO se matchean contra el pattern (ver
+-- 02-deck-app §20.1 para la gramática completa).
+@on open_url (url: str, params: {str: str})
+  match params["did"]
+    | :some did      -> open_profile(did)
+    | :none          ->
+        match params["uri"]
+          | :some uri  -> open_post(uri)
+          | :none      ->
+              match params["q"]
+                | :some q  -> open_search(q)
+                | :none    -> unit
 ```
 
 ```deck
 -- Desde otra app, lanzar con URL:
-apps.launch_url!("social.bsky.app", "bsky://profile/did:plc:abc")
+apps.launch_url("social.bsky.app", "bsky://profile/did:plc:abc")
 ```
 
 Si la app ya está suspendida, se resume y recibe `@on open_url`. Si no está instalada, `apps.launch_url` retorna `:err :not_installed`.
@@ -383,8 +393,8 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
   shell.set_navigation_bar(true)
 
 @on resume
-  Launcher.send!(:dismiss_tasks)
-  Launcher.send!(:dismiss_search)
+  Launcher.send(:dismiss_tasks)
+  Launcher.send(:dismiss_search)
 ```
 
 ```deck
@@ -410,7 +420,7 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
                                         | false -> "—")
           ]
         list
-          items: apps.installed!()
+          items: apps.installed()
           item app ->
             let badge_count = first_or(
                                filter(counts, c -> c.app_id == app.id),
@@ -419,17 +429,17 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
               label: app.name
               icon:  match app.icon | :some s -> s | :none -> "?"
               badge: if badge_count > 0 then :some badge_count else :none
-              -> apps.launch!(app.id)
+              -> apps.launch(app.id)
         trigger
           label: "Apps recientes"
-          -> Launcher.send!(:show_tasks)
+          -> Launcher.send(:show_tasks)
         trigger
           label: "Buscar"
-          -> Launcher.send!(:show_search)
+          -> Launcher.send(:show_search)
 
   -- Stream drives badge updates without full re-render.
   on NotifCounts counts ->
-    HomeFlow.send!(:refresh_counts (counts: counts))
+    HomeFlow.send(:refresh_counts (counts: counts))
 
   transition :refresh_counts (counts: [(app_id: str, unread: int)])
     from :idle _
@@ -445,7 +455,7 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
     content =
       list
         items: filter(
-                 apps.running!() ++ apps.suspended!(),
+                 apps.running() ++ apps.suspended(),
                  a -> not a.is_launcher)
         item app ->
           group
@@ -456,12 +466,12 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
             trigger
               label: "Open {app.name}"
               -> do
-                  apps.bring_to_front!(app.id)
-                  Launcher.send!(:dismiss_tasks)
+                  apps.bring_to_front(app.id)
+                  Launcher.send(:dismiss_tasks)
             confirm
               label:   "Close {app.name}"
               message: "Close {app.name}?"
-              -> apps.kill!(app.id)
+              -> apps.kill(app.id)
 ```
 
 ```deck
@@ -475,17 +485,17 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
         input
           label: "BUSCAR"
           value: query
-          -> q -> SearchFlow.send!(:update (query: q))
+          -> q -> SearchFlow.send(:update (query: q))
         list
-          items: apps.search!(query)
+          items: apps.search(query)
           item app ->
             trigger
               label: app.name
               icon:  match app.icon | :some s -> s | :none -> "?"
-              -> apps.launch!(app.id)
+              -> apps.launch(app.id)
         trigger
           label: "Cancelar"
-          -> Launcher.send!(:dismiss_search)
+          -> Launcher.send(:dismiss_search)
 
   transition :update (query: str)
     from :active _
@@ -560,7 +570,7 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
                     confirm
                       label:   "Stop task"
                       message: "Cancelar {unwrap_opt(bg.task_name)}?"
-                      -> tasks.kill_task!(bg.app_id, unwrap_opt(bg.task_name))
+                      -> tasks.kill_task(bg.app_id, unwrap_opt(bg.task_name))
               when not p.app_id == "system.launcher"
                 navigate
                   label: "Ver detalle"
@@ -570,7 +580,7 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
                 confirm
                   label:   "Kill {p.app_id}"
                   message: "Forzar cierre de {p.app_id}?"
-                  -> tasks.kill!(p.app_id)
+                  -> tasks.kill(p.app_id)
 ```
 
 ```deck
@@ -579,7 +589,7 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
 @flow AppDetailFlow
 
   step :idle (app_id: str) ->
-    let storage = tasks.storage!(app_id)
+    let storage = tasks.storage(app_id)
     content =
       group
         data: "App: {app_id}"
@@ -597,11 +607,11 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
                 confirm
                   label:   "Stop {unwrap_opt(p.task_name)}"
                   message: "Cancelar este background task?"
-                  -> tasks.kill_task!(p.app_id, unwrap_opt(p.task_name))
+                  -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
         confirm
           label:   "Kill app"
           message: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
-          -> tasks.kill!(app_id)
+          -> tasks.kill(app_id)
 ```
 
 **Protecciones del OS**: el Task Manager no puede matar al Launcher (`system.launcher`) ni a sí mismo. El bridge de `system.tasks.kill()` verifica el `app_id` y retorna `:unauthorized` si alguno de los dos es el objetivo.
@@ -677,10 +687,10 @@ La capability `system.shell` está disponible únicamente para apps cuyo `app.id
   running         ()                          -> [AppInfo]
   suspended       ()                          -> [AppInfo]
   installed       ()                          -> [AppInfo]
-  search!         (query: str)                -> [AppInfo]
+  search          (query: str)                -> [AppInfo]
   bring_to_front  (id: str)                   -> unit
-  launch!         (id: str)                   -> Result unit system.Error
-  launch_url!     (id: str, url: str)         -> Result unit system.Error
+  launch          (id: str)                   -> Result unit system.Error
+  launch_url      (id: str, url: str)         -> Result unit system.Error
   kill            (id: str)                   -> unit
   notif_counts_watch ()                       -> Stream [(app_id: str, unread: int)]
   -- Stream que emite un snapshot completo cada vez que cambia el unread count de cualquier app.
@@ -708,7 +718,7 @@ La capability `system.shell` está disponible únicamente para apps cuyo `app.id
   tree          ()                              -> [ProcessEntry]
   kill          (app_id: str)                   -> unit
   kill_task     (app_id: str, task_name: str)   -> unit
-  storage!      (app_id: str)                   -> StorageInfo
+  storage       (app_id: str)                   -> StorageInfo
   cpu_watch     ()                              -> Stream [ProcessEntry]
   -- cpu_watch emits an updated snapshot every 5 s.
 
@@ -972,9 +982,9 @@ El OS incluye una Settings app (`system.settings`) que accede a la configuració
 
 ```deck
 -- En la settings app:
-let all_apps = apps.all!()
+let all_apps = apps.installed()
 for app in all_apps
-  let config_schema = apps.config_schema!(app.id)
+  let config_schema = apps.config_schema(app.id)
   -- config_schema: [{name, type, default, range?, options?, unit?, current_value}]
   -- Renderiza un formulario nativo por app
 ```
@@ -985,6 +995,14 @@ Desde la perspectiva de las apps de usuario, sus `@config` nunca cambian mid-exe
 
 ## 12. Crash Reporter
 
+The crash log itself is persisted by the OS in a system-level ring buffer (last 50 crashes by default). The Crash Reporter app does not need its own database — it consumes the `system.crashes` read API (`03-deck-os §4.11`). When the runtime catches an unrecoverable error in any app VM, the OS:
+
+1. Captures `CrashInfo { app_id, message, stack, occurred }`.
+2. Appends it to the ring buffer.
+3. Fires `@on crash_report` to `system.crash_reporter` (resuming it from suspension if needed).
+
+The Crash Reporter is therefore stateless — it reacts to the new crash, posts a system notification, and exposes the buffer to the user.
+
 ```deck
 -- system/crash_reporter/app.deck
 
@@ -993,20 +1011,20 @@ Desde la perspectiva de las apps de usuario, sus `@config` nunca cambian mid-exe
   id:   "system.crash_reporter"
 
 @use
-  system.shell  as shell
-  db            as db
+  system.shell    as shell
+  system.crashes  as crashes
 
 @on launch
-  let pending = load_pending_crashes!()
+  let pending = crashes.list()
   when len(pending) > 0
-    show_crash_report!(head(pending))
+    show_crash_overlay(head(pending))
 
 @on crash_report (info: CrashInfo)
-  save_crash!(info)
-  show_crash_overlay!(info)
+  -- The OS has already persisted `info`; we only need to surface it.
+  show_crash_overlay(info)
 
-fn show_crash_overlay (info: CrashInfo) -> unit =
-  shell.post_notification!(SysNotifOpts {
+fn show_crash_overlay (info: CrashInfo) -> unit !shell =
+  shell.post_notification(SysNotifOpts {
     id:      "crash_{info.app_id}",
     title:   "{info.app_id} dejó de responder",
     message: "Toca para ver detalles",
@@ -1019,39 +1037,37 @@ fn show_crash_overlay (info: CrashInfo) -> unit =
 
 ---
 
-## 13. Lo que Esto Añade al Spec Existente
+## 13. Resumen de Integración con Specs Hermanos
 
-### Nuevos eventos estándar en `03-deck-os`
+Las afirmaciones de las secciones 1–12 dependen de eventos, hooks, capabilities y anotaciones declarados en los otros specs. Esta sección los enumera y apunta a la definición canónica para que el modelo de shell quede acoplado al lenguaje sin duplicación.
 
-```
-@event os.config_change    (field: str, value: any)
-@event os.app_launched     (app_id: str)
-@event os.app_suspended    (app_id: str)
-@event os.memory_pressure  (level: atom)  -- :low | :critical
-```
+### Eventos declarados en `03-deck-os §5`
 
-### Nuevos hooks en `02-deck-app`
+| Evento | Notas |
+|---|---|
+| `os.config_change (field: str, value: any)` | Solo recibido por la app cuyo `@config` cambió |
+| `os.app_launched (app_id: str)` | Solo entregado a apps con `@use system.apps` |
+| `os.app_suspended (app_id: str)` | Solo entregado a apps con `@use system.apps` |
+| `os.memory_pressure (level: atom)` | `:low` \| `:critical`. Entregado a todas las apps vivas |
 
-```
-@on back        → :handled | :unhandled | :confirm { ... }
-@on open_url (url: str)
-@on crash_report (info: CrashInfo)
-```
+### Hooks declarados en `02-deck-app §11`
 
-### Nueva sección en `@app` para deep links
+| Hook | Restricción |
+|---|---|
+| `@on back` → `:handled` \| `:unhandled` \| `:confirm { … }` | Disponible para cualquier app |
+| `@on open_url (url: str, params: {str: str})` | Requiere `@handles` declarado |
+| `@on crash_report (info: CrashInfo)` | Solo permitido en `system.crash_reporter`; load-error en cualquier otra app |
 
-```deck
-@app
-  name:    "MyApp"
-  id:      "mx.lab.myapp"
-  version: "1.0.0"
+### Capabilities declaradas en `03-deck-os §4.11`
 
-@handles
-  "myapp://profile/{id}"
-  "myapp://post/{uri}"
-```
+| Capability | Quién |
+|---|---|
+| `system.apps`, `system.tasks`, `system.shell`, `system.security` | Apps cuyo `app.id` empieza por `system.` |
+| `system.crashes` | Solo `system.crash_reporter` |
 
-`@handles` es una anotación de nivel superior en `app.deck` (no dentro de `@app`). Declara los patrones de URL que activan `@on open_url`. El Loader los registra en el OS en Stage 4.
+### Anotación `@handles` en `02-deck-app §20`
+
+`@handles` es top-level en `app.deck` (no anida en `@app`). Declara patrones de URL que activan `@on open_url`. El Loader los registra en el OS en Stage 4. La gramática completa (segmentos `{name}` / `{name:rest}`, query string, resolución cuando varias apps matchean) vive en `02-deck-app §20.1–§20.6`.
 
 ---
 
@@ -1270,7 +1286,7 @@ Un `@task` es una declaración. El Scheduler lo convierte en trabajo real:
   when: network is :connected and battery > 20%
   priority: :background
   battery: :normal
-  run: sync_logic!()
+  run: sync_logic()
 ```
 
 El Scheduler mantiene un `TaskEntry` por cada `@task` declarado:
@@ -1316,7 +1332,7 @@ Estas son políticas del Scheduler de Deck, no prioridades de FreeRTOS. Todos lo
 
 ### 17.3 Efectos de Larga Duración: El Modelo de Continuación
 
-Cuando cualquier código Deck llama a un efecto que toma tiempo (p.ej. `net.fetch!(url)`):
+Cuando cualquier código Deck llama a un efecto que toma tiempo (p.ej. `net.get(url)`):
 
 ```
 Evaluador: encuentra EffectRequest { alias: "net", method: "fetch", args: [url] }
@@ -1424,7 +1440,7 @@ Usuario toca un toggle en pantalla
   → Evaluador ejecuta el handler con (event.value = true) en scope
   → El handler hace send(:toggle_wifi, enabled: true) → machine state change
   → Re-render pipeline (§18.3)
-  → El handler hace net.set_wifi!(true) → effect dispatched (§17.3)
+  → El handler hace network.wifi.connect(ssid, pwd) → effect dispatched (§17.3)
 ```
 
 ### 18.3 Pipeline de Re-render
@@ -1548,10 +1564,10 @@ void deck_evict_oldest_suspended(DeckOSRuntime *rt) {
 
 `@on terminate` tiene 500ms para ejecutarse — inviolables. El runtime usa un timer; si el hook no retorna, la destrucción continúa de todos modos. Dentro de esos 500ms la app puede:
 
-- Guardar estado crítico en `store.set!()` o `nvs.set!()` — efectos síncronos y rápidos
-- Cerrar conexiones (`ws.close!()`, `ble.disconnect!()`)
+- Guardar estado crítico en `store.set()` o `nvs.set()` — efectos síncronos y rápidos
+- Cerrar conexiones (`ws.close()`, `ble.disconnect()`)
 
-**No puede** hacer efectos de larga duración como `net.fetch!()` — estos serían cancelados al destruir la VM. El `@on terminate` es un callback de limpieza, no una oportunidad de I/O.
+**No puede** hacer efectos de larga duración como `net.get(url)` — estos serían cancelados al destruir la VM. El `@on terminate` es un callback de limpieza, no una oportunidad de I/O.
 
 La próxima vez que el usuario lance la app que fue terminada por presión: recibirá `@on launch` (no `@on resume`). Si guardó estado en `@on terminate`, puede restaurarlo en `@on launch`. Si no guardó nada, empieza limpia.
 
@@ -1737,11 +1753,11 @@ Cuando una app usa efectos de larga duración, el bridge puede crear tareas temp
 
 | Efecto | Tarea creada | Cuándo muere |
 |---|---|---|
-| `net.fetch!()` | HTTP client task (stack PSRAM) | Al completar el fetch |
-| `net.download!()` | Downloader task (stack PSRAM) | Al completar el download |
-| `ws.connect!()` | WebSocket recv task (stack PSRAM) | Al `ws.close!()` o app termination |
-| `ble.scan!()` | BLE scan task | Al `ble.stop_scan!()` |
-| `db.query!()` | SQLite query task (stack PSRAM) | Al completar la query |
+| `net.get()` / `net.post()` | HTTP client task (stack PSRAM) | Al completar el fetch |
+| `net.download()` | Downloader task (stack PSRAM) | Al completar el download |
+| `ws.connect()` | WebSocket recv task (stack PSRAM) | Al `ws.close()` o app termination |
+| `ble.scan()` | BLE scan task | Al `ble.stop_scan()` |
+| `db.query()` | SQLite query task (stack PSRAM) | Al completar la query |
 
 Todas las tareas creadas por el bridge para una app se registran en el `os_task` registry bajo el `app_id` de esa app. `os_task_destroy_all_for_app(app_id)` las mata en el teardown — garantizando que no queden tasks zombie.
 
@@ -1756,19 +1772,19 @@ Los servicios del sistema no son apps Deck — son módulos C permanentes que el
 svc_wifi          → network.http, network.ws, network.socket → @use network.http as net
 svc_battery       → (parte de system.shell)                  → shell.battery_level()
 svc_time          → @builtin time (siempre en scope)         → time.now(), time.format(), …
-svc_db            → capability "db"                          → db.query!(), db.execute!()
-svc_nvs           → capability "nvs"                         → nvs.get!(), nvs.set!()
+svc_db            → capability "db"                          → db.query(), db.exec(sql)
+svc_nvs           → capability "nvs"                         → nvs.get(), nvs.set()
 svc_storage       → capability "storage.local"               → store.get(), store.set()
-svc_fs            → capability "fs"                          → fs.read!(), fs.write!()
+svc_fs            → capability "fs"                          → fs.read(), fs.write()
 svc_mqtt          → capability "mqtt"                        → mqtt.subscribe(), mqtt.publish()
-svc_ble           → capability "ble"                         → ble.scan!(), ble.connect!()
+svc_ble           → capability "ble"                         → ble.scan(), ble.connect()
 svc_crypto        → capability "crypto.aes"                  → crypto.aes.encrypt(), decrypt()
-svc_bgfetch       → capability "background_fetch"            → background_fetch.register()
-svc_ota           → capability "ota"                         → ota.check!(), ota.install!()
-svc_notifications → capability "notifications"               → notif.list!(), notif.register_source!(), …
+svc_bgfetch       → capability "background_fetch"            → bg.register()
+svc_ota           → capability "ota"                         → ota.check(), ota.download()
+svc_notifications → capability "notifications"               → notif.list(), notif.register_source(), …
 
 -- High-level service capabilities (05-deck-os-api.md) — sin svc_* propio
-(sobre network.http)   → api_client   → api.get!(), api.post!(), …
+(sobre network.http)   → api_client   → api.get(), api.post(), …
 (memoria del VM)       → cache        → cache.get(), cache.set()
 ```
 
@@ -1833,7 +1849,7 @@ app_id → clave de aislamiento universal
 ```
 Boot:   svc_notifications init → leer fuentes del NVS → lanzar poll tasks activas
                                                               ↓
-App lanza:    register_source!(opts) → svc_notifications guarda en NVS, lanza poll task
+App lanza:    register_source(opts) → svc_notifications guarda en NVS, lanza poll task
                                                               ↓
 App suspende: poll task sigue corriendo — el servicio no sabe ni le importa que la app esté suspendida
                                                               ↓
@@ -1843,7 +1859,7 @@ App termina:  svc_notifications cancela subscripción del @on os.notification de
               El Launcher puede seguir mostrando el badge unread count.
                                                               ↓
 App re-lanza: svc_notifications re-entrega el unread count via notif_counts_watch().
-              La app puede llamar notif.list!() para obtener las notificaciones acumuladas.
+              La app puede llamar notif.list() para obtener las notificaciones acumuladas.
 ```
 
 Esta separación es lo que hace posible que `svc_notifications` funcione como sistema autónomo: el config persiste en el NVS del servicio (no en la app), el historial persiste en SQLite, y el badge del Launcher refleja la realidad aunque la app esté muerta.
@@ -2004,12 +2020,12 @@ step :active _ ->
             confirm
               label:   "Kill {p.app_id}"
               message: "Forzar cierre de {p.app_id}?"
-              -> tasks.kill!(p.app_id)
+              -> tasks.kill(p.app_id)
           when p.kind is :background
             confirm
               label:   "Stop {p.task_name}"
               message: "Cancelar background task {p.task_name}?"
-              -> tasks.kill_task!(p.app_id, unwrap_opt(p.task_name))
+              -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
 ```
 
 El stream no emite más frecuente que 5 s aunque el OS internamente muestree más rápido. La throttle está en el bridge que implementa la capability.
