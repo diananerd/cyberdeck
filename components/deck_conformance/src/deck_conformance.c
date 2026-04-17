@@ -373,6 +373,99 @@ static void noise_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* --- SDI drivers under stress ---------------------------------------
+ *
+ * These exercise the lower layer (SDI) directly, not through the Deck
+ * runtime. They catch regressions in nvs/fs/time drivers that might be
+ * masked by the interpreter's own error handling. */
+#include "drivers/deck_sdi_nvs.h"
+
+static bool s_stress_nvs_churn(char *d, size_t dz)
+{
+    const char *ns    = "conf_sdi";
+    const uint32_t N  = 20;
+    size_t heap_start = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int64_t t0        = deck_sdi_time_monotonic_us();
+    uint32_t mismatches = 0, write_fail = 0, read_fail = 0;
+
+    for (uint32_t i = 0; i < N; i++) {
+        char key[16];
+        char val[32];
+        snprintf(key, sizeof(key), "k%02u", (unsigned)i);
+        snprintf(val, sizeof(val), "v_%u_xyz", (unsigned)i);
+        if (deck_sdi_nvs_set_str(ns, key, val) != DECK_SDI_OK) { write_fail++; continue; }
+
+        char out[32] = {0};
+        if (deck_sdi_nvs_get_str(ns, key, out, sizeof(out)) != DECK_SDI_OK) { read_fail++; continue; }
+        if (strcmp(out, val) != 0) mismatches++;
+
+        deck_sdi_nvs_del(ns, key);
+    }
+
+    int64_t t1        = deck_sdi_time_monotonic_us();
+    size_t heap_end   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int32_t heap_delta = (int32_t)((long)heap_start - (long)heap_end);
+    uint32_t per_us   = (uint32_t)((t1 - t0) / N);
+
+    snprintf(d, dz,
+             "nvs %u iters: mismatch=%u write_fail=%u read_fail=%u "
+             "avg=%luus/iter heap%+ld",
+             (unsigned)N, (unsigned)mismatches, (unsigned)write_fail,
+             (unsigned)read_fail, (unsigned long)per_us, (long)heap_delta);
+    return mismatches == 0 && write_fail == 0 && read_fail == 0 && heap_delta <= 1024;
+}
+
+static bool s_stress_fs_read_hammer(char *d, size_t dz)
+{
+    const uint32_t N  = 100;
+    size_t heap_start = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int64_t t0        = deck_sdi_time_monotonic_us();
+    uint32_t fail = 0;
+    size_t total_bytes = 0;
+
+    static char rbuf[1024];
+    for (uint32_t i = 0; i < N; i++) {
+        size_t sz = sizeof(rbuf);
+        deck_sdi_err_t rc = deck_sdi_fs_read("/conformance/sanity.deck", rbuf, &sz);
+        if (rc != DECK_SDI_OK) fail++;
+        total_bytes += sz;
+    }
+
+    int64_t t1        = deck_sdi_time_monotonic_us();
+    size_t heap_end   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int32_t heap_delta = (int32_t)((long)heap_start - (long)heap_end);
+    uint32_t per_us   = (uint32_t)((t1 - t0) / N);
+
+    snprintf(d, dz, "fs.read x%u: fail=%u avg=%luus total=%uKB heap%+ld",
+             (unsigned)N, (unsigned)fail, (unsigned long)per_us,
+             (unsigned)(total_bytes / 1024), (long)heap_delta);
+    return fail == 0 && heap_delta <= 512;
+}
+
+static bool s_stress_time_monotonic(char *d, size_t dz)
+{
+    const uint32_t N = 1000;
+    int64_t last = deck_sdi_time_monotonic_us();
+    int64_t t0   = last;
+    uint32_t regressions = 0;
+
+    for (uint32_t i = 0; i < N; i++) {
+        int64_t now = deck_sdi_time_monotonic_us();
+        if (now < last) regressions++;
+        last = now;
+    }
+
+    int64_t t1  = last;
+    int64_t elapsed = t1 - t0;
+    uint32_t per_ns = elapsed > 0 ? (uint32_t)((elapsed * 1000) / N) : 0;
+
+    snprintf(d, dz,
+             "time.now x%u: regressions=%u total=%lldus avg=%luns/call",
+             (unsigned)N, (unsigned)regressions, (long long)elapsed,
+             (unsigned long)per_ns);
+    return regressions == 0;
+}
+
 /* Fuzz stress: drive the runtime with pseudo-random inputs and assert
  * every iteration returns a structural error (never OK for garbage,
  * never crashes). Two strategies:
@@ -601,6 +694,9 @@ static stress_test_t STRESS_TESTS[] = {
     { "stress.corrupt_inputs_rejected", s_corrupt_inputs_rejected, false, {0} },
     { "stress.heap_pressure_recovers",  s_heap_pressure_recovers,  false, {0} },
     { "stress.fuzz_random_inputs",      s_fuzz_random_inputs,      false, {0} },
+    { "stress.sdi_nvs_churn",           s_stress_nvs_churn,        false, {0} },
+    { "stress.sdi_fs_read_hammer",      s_stress_fs_read_hammer,   false, {0} },
+    { "stress.sdi_time_monotonic",      s_stress_time_monotonic,   false, {0} },
 };
 
 #define N_STRESS_TESTS (sizeof(STRESS_TESTS) / sizeof(STRESS_TESTS[0]))
