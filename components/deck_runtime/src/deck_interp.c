@@ -355,7 +355,7 @@ static deck_value_t *b_fs_read(deck_value_t **args, uint32_t n, deck_interp_ctx_
  * pragmatic representation: callable via text.contains / text.len.
  * DL2 will replace this with a real list<str> value once list syntax
  * lands. */
-#define FS_LIST_BUF 1024
+#define FS_LIST_BUF 4096
 typedef struct {
     char   *buf;
     size_t  cap;

@@ -102,6 +102,14 @@ static deck_test_t DECK_TESTS[] = {
       DECK_LOAD_INCOMPATIBLE_SURFACE, false },
     { "errors.type_error_missing_id", "/conformance/err_missing_id.deck", NULL,
       DECK_LOAD_TYPE_ERROR, false },
+    { "errors.divide_by_zero_int", "/conformance/err_div_zero_int.deck", NULL,
+      DECK_RT_DIVIDE_BY_ZERO, false },
+    { "errors.modulo_by_zero_int", "/conformance/err_mod_zero_int.deck", NULL,
+      DECK_RT_DIVIDE_BY_ZERO, false },
+    { "errors.divide_by_zero_float", "/conformance/err_div_zero_float.deck", NULL,
+      DECK_RT_DIVIDE_BY_ZERO, false },
+    { "errors.str_minus_int", "/conformance/err_str_minus_int.deck", NULL,
+      DECK_RT_TYPE_MISMATCH, false },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))

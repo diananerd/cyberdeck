@@ -1,0 +1,11 @@
+@app
+  name: "Conf err.str_minus_int"
+  id: "conf.err.str_minus_int"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let x = "hello" - 3
+  log.info("unreachable")

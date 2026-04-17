@@ -1,0 +1,11 @@
+@app
+  name: "Conf err.div_zero_float"
+  id: "conf.err.div_zero_float"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let x = 10.0 / 0.0
+  log.info("unreachable")
