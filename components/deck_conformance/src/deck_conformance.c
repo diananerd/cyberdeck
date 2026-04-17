@@ -76,6 +76,7 @@ static deck_test_t DECK_TESTS[] = {
     { "os.info",       "/conformance/os_info.deck",       "DECK_CONF_OK:os.info",       DECK_RT_OK, false },
     { "os.nvs",        "/conformance/os_nvs.deck",        "DECK_CONF_OK:os.nvs",        DECK_RT_OK, false },
     { "os.fs",         "/conformance/os_fs.deck",         "DECK_CONF_OK:os.fs",         DECK_RT_OK, false },
+    { "os.fs.list",    "/conformance/os_fs_list.deck",    "DECK_CONF_OK:os.fs.list",    DECK_RT_OK, false },
     { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false },
     { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false },
 

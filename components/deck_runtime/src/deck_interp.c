@@ -349,6 +349,63 @@ static deck_value_t *b_fs_read(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return some;
 }
 
+/* fs.list — returns entries separated by '\n' as a single string.
+ * DL1 lacks list literal syntax, so a newline-joined string is the
+ * pragmatic representation: callable via text.contains / text.len.
+ * DL2 will replace this with a real list<str> value once list syntax
+ * lands. */
+#define FS_LIST_BUF 1024
+typedef struct {
+    char   *buf;
+    size_t  cap;
+    size_t  len;
+    bool    overflow;
+} fs_list_ctx_t;
+
+static bool fs_list_cb(const char *name, bool is_dir, void *user)
+{
+    (void)is_dir;
+    fs_list_ctx_t *lc = user;
+    if (!name) return true;
+    size_t need = strlen(name) + (lc->len > 0 ? 1 : 0);
+    if (lc->len + need >= lc->cap) { lc->overflow = true; return false; }
+    if (lc->len > 0) lc->buf[lc->len++] = '\n';
+    size_t nl = strlen(name);
+    memcpy(lc->buf + lc->len, name, nl);
+    lc->len += nl;
+    lc->buf[lc->len] = '\0';
+    return true;
+}
+
+static deck_value_t *b_fs_list(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.list(path)");
+        return NULL;
+    }
+    char path[128];
+    memcpy(path, args[0]->as.s.ptr, args[0]->as.s.len);
+    path[args[0]->as.s.len] = 0;
+
+    static char        s_buf[FS_LIST_BUF];
+    s_buf[0] = '\0';
+    fs_list_ctx_t lc = { .buf = s_buf, .cap = FS_LIST_BUF, .len = 0, .overflow = false };
+    deck_sdi_err_t rc = deck_sdi_fs_list(path, fs_list_cb, &lc);
+    if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_str_cstr("");
+    if (rc != DECK_SDI_OK) {
+        set_err(c, DECK_RT_INTERNAL, 0, 0,
+                "fs.list failed: %s", deck_sdi_strerror(rc));
+        return NULL;
+    }
+    if (lc.overflow) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0,
+                "fs.list: buffer overflow (>%u bytes)", (unsigned)FS_LIST_BUF);
+        return NULL;
+    }
+    return deck_new_str(s_buf, (uint32_t)lc.len);
+}
+
 /* ---- type conversions (bare ident calls) ---- */
 static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -445,6 +502,7 @@ static const builtin_t BUILTINS[] = {
     /* fs (read-only) */
     { "fs.exists",              b_fs_exists,         1, 1 },
     { "fs.read",                b_fs_read,           1, 1 },
+    { "fs.list",                b_fs_list,           1, 1 },
 
     { NULL, NULL, 0, 0 },
 };

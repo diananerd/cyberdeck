@@ -1,0 +1,14 @@
+@app
+  name: "Conf os.fs.list"
+  id: "conf.os.fs.list"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let root    = fs.list("/")
+  let ok_has  = text.contains(root, "hello.deck")
+  let ok_nonempty = text.len(root) > 0
+  let ok = ok_has and ok_nonempty
+  log.info(if ok then "DECK_CONF_OK:os.fs.list" else "DECK_CONF_FAIL:os.fs.list")
