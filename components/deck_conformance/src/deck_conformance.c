@@ -88,6 +88,20 @@ static deck_test_t DECK_TESTS[] = {
       DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, false },
     { "errors.type_mismatch", "/conformance/err_type_mismatch.deck", NULL,
       DECK_RT_TYPE_MISMATCH, false },
+    { "errors.parse_error", "/conformance/err_parse_error.deck", NULL,
+      DECK_LOAD_PARSE_ERROR, false },
+    { "errors.unresolved_symbol", "/conformance/err_unresolved_symbol.deck", NULL,
+      DECK_LOAD_UNRESOLVED_SYMBOL, false },
+    { "errors.capability_missing", "/conformance/err_capability_missing.deck", NULL,
+      DECK_LOAD_CAPABILITY_MISSING, false },
+    { "errors.level_unknown", "/conformance/err_level_unknown.deck", NULL,
+      DECK_LOAD_LEVEL_UNKNOWN, false },
+    { "errors.incompatible_edition", "/conformance/err_edition.deck", NULL,
+      DECK_LOAD_INCOMPATIBLE_EDITION, false },
+    { "errors.incompatible_surface", "/conformance/err_deck_os.deck", NULL,
+      DECK_LOAD_INCOMPATIBLE_SURFACE, false },
+    { "errors.type_error_missing_id", "/conformance/err_missing_id.deck", NULL,
+      DECK_LOAD_TYPE_ERROR, false },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))

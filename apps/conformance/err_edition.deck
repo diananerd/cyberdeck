@@ -1,0 +1,10 @@
+@app
+  name: "Conf err.edition"
+  id: "conf.err.edition"
+  version: "1.0.0"
+  edition: 9999
+  requires:
+    deck_level: 1
+
+@on launch:
+  log.info("unreachable")

@@ -1,0 +1,11 @@
+@app
+  name: "Conf err.parse"
+  id: "conf.err.parse"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let x = 1 +
+  log.info("unreachable")

@@ -1,0 +1,10 @@
+@app
+  name: "Conf err.level_unknown"
+  id: "conf.err.level_unknown"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 99
+
+@on launch:
+  log.info("unreachable")

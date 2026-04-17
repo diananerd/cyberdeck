@@ -1,0 +1,19 @@
+@app
+  name: "Conf err.unresolved"
+  id: "conf.err.unresolved"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  log.info("boot")
+
+@machine lifecycle
+  state boot:
+    on enter:
+      log.info("boot")
+    transition :ghost
+  state ready:
+    on enter:
+      log.info("ready")
