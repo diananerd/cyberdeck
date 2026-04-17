@@ -41,6 +41,11 @@ void deck_alloc_init(size_t limit_bytes, deck_alloc_panic_cb_t panic_cb)
 size_t deck_alloc_used(void)         { return s_used; }
 size_t deck_alloc_peak(void)         { return s_peak; }
 size_t deck_alloc_limit(void)        { return s_limit; }
+
+void deck_alloc_set_limit(size_t limit_bytes)
+{
+    s_limit = limit_bytes;
+}
 size_t deck_alloc_live_values(void)  { return s_live; }
 
 /* --- internal alloc helpers --------------------------------------- */

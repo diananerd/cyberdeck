@@ -35,6 +35,11 @@ size_t deck_alloc_peak(void);
 /* Hard limit (0 = unlimited). */
 size_t deck_alloc_limit(void);
 
+/* Replace the hard limit without resetting peak/used. Used by F14.4
+ * heap-pressure stress to force DECK_RT_NO_MEMORY in a controlled way
+ * then restore the previous value. */
+void deck_alloc_set_limit(size_t limit_bytes);
+
 /* Count of live deck_value_t (excluding immortals). */
 size_t deck_alloc_live_values(void);
 

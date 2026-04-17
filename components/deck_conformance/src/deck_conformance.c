@@ -358,6 +358,43 @@ static void noise_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Heap-pressure stress: shrink the deck_alloc hard limit below what the
+ * test actually needs, run a moderately-sized program, and assert the
+ * runtime returns an error (not panics) then restores cleanly. */
+static bool s_heap_pressure_recovers(char *d, size_t dz)
+{
+    size_t orig_limit = deck_alloc_limit();
+    size_t current    = deck_alloc_used();
+
+    /* Headroom tiny enough that even a modest program overflows. */
+    size_t squeeze = current + 64;
+    deck_alloc_set_limit(squeeze);
+
+    static deck_test_t probe = { "probe-under-pressure",
+                                 "/conformance/lang_strings.deck",
+                                 "DECK_CONF_OK:lang.strings",
+                                 DECK_RT_OK, false, 0, 0, 0 };
+    /* We expect FAIL — the test's sentinel should NOT appear. */
+    bool sentinel_hit = run_deck_test(&probe);
+
+    /* Restore and sanity-check the runtime still works. */
+    deck_alloc_set_limit(orig_limit);
+
+    static deck_test_t after = { "post-pressure-sanity",
+                                 "/conformance/sanity.deck",
+                                 "DECK_CONF_OK:sanity",
+                                 DECK_RT_OK, false, 0, 0, 0 };
+    bool ok_after = run_deck_test(&after);
+
+    snprintf(d, dz,
+             "under squeeze=%u B: sentinel=%s; after restore=%s",
+             (unsigned)squeeze,
+             sentinel_hit ? "hit(!)" : "miss(ok)",
+             ok_after ? "PASS" : "FAIL");
+    /* Success = pressure stopped the test AND runtime recovered. */
+    return !sentinel_hit && ok_after;
+}
+
 /* Corrupt-input stress: drive deck_runtime_run_on_launch with adversarial
  * buffers and assert it rejects them structurally without panicking.
  * We try a handful of patterns and verify the runtime returns a LOAD_*
@@ -438,6 +475,7 @@ static stress_test_t STRESS_TESTS[] = {
     { "perf.flash_size_reasonable", s_flash_size_reasonable, false, {0} },
     { "stress.log_hook_concurrent", s_log_hook_concurrent,   false, {0} },
     { "stress.corrupt_inputs_rejected", s_corrupt_inputs_rejected, false, {0} },
+    { "stress.heap_pressure_recovers",  s_heap_pressure_recovers,  false, {0} },
 };
 
 #define N_STRESS_TESTS (sizeof(STRESS_TESTS) / sizeof(STRESS_TESTS[0]))
