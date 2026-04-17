@@ -81,6 +81,10 @@ static void run_sdi_selftests(void)
         if (r != DECK_RT_OK) {
             ESP_LOGE(TAG, "loader selftest FAILED: %s", deck_err_name(r));
         }
+        r = deck_interp_run_selftest();
+        if (r != DECK_RT_OK) {
+            ESP_LOGE(TAG, "interp selftest FAILED: %s", deck_err_name(r));
+        }
     }
     ESP_LOGI(TAG, "--- runtime selftests done ---");
 }
