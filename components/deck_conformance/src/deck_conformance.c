@@ -48,30 +48,43 @@ static row_t ROWS[] = {
 
 typedef struct {
     const char *name;
-    const char *path;      /* logical path passed to deck_sdi_fs_read —
-                            * driver prepends /deck mount point */
-    const char *sentinel;  /* expected substring in the log stream */
+    const char *path;          /* logical path passed to deck_sdi_fs_read —
+                                * driver prepends /deck mount point */
+    const char *sentinel;      /* expected substring in the log stream.
+                                * Ignored when expected_err != DECK_RT_OK. */
+    deck_err_t  expected_err;  /* DECK_RT_OK → success+sentinel mode;
+                                * otherwise → runtime must return this code */
     bool        passed;
 } deck_test_t;
 
+/* Positive tests: sentinel mode (expected_err = DECK_RT_OK).
+ * Negative tests: expected_err = <code>, sentinel ignored. */
 static deck_test_t DECK_TESTS[] = {
-    { "sanity",        "/conformance/sanity.deck",        "DECK_CONF_OK:sanity",        false },
-    { "lang.literals", "/conformance/lang_literals.deck", "DECK_CONF_OK:lang.literals", false },
-    { "lang.arith",    "/conformance/lang_arith.deck",    "DECK_CONF_OK:lang.arith",    false },
-    { "lang.compare", "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  false },
-    { "lang.logic",    "/conformance/lang_logic.deck",    "DECK_CONF_OK:lang.logic",    false },
-    { "lang.strings",  "/conformance/lang_strings.deck",  "DECK_CONF_OK:lang.strings",  false },
-    { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      false },
-    { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       false },
-    { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    false },
-    { "os.math",       "/conformance/os_math.deck",       "DECK_CONF_OK:os.math",       false },
-    { "os.text",       "/conformance/os_text.deck",       "DECK_CONF_OK:os.text",       false },
-    { "os.time",       "/conformance/os_time.deck",       "DECK_CONF_OK:os.time",       false },
-    { "os.info",       "/conformance/os_info.deck",       "DECK_CONF_OK:os.info",       false },
-    { "os.nvs",        "/conformance/os_nvs.deck",        "DECK_CONF_OK:os.nvs",        false },
-    { "os.fs",         "/conformance/os_fs.deck",         "DECK_CONF_OK:os.fs",         false },
-    { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       false },
-    { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   false },
+    { "sanity",        "/conformance/sanity.deck",        "DECK_CONF_OK:sanity",        DECK_RT_OK, false },
+    { "lang.literals", "/conformance/lang_literals.deck", "DECK_CONF_OK:lang.literals", DECK_RT_OK, false },
+    { "lang.arith",    "/conformance/lang_arith.deck",    "DECK_CONF_OK:lang.arith",    DECK_RT_OK, false },
+    { "lang.compare",  "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  DECK_RT_OK, false },
+    { "lang.logic",    "/conformance/lang_logic.deck",    "DECK_CONF_OK:lang.logic",    DECK_RT_OK, false },
+    { "lang.strings",  "/conformance/lang_strings.deck",  "DECK_CONF_OK:lang.strings",  DECK_RT_OK, false },
+    { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      DECK_RT_OK, false },
+    { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       DECK_RT_OK, false },
+    { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    DECK_RT_OK, false },
+    { "os.math",       "/conformance/os_math.deck",       "DECK_CONF_OK:os.math",       DECK_RT_OK, false },
+    { "os.text",       "/conformance/os_text.deck",       "DECK_CONF_OK:os.text",       DECK_RT_OK, false },
+    { "os.time",       "/conformance/os_time.deck",       "DECK_CONF_OK:os.time",       DECK_RT_OK, false },
+    { "os.info",       "/conformance/os_info.deck",       "DECK_CONF_OK:os.info",       DECK_RT_OK, false },
+    { "os.nvs",        "/conformance/os_nvs.deck",        "DECK_CONF_OK:os.nvs",        DECK_RT_OK, false },
+    { "os.fs",         "/conformance/os_fs.deck",         "DECK_CONF_OK:os.fs",         DECK_RT_OK, false },
+    { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false },
+    { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false },
+
+    /* Negative tests — loader/interp must reject with the expected code. */
+    { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
+      DECK_LOAD_LEVEL_BELOW_REQUIRED, false },
+    { "errors.pattern_not_exhaustive", "/conformance/err_match_noexh.deck", NULL,
+      DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, false },
+    { "errors.type_mismatch", "/conformance/err_type_mismatch.deck", NULL,
+      DECK_RT_TYPE_MISMATCH, false },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))
@@ -132,6 +145,18 @@ static bool run_deck_test(deck_test_t *t)
     capture_begin();
     deck_err_t rc = deck_runtime_run_on_launch(s_deck_src, (uint32_t)n);
     capture_end();
+
+    if (t->expected_err != DECK_RT_OK) {
+        /* Negative test — the runtime must return exactly this code. */
+        if (rc != t->expected_err) {
+            ESP_LOGE(TAG, "  test %s: FAIL — expected %s, got %s",
+                     t->name,
+                     deck_err_name(t->expected_err),
+                     deck_err_name(rc));
+            return false;
+        }
+        return true;
+    }
 
     if (rc != DECK_RT_OK && rc != DECK_LOAD_OK) {
         ESP_LOGE(TAG, "  test %s: FAIL — runtime error %s",
