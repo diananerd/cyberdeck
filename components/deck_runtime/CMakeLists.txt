@@ -8,6 +8,7 @@ idf_component_register(
          "src/deck_arena.c"
          "src/deck_ast.c"
          "src/deck_parser.c"
+         "src/deck_parser_test.c"
          "src/deck_runtime.c"
     INCLUDE_DIRS "include"
     REQUIRES log deck_sdi esp_hw_support

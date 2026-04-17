@@ -73,6 +73,10 @@ static void run_sdi_selftests(void)
         if (r != DECK_RT_OK) {
             ESP_LOGE(TAG, "lexer selftest FAILED: %s", deck_err_name(r));
         }
+        r = deck_parser_run_selftest();
+        if (r != DECK_RT_OK) {
+            ESP_LOGE(TAG, "parser selftest FAILED: %s", deck_err_name(r));
+        }
     }
     ESP_LOGI(TAG, "--- runtime selftests done ---");
 }

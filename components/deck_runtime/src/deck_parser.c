@@ -51,28 +51,27 @@ static void skip_newlines(deck_parser_t *p)
 
 typedef struct { binop_t op; int prec; bool right_assoc; } binop_info_t;
 
-static const binop_info_t *binop_for(deck_tok_t t)
+static bool binop_for(deck_tok_t t, binop_info_t *out)
 {
-    static const binop_info_t table[] = {
-        [TOK_OR_OR]   = { BINOP_OR,  1, false },
-        [TOK_AND_AND] = { BINOP_AND, 2, false },
-        [TOK_EQ]      = { BINOP_EQ,  3, false },
-        [TOK_NE]      = { BINOP_NE,  3, false },
-        [TOK_LT]      = { BINOP_LT,  4, false },
-        [TOK_LE]      = { BINOP_LE,  4, false },
-        [TOK_GT]      = { BINOP_GT,  4, false },
-        [TOK_GE]      = { BINOP_GE,  4, false },
-        [TOK_CONCAT]  = { BINOP_CONCAT, 5, false },
-        [TOK_PIPE]    = { BINOP_PIPE, 5, false },
-        [TOK_PLUS]    = { BINOP_ADD, 6, false },
-        [TOK_MINUS]   = { BINOP_SUB, 6, false },
-        [TOK_STAR]    = { BINOP_MUL, 7, false },
-        [TOK_SLASH]   = { BINOP_DIV, 7, false },
-        [TOK_PERCENT] = { BINOP_MOD, 7, false },
-        [TOK_POW]     = { BINOP_POW, 8, true },
-    };
-    if (t < TOK_COUNT && table[t].prec > 0) return &table[t];
-    return NULL;
+    switch (t) {
+        case TOK_OR_OR:   *out = (binop_info_t){ BINOP_OR,     1, false }; return true;
+        case TOK_AND_AND: *out = (binop_info_t){ BINOP_AND,    2, false }; return true;
+        case TOK_EQ:      *out = (binop_info_t){ BINOP_EQ,     3, false }; return true;
+        case TOK_NE:      *out = (binop_info_t){ BINOP_NE,     3, false }; return true;
+        case TOK_LT:      *out = (binop_info_t){ BINOP_LT,     4, false }; return true;
+        case TOK_LE:      *out = (binop_info_t){ BINOP_LE,     4, false }; return true;
+        case TOK_GT:      *out = (binop_info_t){ BINOP_GT,     4, false }; return true;
+        case TOK_GE:      *out = (binop_info_t){ BINOP_GE,     4, false }; return true;
+        case TOK_CONCAT:  *out = (binop_info_t){ BINOP_CONCAT, 5, false }; return true;
+        case TOK_PIPE:    *out = (binop_info_t){ BINOP_PIPE,   5, false }; return true;
+        case TOK_PLUS:    *out = (binop_info_t){ BINOP_ADD,    6, false }; return true;
+        case TOK_MINUS:   *out = (binop_info_t){ BINOP_SUB,    6, false }; return true;
+        case TOK_STAR:    *out = (binop_info_t){ BINOP_MUL,    7, false }; return true;
+        case TOK_SLASH:   *out = (binop_info_t){ BINOP_DIV,    7, false }; return true;
+        case TOK_PERCENT: *out = (binop_info_t){ BINOP_MOD,    7, false }; return true;
+        case TOK_POW:     *out = (binop_info_t){ BINOP_POW,    8, true  }; return true;
+        default:          return false;
+    }
 }
 
 static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec);
@@ -189,16 +188,15 @@ static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec)
     ast_node_t *lhs = parse_primary(p);
     if (!lhs) return NULL;
     for (;;) {
-        const binop_info_t *info = binop_for(p->cur.type);
-        if (!info || info->prec < min_prec) break;
-        binop_t op = info->op;
-        int next_min = info->right_assoc ? info->prec : info->prec + 1;
+        binop_info_t info;
+        if (!binop_for(p->cur.type, &info) || info.prec < min_prec) break;
+        int next_min = info.right_assoc ? info.prec : info.prec + 1;
         uint32_t ln = p->cur.line, co = p->cur.col;
         advance(p);
         ast_node_t *rhs = parse_expr_prec(p, next_min);
         if (!rhs) return NULL;
         ast_node_t *n = ast_new(p->arena, AST_BINOP, ln, co); if (!n) return NULL;
-        n->as.binop.op = op; n->as.binop.lhs = lhs; n->as.binop.rhs = rhs;
+        n->as.binop.op = info.op; n->as.binop.lhs = lhs; n->as.binop.rhs = rhs;
         lhs = n;
     }
     return lhs;

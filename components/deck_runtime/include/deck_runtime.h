@@ -34,6 +34,9 @@ deck_err_t deck_runtime_selftest(void);
 /* Lexer selftest — 30+ token sequence cases. */
 deck_err_t deck_lexer_run_selftest(void);
 
+/* Parser selftest — 40+ AST-comparison cases. */
+deck_err_t deck_parser_run_selftest(void);
+
 #ifdef __cplusplus
 }
 #endif
