@@ -332,6 +332,10 @@ Four complementary storage primitives — choose based on data size, durability 
 
 -- Flash NVS. Atomic per-key. Always survives power loss and filesystem corruption.
 -- Use for tokens, counters, feature flags, values that must never be lost.
+-- KEY LENGTH LIMIT: 15 characters maximum (ESP32 NVS driver constraint).
+-- The bridge rejects calls with longer keys before they reach NVS — they do not
+-- return :err; they produce a bridge-level error logged at WARN and the call is a no-op.
+-- Use short, stable, versioned key names: "acc_token", "theme_v1", "pin_hash".
 @capability nvs
   get       (key: str)                -> str?
   get_int   (key: str)                -> int?
@@ -451,6 +455,45 @@ Four complementary storage primitives — choose based on data size, durability 
     :closed   "Socket closed by remote"
   @requires_permission
 
+-- WiFi network management. Read-only access (status, watch) is available to all apps.
+-- scan(), connect(), disconnect(), forget() require @requires_permission and are
+-- typically restricted to system apps (Settings) by the OS author.
+@type WifiAP
+  ssid    : str
+  rssi    : int
+  auth    : atom   -- :open | :wpa2 | :wpa3 | :wpa2_wpa3
+  channel : int
+
+@type WifiStatus
+  ssid      : str?
+  rssi      : int
+  ip        : str?
+  connected : bool
+
+@capability network.wifi
+  scan       ()                           -> Result [WifiAP] network.wifi.Error
+  -- Performs an active scan. Returns results sorted by RSSI descending.
+  -- Fires os.wifi_changed on completion if the connected network changed.
+  connect    (ssid: str, password: str)   -> Result unit network.wifi.Error
+  connect    (ssid: str)                  -> Result unit network.wifi.Error
+  -- Saves credentials and connects. Fires os.wifi_changed on state change.
+  disconnect ()                           -> unit
+  forget     (ssid: str)                  -> Result unit network.wifi.Error
+  -- Removes saved credentials for the given SSID.
+  status     ()                           -> WifiStatus
+  watch      ()                           -> Stream WifiStatus
+  -- Emits on every WiFi state change: connect, disconnect, RSSI update.
+  saved      ()                           -> [str]
+  -- Returns SSIDs of all saved networks (credentials stored in NVS).
+  @errors
+    :unavailable        "WiFi hardware not available"
+    :auth_failed        "Wrong password or authentication rejected"
+    :not_found          "Network not found during scan"
+    :timeout            "Connection timed out"
+    :already_connected  "Already connected to this network"
+    :permission         "WiFi management requires permission"
+  @requires_permission
+
 -- MQTT pub/sub. OS manages connection, reconnection, and QoS. One connection per app.
 -- Full API docs in 05-deck-os-api §7.
 @type MqttConfig
@@ -493,10 +536,24 @@ Four complementary storage primitives — choose based on data size, durability 
   dismiss ()                                 -> unit
 
 @capability display.screen
-  brightness (level: float)            -> unit   -- 0.0..1.0
+  brightness (level: float)            -> unit   -- 0.0..1.0; clipped to valid range
   on  ()                               -> unit
   off ()                               -> unit
   is_on ()                             -> bool
+  -- Timeout: display turns off after inactivity. Use system.shell for system apps.
+  -- User apps read current brightness via system.info; setting brightness requires this cap.
+
+-- UI theme selection. All apps can read and subscribe. Only system.* apps can call set().
+-- The active theme is stored in NVS by svc_settings and applied by the LVGL bridge.
+@type ThemeName = :matrix | :amber | :neon
+
+@capability display.theme
+  current ()                 -> ThemeName
+  watch   ()                 -> Stream ThemeName
+  -- Emits when the active theme changes (same as os.theme_changed event).
+  set     (theme: ThemeName) -> unit
+  -- Ignored for non-system apps. System apps call this to commit the new theme;
+  -- bridge receives EVT_SETTINGS_CHANGED (key:"theme") and rebuilds all screens.
 ```
 
 ### 4.5 BLE
@@ -534,10 +591,44 @@ Four complementary storage primitives — choose based on data size, durability 
 ### 4.6 System
 
 ```
+-- Audio playback for local asset files (WAV / MP3 declared in @assets as :audio_*).
+-- On CyberDeck: output routes to the external BT Classic module (UART1) if connected,
+-- otherwise the call fails with :no_output. There is no onboard speaker or headphone jack.
+@capability system.audio
+  play!   (asset: atom)                    -> Result unit system.audio.Error
+  -- Plays the asset referenced by the given atom (must be declared :audio_* in @assets).
+  -- Blocks until playback completes or an error occurs. Call from a @task for async use.
+  stop!   ()                               -> unit
+  -- Stops playback immediately. No-op if nothing is playing.
+  volume  ()                               -> float
+  -- Current volume 0.0..1.0. Reads from the external BT module's reported level.
+  @errors
+    :no_output    "No audio output device available (BT module not connected)"
+    :not_found    "Asset atom not declared in @assets"
+    :unsupported  "Audio format not supported"
+    :busy         "Another audio asset is already playing"
+
 @capability system.battery
-  level      ()  -> int      -- 0..100 percent
-  watch      ()  -> Stream int
-  is_charging()  -> bool
+  level          ()  -> int            -- 0..100 percent
+  watch          ()  -> Stream int     -- emits on level change (coalesced; not every ADC tick)
+  is_charging    ()  -> bool
+  charging_watch ()  -> Stream bool    -- emits true on plug-in, false on unplug
+
+@capability system.time
+  -- NTP sync and timezone management.
+  sync         ()         -> Result unit system.time.Error
+  -- Forces an NTP query immediately. Fires os.time_change on success.
+  -- Requires network to be connected; returns :unavailable otherwise.
+  timezone     ()         -> str
+  -- Returns IANA timezone string, e.g. "America/Mexico_City". Read from NVS.
+  set_timezone (tz: str)  -> Result unit system.time.Error
+  -- Validates tz against the compiled-in zone database; saves to NVS.
+  -- Fires os.time_change after updating the local clock offset.
+  @errors
+    :unavailable   "NTP sync unavailable — no network connection"
+    :sync_failed   "NTP server did not respond within timeout"
+    :invalid_tz    "Unknown IANA timezone string"
+  @requires_permission
 
 @capability system.info
   device_id    ()  -> str
@@ -588,16 +679,74 @@ Four complementary storage primitives — choose based on data size, durability 
   @errors
     :invalid_pin  "Pin not valid on this hardware"
     :permission   "GPIO access restricted"
+
+-- UART access for external peripheral modules (e.g. BT audio module on UART1, GPS dongles).
+-- Available ports and default baud rates are declared by the OS author in the .deck-os file.
+-- On CyberDeck: port 1 = UART1 (GPIO 15 TX / GPIO 16 RX), used for external BT module.
+-- The bridge auto-detects the BT module at boot; use bt_classic for higher-level access.
+@capability hardware.uart
+  send      (port: int, data: [byte])    -> Result unit hardware.uart.Error
+  recv      (port: int)                  -> Stream [byte]
+  -- recv stream emits one chunk per received frame (up to 256 bytes).
+  configure (port: int, baud: int)       -> Result unit hardware.uart.Error
+  -- Changes baud rate at runtime. Port must already be open.
+  @errors
+    :invalid_port  "Port not available on this board"
+    :not_open      "Port not configured"
+    :io_error      "UART transmission error"
+  @requires_permission
+
+-- Higher-level capability for the external BT Classic audio module (UART1).
+-- Only available when the module is detected at boot (auto-detected via AT handshake).
+-- BLE (Bluetooth Low Energy) is native on ESP32-S3; see the ble capability (§4.5).
+-- BT Classic A2DP audio is only possible via this external module — the ESP32-S3 SoC
+-- does not have BT Classic in hardware.
+@type BtClassicDevice
+  address : str
+  name    : str?
+  rssi    : int
+
+@opaque BtClassicConn   -- connection handle; bridge owns underlying UART session
+
+@capability bt_classic
+  available ()                           -> bool
+  -- Returns false if the external module was not detected at boot.
+  scan      (duration: Duration)         -> Result [BtClassicDevice] bt_classic.Error
+  connect   (address: str)               -> Result BtClassicConn bt_classic.Error
+  disconnect(conn: BtClassicConn)        -> Result unit bt_classic.Error
+  send      (conn: BtClassicConn, data: [byte]) -> Result unit bt_classic.Error
+  recv      (conn: BtClassicConn)        -> Stream [byte]
+  is_connected (conn: BtClassicConn)     -> bool  @pure
+  @errors
+    :unavailable      "External BT module not detected at boot"
+    :scan_failed      "Scan failed"
+    :connect_failed   "Connection attempt failed"
+    :disconnected     "Device disconnected unexpectedly"
+    :timeout          "Operation timed out"
+  @requires_permission
 ```
 
 ### 4.8 OTA Updates
 
 ```
+@type OtaProgress
+  downloaded_bytes : int
+  total_bytes      : int     -- 0 if server did not send Content-Length
+  percent          : float   -- 0.0..1.0; -1.0 if total unknown
+
 @capability ota
-  check    (manifest_url: str) -> Result OtaInfo ota.Error
-  download (url: str)          -> Result unit ota.Error
-  apply    ()                  -> unit   -- triggers reboot, never returns
-  current  ()                  -> OtaBuild
+  check             (manifest_url: str) -> Result OtaInfo ota.Error
+  download          (url: str)          -> Result unit ota.Error
+  -- Blocking call; subscribe to download_progress() before calling.
+  -- Returns :ok only after full download and signature verification.
+  download_progress ()                  -> Stream OtaProgress
+  -- Emits periodically during download. Subscribe before calling download().
+  -- Stream closes (completes) when download() returns.
+  apply             ()                  -> unit   -- triggers reboot, never returns
+  current           ()                  -> OtaBuild
+  rollback          ()                  -> unit
+  -- Marks the current partition as invalid and reboots to the previous firmware.
+  -- Use only when the update is confirmed bad.
   @errors
     :no_update           "No update available"
     :download_failed     "Download failed or interrupted"
@@ -660,10 +809,14 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   suspended       ()                        -> [AppInfo]
   installed       ()                        -> [AppInfo]
   search!         (query: str)              -> [AppInfo]
-  bring_to_front  (id: str)                 -> unit
-  launch!         (id: str)                 -> Result unit system.Error
-  launch_url!     (id: str, url: str)       -> Result unit system.Error
-  kill            (id: str)                 -> unit
+  bring_to_front     (id: str)              -> unit
+  launch!            (id: str)              -> Result unit system.Error
+  launch_url!        (id: str, url: str)    -> Result unit system.Error
+  kill               (id: str)              -> unit
+  notif_counts_watch ()                     -> Stream [(app_id: str, unread: int)]
+  -- Emits a full snapshot whenever the unread notification count changes for any app.
+  -- Used by the Launcher to render badges on app grid icons.
+  -- Only meaningful for system apps; user apps receive an empty stream.
 
   @errors
     :not_found     "App not installed"
@@ -757,6 +910,29 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   stack    : str
   occurred : Timestamp
 
+-- Lockscreen and PIN management. Available only to system.* apps (typically system.lockscreen
+-- and system.settings). The bridge calls app_manager_lock() to push the lockscreen activity.
+@capability system.security
+  lock                     ()            -> unit
+  -- Pushes the lockscreen immediately, regardless of PIN state.
+  -- If no PIN is set, the lockscreen shows but is dismissible without a code.
+  unlock                   (pin: str)    -> Result unit system.security.Error
+  -- Validates PIN against the stored hash. On :ok fires os.unlocked and pops lockscreen.
+  is_locked                ()            -> bool
+  pin_enabled              ()            -> bool
+  set_pin                  (pin: str)    -> Result unit system.security.Error
+  -- Hashes and stores PIN in NVS. Enables PIN requirement on lock.
+  clear_pin                ()            -> unit
+  -- Removes stored PIN. Lockscreen will not require a code after this.
+  auto_lock_timeout        ()            -> Duration?
+  -- Returns nil if auto-lock is disabled.
+  set_auto_lock_timeout    (d: Duration?) -> unit
+  -- Pass nil to disable auto-lock. Pass duration to enable (e.g. 30s, 5m).
+  @errors
+    :wrong_pin    "Incorrect PIN"
+    :no_pin       "No PIN is set; call set_pin first"
+    :unauthorized "Only system apps can use this capability"
+
 -- ─────────────────────────────────────────────────────────────────
 -- Notifications capability (all apps, requires @permissions notifications)
 -- ─────────────────────────────────────────────────────────────────
@@ -847,8 +1023,29 @@ OS events are pushed to the interpreter — never polled. The interpreter routes
 @event os.terminate
 @event os.background_fetch     -- OS woke the app for a background fetch window
 @event os.low_battery    (level: int)
+@event os.battery_changed (level: int, charging: bool)
+-- Fired on every battery level change and on charge state change (plug/unplug).
+-- Supersedes os.low_battery for apps that need full battery state.
 @event os.network_change (status: atom)    -- :connected | :offline
+@event os.wifi_changed (ssid: str?, rssi: int, connected: bool)
+-- More detailed than os.network_change: fired on WiFi connect, disconnect, and RSSI update.
+-- ssid is nil when disconnected.
 @event os.time_change
+@event os.display_rotated (orientation: atom)   -- :portrait | :landscape
+-- Fired when the user changes display orientation in Settings.
+-- The bridge calls ui_activity_recreate_all() in response; all active screens rebuild.
+-- Apps receive on_create with intent_data = NULL after rotation — read state from app_state_get().
+@event os.theme_changed (theme: atom)           -- :matrix | :amber | :neon
+-- Fired when the active UI theme changes. Bridge rebuilds all active screens automatically.
+-- Apps do not need to handle this event unless they cache theme-derived values in NVS.
+@event os.storage_changed (mounted: bool)
+-- Fired when the SD card is inserted (mounted: true) or removed (mounted: false).
+-- Apps using fs or db capabilities must handle unmount gracefully — any pending I/O
+-- returns :err :io after the card is removed.
+@event os.locked
+-- Fired when the lockscreen is activated (auto-lock timer, explicit app_manager_lock()).
+@event os.unlocked
+-- Fired when the correct PIN is entered and the lockscreen is dismissed.
 @event os.storage_pressure
 @event os.permission_change (capability: str, granted: bool)
 @event os.notification   (entry: NotifEntry)
@@ -1026,6 +1223,10 @@ The interpreter evaluates `when:` conditions continuously in response to OS even
 | `network is :offline` | `os.network_change` event |
 | `battery > N%` | `system.battery.watch()` stream |
 | `battery < N%` | `system.battery.watch()` stream |
+| `display is :portrait` | `os.display_rotated` event |
+| `display is :landscape` | `os.display_rotated` event |
+| `wifi is :connected` | `os.wifi_changed` event |
+| `wifi is :offline` | `os.wifi_changed` event |
 | `alias is :available` | `os.permission_change` event |
 | `alias is :unavailable` | `os.permission_change` event |
 | `App is :state_name` | every `send()` to the named machine (internal event) |

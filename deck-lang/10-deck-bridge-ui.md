@@ -47,11 +47,14 @@ The bridge supports two orientations. The active orientation is read from NVS vi
 
 Rotation is triggered by `EVT_DISPLAY_ROTATED`. The bridge calls `ui_activity_recreate_all()` — every active screen calls `on_destroy` then `on_create` in stack order. Screens reconstruct from `app_state_get()` and current machine state; `intent_data` must be treated as possibly NULL on recreate.
 
+**Orientation preference:** if a Deck app declares `orientation: :portrait` or `orientation: :landscape` in `@app`, the bridge suppresses rotation attempts that would violate the preference. The rotation button in Settings is visually disabled while that app is in the foreground. If the bridge rebuilds (e.g., system rotation already happened before app launched), it applies `lv_display_set_rotation` to the active display to enforce the declared orientation.
+
 ### 1.2 Hardware Input Constraints
 
 - **No runtime-usable hardware buttons.** GPIO 0 is owned by the RGB LCD peripheral (DATA6) — it cannot be used as a button.
 - **Navigation is touch-only.** All HOME/BACK/TASK-SWITCH events come from touch gestures or on-screen navbar buttons.
-- **No Bluetooth Classic.** A2DP audio is not possible on ESP32-S3. Audio output is via an optional external BT module on UART1 (GPIO 15/16), auto-detected at boot.
+- **No Bluetooth Classic on SoC.** A2DP audio is not possible directly from the ESP32-S3 SoC. Audio output is via an optional external BT Classic module on UART1 (GPIO 15/16), auto-detected at boot — use the `bt_classic` capability.
+- **BLE is native.** The ESP32-S3 has Bluetooth 5 LE hardware. Use the `ble` capability for proximity sensors, HID devices, and BLE peripherals. BLE and the external BT Classic module can operate simultaneously.
 
 ### 1.3 Touch Gesture Zones
 
@@ -1087,10 +1090,29 @@ Theme switch is triggered by `EVT_SETTINGS_CHANGED (key: "theme")`:
    a. app_state_update_theme(new_theme)
    b. ui_theme_set(new_theme)            ← updates ui_theme_get() return value globally
    c. ui_activity_recreate_all()         ← full rebuild of all active screens
+   d. deck_bridge_on_event("os.theme_changed", {theme: new_theme}) for all loaded VMs
 4. All screens reconstruct with new theme colors
 ```
 
 The theme is applied at widget creation time (in `on_create`), not retroactively — hence the full rebuild. LVGL styles are not globally patched because they're applied per-widget at creation with explicit color values from `ui_theme_get()`.
+
+**Deck apps** that subscribe to `display.theme.watch()` receive the new theme atom as a stream value after step 4. Most apps don't need to react — the bridge rebuilt their screens already. The stream is useful only for apps that cache theme-derived values (e.g., a chart color palette computed from `theme.primary`) outside the normal `content =` render cycle.
+
+---
+
+## 10.1 Lockscreen Bridge Contract
+
+The lockscreen is a system activity (`APP_ID_LAUNCHER, screen_id=1`) managed by the OS, not a Deck flow. The bridge interacts with it as follows:
+
+| Trigger | Bridge action |
+|---|---|
+| `app_manager_lock()` called | Push lockscreen activity + `ui_activity_set_nav_lock(true)` |
+| Auto-lock timer fires | Same as above; fired by `svc_settings` idle watchdog |
+| `EVT_BATTERY_LOW` + configured policy | Same as above |
+| User enters correct PIN | `intent_fn("unlock", deck_str(pin))` → bridge calls `system.security.unlock(pin)` → on `:ok`: `ui_activity_set_nav_lock(false)` + `ui_activity_pop()` |
+| User enters wrong PIN | Toast Service: `"INCORRECT PIN"` (2000 ms), numpad cleared; remaining attempts not tracked |
+
+The lockscreen renders `DVC_PIN` (§4.3) with `length: 4` (default) or the length stored in NVS by `system.security`. The bridge does not transmit the PIN over any event bus — it is validated only via the `system.security.unlock()` bridge call.
 
 ---
 

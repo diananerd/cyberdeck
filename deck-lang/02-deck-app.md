@@ -49,12 +49,16 @@ Defined once, only in `app.deck`.
 
 ```
 @app
-  name:    str     -- display name shown to users
-  id:      str     -- reverse-domain unique ID ("mx.lab.monitor")
-  version: str     -- semver: "MAJOR.MINOR.PATCH"
-  entry:   Name    -- root @machine or @flow that is the app entry point
-  author:  str?
-  license: atom?   -- :mit | :apache2 | :gpl3 | :proprietary
+  name:        str     -- display name shown to users
+  id:          str     -- reverse-domain unique ID ("mx.lab.monitor")
+  version:     str     -- semver: "MAJOR.MINOR.PATCH"
+  entry:       Name    -- root @machine or @flow that is the app entry point
+  author:      str?
+  license:     atom?   -- :mit | :apache2 | :gpl3 | :proprietary
+  orientation: atom?   -- :portrait | :landscape | :any (default)
+  -- If :portrait or :landscape, the bridge refuses the rotation that would switch to
+  -- the other mode while this app is foreground. Settings button is dimmed in that mode.
+  -- :any (default) allows both orientations and receives os.display_rotated normally.
 ```
 
 The `id` is stable identity. If the OS has a previously installed app with the same `id`, it runs `@migration` blocks before starting. If `id` changes, the OS treats it as a new app.
@@ -136,9 +140,13 @@ Declares which sensitive capabilities require user/OS authorization and why. Pre
 |---|---|
 | `notifications` | Registrar fuentes, post_local, recibir `@on os.notification`, y que el badge aparezca en el Launcher |
 | `network.http` | Cualquier llamada de red saliente (`net.fetch!()`, `api_client`) |
+| `network.wifi` | Scan, connect, disconnect, forget — gestión de redes WiFi |
 | `storage.local` | Acceso a storage persistente del app |
 | `sensors.*` | Cualquier sensor de hardware |
-| `ble` | Bluetooth LE scan y conexiones |
+| `ble` | Bluetooth LE scan y conexiones (nativo ESP32-S3) |
+| `bt_classic` | Módulo BT Classic externo por UART1 |
+| `hardware.uart` | Acceso directo a puertos UART |
+| `system.time` | Forzar sync NTP, cambiar timezone |
 
 Ejemplo — app con notificaciones:
 
@@ -545,11 +553,65 @@ StreamName.recent(n)     -- [T]  (last n values, oldest first)
 | `resume` | App returns from OS-suspended state (user-initiated) |
 | `suspend` | OS is suspending the app — must complete quickly |
 | `terminate` | App about to be killed — not guaranteed to run on force kill |
+| `back` | User pressed back while the app's root flow is at its initial state (no history to pop) |
+
+**`@on back` — root back interception:**
+
+Called only when the OS would otherwise suspend the app (i.e., the flow has no history left to pop and the bridge has already checked for dirty forms). The hook must return one of:
+
+```
+:handled                           -- app consumed the event; OS does nothing
+:unhandled                         -- delegate to OS; app is suspended
+:confirm                           -- OS shows a native confirm dialog (not the app — avoids
+  message: str_expr                   orphaned dialogs). confirm/cancel carry the atom to return
+  confirm: label -> :handled | :unhandled
+  cancel:  label -> :handled | :unhandled
+```
+
+Example — guard against leaving unsaved work:
+
+```
+@on back
+  match unsaved_changes()
+    | true  ->
+        :confirm
+          message: "Discard changes?"
+          confirm: "Leave"   -> :unhandled
+          cancel:  "Stay"    -> :handled
+    | false -> :unhandled
+```
+
+The bridge evaluates `@on back` **after** the flow history check and **after** the dirty-form check (§6.2 of `10-deck-bridge-ui.md`). If neither intercepted the back event, `@on back` runs. If the hook returns `:unhandled` (or is absent), the OS suspends the app.
 
 OS-declared events (from `.deck-os`) can also appear in `@on`:
 ```
 @on hardware.button (id: 0, action: :press)
   App.send(:button_pressed)
+
+@on os.display_rotated (orientation: _)
+  -- Fired before ui_activity_recreate_all(). Use to reset any orientation-dependent state.
+  -- Most apps don't need this — the bridge rebuilds screens automatically.
+  App.send(:orientation_changed)
+
+@on os.theme_changed (theme: _)
+  -- Fired when the user switches UI theme. Bridge rebuilds screens automatically.
+  -- Only needed if the app caches theme-derived values outside the bridge.
+  App.send(:theme_changed)
+
+@on os.wifi_changed (ssid: s, connected: c)
+  match c
+    | true  -> App.send(:wifi_up (ssid: s))
+    | false -> App.send(:wifi_down)
+
+@on os.locked
+  -- App is still running but the lockscreen is now in front.
+  App.send(:screen_locked)
+
+@on os.storage_changed (mounted: m)
+  -- SD card inserted or removed. Apps using fs/db must handle false gracefully.
+  match m
+    | false -> App.send(:storage_lost)
+    | true  -> App.send(:storage_ready)
 ```
 
 **Background fetch vs. resume**: `@on resume` fires only for user-initiated app returns (e.g., user switches back from another app). Background wakeups from `background_fetch` fire `@on os.background_fetch` — a separate event that can be distinguished:
