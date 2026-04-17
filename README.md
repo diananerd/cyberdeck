@@ -4,9 +4,9 @@ ESP32-S3 firmware for the [Waveshare ESP32-S3-Touch-LCD-4.3](https://www.wavesha
 
 The long-term goal is a fully self-contained handheld OS that runs apps written in **Deck**, a purpose-built embedded DSL that lives on the SD card and runs on a sandboxed interpreter — no recompilation, no flashing.
 
-**Version:** 0.4.0 — **DL1 conformance certified** · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD (inactivo en DL1)
+**Version:** 0.5.0 — **DL1 hardened** · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD (inactivo en DL1)
 
-El firmware es un runtime Deck DL1 completo. Al boot arranca automáticamente `hello.deck` desde la partición SPIFFS `apps`. La batería de conformance (`deck_conformance_run`) pasa 28 checks verdes en hardware (5 suites C-side + 20 `.deck` tests + 3 stress/memory bounds). Ver [CHANGELOG.md](CHANGELOG.md) y [tests/conformance/README.md](tests/conformance/README.md).
+El firmware es un runtime Deck DL1 completo y endurecido para producción. Al boot arranca automáticamente `hello.deck` desde la partición SPIFFS `apps`. La batería de conformance (`deck_conformance_run`) pasa **55 checks verdes** en hardware: 5 suites C-side + 42 `.deck` tests (28 positivos + 14 negativos exhaustivos cubriendo todo el error surface DL1) + 8 stress/memory/perf (incluye concurrencia de log hook, rechazo de input corrupto, 100 reruns bajo churn, heap pressure con recuperación). Ver [CHANGELOG.md](CHANGELOG.md) y [tests/conformance/README.md](tests/conformance/README.md).
 
 ---
 

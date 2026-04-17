@@ -2,6 +2,59 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.5.0] — 2026-04-17 — DL1 hardened
+
+Endurece DL1 más allá del happy path: cobertura exhaustiva de errores, edge cases, concurrencia, corrupt-input rejection, heap pressure, y regression guards build+runtime.
+
+### Added
+
+**Builtins + fixes de parser que completan DL1:**
+- Parser acepta `not` (keyword) además de `!` como unary NOT.
+- Parser acepta `and`/`or` (keywords) además de `&&`/`||` como binarios.
+- Parser tolera NEWLINEs extras antes de INDENT (permite comments en bloques).
+- Builtin `fs.list(path)` — devuelve string con entries separadas por `\n`.
+- Builtins `os.resume`/`os.suspend`/`os.terminate` — no-ops DL1 single-app que retornan unit.
+- `deck_alloc_set_limit` — API pública para pressure-test sin reinit.
+
+**14 tests .deck negativos (F12.1 + F12.2):**
+- `errors.{parse_error, unresolved_symbol, capability_missing, level_unknown, incompatible_edition, incompatible_surface, type_error_missing_id}`
+- `errors.{divide_by_zero_int, modulo_by_zero_int, divide_by_zero_float, str_minus_int}`
+
+**8 tests .deck de edge cases (F12.3):**
+- `edge.{empty_strings, long_string, escapes, comments, nested_let, nested_match, string_intern, double_neg}`
+
+**Instrumentación por test (F13.1):**
+- `deck_test_t` gana `duration_us`, `heap_delta`, `alloc_delta`.
+- Log per-test muestra `us, heap±N, alloc±N`.
+- JSON gana `deck_total_us`, `deck_max_us`, `deck_slowest`.
+
+**Regression guards (F13.2):**
+- `perf.boot_time_budget` — asserta boot→conformance ≤ 2 s (baseline ~302 ms).
+- `perf.flash_size_reasonable` — heap total libre > 2 MB.
+- `tools/assert_bin_size.cmake` — custom build target falla si `cyberdeck.bin > 500 KB`.
+
+**Stress tests duros (F14.1–F14.4):**
+- `stress.log_hook_concurrent` — task en core 1 logea 500 Hz mientras el main ejecuta sanity; sentinel aún capturado, sin panic.
+- `stress.corrupt_inputs_rejected` — 5 patrones adversariales (bin garbage, truncated, null-mid, invalid UTF-8, empty) rechazados estructuralmente.
+- `stress.rerun_sanity_x100` — 100 load+eval de sanity.deck; **live+0 heap+0** (allocator/interner estancos).
+- `stress.heap_pressure_recovers` — squeeze de `deck_alloc_set_limit` fuerza NO_MEMORY; runtime se recupera, sanity post-restore PASS.
+
+### Changed
+- Log-capture hook (`conf_vprintf_hook`) es thread-safe vía SemaphoreMutex — requerido para tolerar concurrencia real.
+- `CONFIG_ESP_MAIN_TASK_STACK_SIZE` 3584 → 6144 bytes (stack overflow detectado por canary en F14.1).
+- `FS_LIST_BUF` 1024 → 4096 bytes (SPIFFS list saturaba con 38+ archivos).
+- `CONFIG_SPIFFS_OBJ_NAME_LEN` 32 → 64 (paths `/conformance/*.deck` no cabían).
+
+### Stats en hardware (v0.5.0)
+
+- **55 named checks verdes** (5 suites + 42 .deck + 8 stress); 200+ sub-cases con internos.
+- Runtime flash: ≈ 37 KB (budget 120 KB).
+- cyberdeck.bin: 315 KB (budget 500 KB).
+- Boot→conformance: ~302 ms.
+- Suite runtime: 179 ms (avg 4.3 ms/test, max 24 ms).
+- Live allocs residual: 66 (stable across runs).
+- rerun_sanity_x100: delta 0 bytes.
+
 ## [0.4.0] — 2026-04-17 — DL1 conformance certified
 
 Cierra el arco DL1 Core (F1–F10 de `DEVELOPMENT-PLAN-DL1.md`). El firmware es un runtime Deck DL1 completo que ejecuta apps `.deck` desde la partición SPIFFS `apps`, con toda la arquitectura legacy C removida.
