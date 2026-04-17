@@ -278,6 +278,8 @@ static bool s_no_residual_leak(char *d, size_t dz)
 /* Re-runs sanity.deck 10 times and asserts that live-values count does
  * not grow more than a small tolerance between the before/after.
  * Exercises load → eval → tear-down repeatedly. */
+#define RERUN_COUNT 100
+
 static bool s_rerun_sanity_no_growth(char *d, size_t dz)
 {
     static deck_test_t re = { "re-sanity",
@@ -285,17 +287,25 @@ static bool s_rerun_sanity_no_growth(char *d, size_t dz)
                               "DECK_CONF_OK:sanity",
                               DECK_RT_OK, false, 0, 0, 0 };
     uint32_t live_before = deck_alloc_live_values();
-    for (int i = 0; i < 10; i++) {
+    size_t   heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int64_t  t0          = deck_sdi_time_monotonic_us();
+    for (int i = 0; i < RERUN_COUNT; i++) {
         if (!run_deck_test(&re)) {
             snprintf(d, dz, "sanity rerun #%d FAIL", i);
             return false;
         }
     }
-    uint32_t live_after = deck_alloc_live_values();
-    int32_t  delta      = (int32_t)live_after - (int32_t)live_before;
-    snprintf(d, dz, "live before=%u after=%u delta=%ld (10 runs, tol 20)",
-             (unsigned)live_before, (unsigned)live_after, (long)delta);
-    return delta <= 20 && delta >= -20;
+    int64_t  t1          = deck_sdi_time_monotonic_us();
+    uint32_t live_after  = deck_alloc_live_values();
+    size_t   heap_after  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int32_t  live_delta  = (int32_t)live_after - (int32_t)live_before;
+    int32_t  heap_delta  = (int32_t)((long)heap_before - (long)heap_after);
+    uint32_t per_us      = (uint32_t)((t1 - t0) / RERUN_COUNT);
+    snprintf(d, dz,
+             "live%+ld heap%+ld over %d runs (avg %luus/run, tol live±20 heap<=512)",
+             (long)live_delta, (long)heap_delta, RERUN_COUNT,
+             (unsigned long)per_us);
+    return live_delta <= 20 && live_delta >= -20 && heap_delta <= 512;
 }
 
 /* Boot-time budget: DL1 should reach @on launch of hello.deck within
@@ -423,7 +433,7 @@ static bool s_log_hook_concurrent(char *d, size_t dz)
 static stress_test_t STRESS_TESTS[] = {
     { "memory.heap_idle_budget",   s_heap_idle_budget,       false, {0} },
     { "memory.no_residual_leak",   s_no_residual_leak,       false, {0} },
-    { "stress.rerun_sanity_x10",   s_rerun_sanity_no_growth, false, {0} },
+    { "stress.rerun_sanity_x100",  s_rerun_sanity_no_growth, false, {0} },
     { "perf.boot_time_budget",     s_boot_time_budget,       false, {0} },
     { "perf.flash_size_reasonable", s_flash_size_reasonable, false, {0} },
     { "stress.log_hook_concurrent", s_log_hook_concurrent,   false, {0} },
