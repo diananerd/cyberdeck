@@ -16,6 +16,7 @@
 
 #include "deck_sdi_registry.h"
 #include "drivers/deck_sdi_nvs.h"
+#include "drivers/deck_sdi_fs.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -61,11 +62,16 @@ void app_main(void)
 
     deck_sdi_registry_init();
     ESP_ERROR_CHECK(deck_sdi_nvs_register_esp32() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_fs_register_spiffs() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     deck_sdi_log_registered();
 
     deck_sdi_err_t nvs_st = deck_sdi_nvs_selftest();
     if (nvs_st != DECK_SDI_OK) {
         ESP_LOGE(TAG, "NVS selftest FAILED: %s", deck_sdi_strerror(nvs_st));
+    }
+    deck_sdi_err_t fs_st = deck_sdi_fs_selftest();
+    if (fs_st != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "FS selftest FAILED: %s", deck_sdi_strerror(fs_st));
     }
 
     log_heap("idle");
