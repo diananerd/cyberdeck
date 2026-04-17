@@ -6,9 +6,22 @@
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
 
-#include "ui_engine.h"
-
 static const char *TAG = "hal_lcd";
+
+/* RGB panel framebuffer config — double-buffered, 10-line bounce buffer. */
+#define HAL_LCD_RGB_NUM_FBS          2
+#define HAL_LCD_BOUNCE_BUFFER_LINES  10
+
+/* VSYNC callback — registered by the UI layer (bridge) when present.
+ * DL1 platforms with no display leave this NULL; the ISR then returns
+ * false (no LVGL refresh pending).
+ */
+static hal_lcd_vsync_cb_t s_vsync_cb = NULL;
+
+void hal_lcd_set_vsync_cb(hal_lcd_vsync_cb_t cb)
+{
+    s_vsync_cb = cb;
+}
 
 /* Touch reset sequence via CH422G + GPIO4 */
 static void touch_reset(void)
@@ -37,12 +50,13 @@ static void touch_reset(void)
     ESP_LOGI(TAG, "Touch reset complete");
 }
 
-/* VSYNC callback — notifies LVGL */
+/* VSYNC callback — fans out to the registered UI-layer hook, if any. */
 IRAM_ATTR static bool on_vsync(esp_lcd_panel_handle_t panel,
                                 const esp_lcd_rgb_panel_event_data_t *edata,
                                 void *user_ctx)
 {
-    return ui_engine_notify_vsync();
+    (void)panel; (void)edata; (void)user_ctx;
+    return s_vsync_cb ? s_vsync_cb() : false;
 }
 
 esp_err_t hal_lcd_init(esp_lcd_panel_handle_t *panel_handle, esp_lcd_touch_handle_t *tp_handle)
@@ -64,8 +78,8 @@ esp_err_t hal_lcd_init(esp_lcd_panel_handle_t *panel_handle, esp_lcd_touch_handl
             .flags.pclk_active_neg = 1,
         },
         .data_width = HAL_LCD_DATA_WIDTH,
-        .num_fbs = UI_ENGINE_LCD_RGB_BUFFER_NUMS,
-        .bounce_buffer_size_px = HAL_LCD_H_RES * CONFIG_EXAMPLE_LCD_RGB_BOUNCE_BUFFER_HEIGHT,
+        .num_fbs = HAL_LCD_RGB_NUM_FBS,
+        .bounce_buffer_size_px = HAL_LCD_H_RES * HAL_LCD_BOUNCE_BUFFER_LINES,
         .dma_burst_size = 64,
         .hsync_gpio_num = HAL_LCD_HSYNC_PIN,
         .vsync_gpio_num = HAL_LCD_VSYNC_PIN,
