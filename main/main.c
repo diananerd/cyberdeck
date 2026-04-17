@@ -21,6 +21,8 @@
 #include "drivers/deck_sdi_time.h"
 #include "drivers/deck_sdi_shell.h"
 
+#include "deck_runtime.h"
+
 static const char *TAG = "cyberdeck";
 
 static void log_device_id(void)
@@ -60,6 +62,15 @@ static void run_sdi_selftests(void)
     run_one("time",  deck_sdi_time_selftest);
     run_one("shell", deck_sdi_shell_selftest);
     ESP_LOGI(TAG, "--- SDI selftests done ---");
+
+    ESP_LOGI(TAG, "--- runtime selftests ---");
+    {
+        deck_err_t r = deck_runtime_selftest();
+        if (r != DECK_RT_OK) {
+            ESP_LOGE(TAG, "runtime selftest FAILED: %s", deck_err_name(r));
+        }
+    }
+    ESP_LOGI(TAG, "--- runtime selftests done ---");
 }
 #endif
 
@@ -91,6 +102,9 @@ void app_main(void)
     ESP_ERROR_CHECK(deck_sdi_time_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(deck_sdi_shell_register_stub() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     deck_sdi_log_registered();
+
+    /* Runtime init — heap hard-limit for DL1 is 64 KB (spec 16 §4.4). */
+    ESP_ERROR_CHECK(deck_runtime_init(64 * 1024) == DECK_RT_OK ? ESP_OK : ESP_FAIL);
 
 #if CONFIG_DECK_SDI_SELFTEST
     run_sdi_selftests();
