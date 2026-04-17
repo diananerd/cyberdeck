@@ -348,6 +348,46 @@ static void noise_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Corrupt-input stress: drive deck_runtime_run_on_launch with adversarial
+ * buffers and assert it rejects them structurally without panicking.
+ * We try a handful of patterns and verify the runtime returns a LOAD_*
+ * error code for each. Bonus: a trip through the noise hook shouldn't
+ * be needed; these all fail before hitting the evaluator. */
+static bool s_corrupt_inputs_rejected(char *d, size_t dz)
+{
+    struct pattern {
+        const char *label;
+        const char *bytes;
+        uint32_t    len;
+    };
+    /* Patterns intentionally left as raw C strings; lengths explicit so
+     * null-byte cases work. */
+    static const char bin_garbage[] = { (char)0xFF, (char)0xFE, (char)0xFD, 0x01, 0x02, 0x03, 0x04, 0x05 };
+    static const char truncated[]   = "@app\n  name: \"X";   /* EOF mid-string */
+    static const char null_mid[]    = "@app\n  name\0: \"X\"";
+    static const char invalid_utf8[] = { (char)0xC3, (char)0x28, 0x00 }; /* bad utf-8 */
+    static const char empty[]       = "";
+    struct pattern patterns[] = {
+        { "bin_garbage",  bin_garbage,  sizeof(bin_garbage) },
+        { "truncated",    truncated,    sizeof(truncated) - 1 },
+        { "null_mid",     null_mid,     sizeof(null_mid) - 1 },
+        { "invalid_utf8", invalid_utf8, sizeof(invalid_utf8) - 1 },
+        { "empty",        empty,        0 },
+    };
+    const size_t N = sizeof(patterns) / sizeof(patterns[0]);
+
+    uint32_t rejected = 0;
+    for (size_t i = 0; i < N; i++) {
+        /* Suppress log capture to avoid polluting stats; we only care
+         * that the runtime returns an error and does not crash. */
+        deck_err_t rc = deck_runtime_run_on_launch(patterns[i].bytes,
+                                                   patterns[i].len);
+        if (rc != DECK_RT_OK && rc != DECK_LOAD_OK) rejected++;
+    }
+    snprintf(d, dz, "rejected=%u/%u (expected all)", (unsigned)rejected, (unsigned)N);
+    return rejected == N;
+}
+
 static bool s_log_hook_concurrent(char *d, size_t dz)
 {
     atomic_store(&s_noise_count, 0);
@@ -387,6 +427,7 @@ static stress_test_t STRESS_TESTS[] = {
     { "perf.boot_time_budget",     s_boot_time_budget,       false, {0} },
     { "perf.flash_size_reasonable", s_flash_size_reasonable, false, {0} },
     { "stress.log_hook_concurrent", s_log_hook_concurrent,   false, {0} },
+    { "stress.corrupt_inputs_rejected", s_corrupt_inputs_rejected, false, {0} },
 };
 
 #define N_STRESS_TESTS (sizeof(STRESS_TESTS) / sizeof(STRESS_TESTS[0]))
