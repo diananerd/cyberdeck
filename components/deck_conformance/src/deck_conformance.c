@@ -9,10 +9,14 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -131,21 +135,30 @@ static char             s_log_cap[LOG_CAP_BYTES];
 static size_t           s_log_len;
 static bool             s_capturing;
 static vprintf_like_t   s_prev_vprintf;
+static SemaphoreHandle_t s_log_mtx = NULL;   /* guards s_log_cap/len */
 
+/* vprintf hook is called from whichever task emitted the ESP_LOG.
+ * To stay safe under concurrent loggers (e.g. idle task, background
+ * noise task in F14.1 stress) we serialize buffer mutations with a
+ * short mutex hold. vprintf() to the real UART is already serialized
+ * by esp_log internals; we don't need to guard it. */
 static int conf_vprintf_hook(const char *fmt, va_list ap)
 {
-    if (s_capturing) {
-        va_list copy;
-        va_copy(copy, ap);
-        size_t avail = (LOG_CAP_BYTES - 1) - s_log_len;
-        if (avail > 0) {
-            int w = vsnprintf(s_log_cap + s_log_len, avail, fmt, copy);
-            if (w > 0) {
-                s_log_len += (size_t)w < avail ? (size_t)w : avail;
-                s_log_cap[s_log_len] = '\0';
+    if (s_capturing && s_log_mtx) {
+        if (xSemaphoreTake(s_log_mtx, pdMS_TO_TICKS(20)) == pdTRUE) {
+            va_list copy;
+            va_copy(copy, ap);
+            size_t avail = (LOG_CAP_BYTES - 1) - s_log_len;
+            if (avail > 0) {
+                int w = vsnprintf(s_log_cap + s_log_len, avail, fmt, copy);
+                if (w > 0) {
+                    s_log_len += (size_t)w < avail ? (size_t)w : avail;
+                    s_log_cap[s_log_len] = '\0';
+                }
             }
+            va_end(copy);
+            xSemaphoreGive(s_log_mtx);
         }
-        va_end(copy);
     }
     return vprintf(fmt, ap);
 }
@@ -315,12 +328,65 @@ static bool s_flash_size_reasonable(char *d, size_t dz)
     return free_total >= 2 * 1024 * 1024;
 }
 
+/* Concurrent-logging stress. Spawns a background task that emits ESP_LOG
+ * noise while the runtime executes sanity.deck, then asserts:
+ *  1. The vprintf hook's mutex serialised all accesses (no panic).
+ *  2. The sentinel was still captured despite log interleaving.
+ *  3. The noise counter advanced (background task actually ran). */
+static atomic_int   s_noise_run       = 0;   /* 1 while stress runs */
+static atomic_uint  s_noise_count     = 0;
+static const char  *TAG_NOISE         = "noise";
+
+static void noise_task(void *arg)
+{
+    (void)arg;
+    while (atomic_load(&s_noise_run) == 1) {
+        unsigned n = atomic_fetch_add(&s_noise_count, 1);
+        ESP_LOGI(TAG_NOISE, "bg-%u", n);
+        vTaskDelay(pdMS_TO_TICKS(2));  /* ~500Hz headroom; ESP_LOGI is heavy */
+    }
+    vTaskDelete(NULL);
+}
+
+static bool s_log_hook_concurrent(char *d, size_t dz)
+{
+    atomic_store(&s_noise_count, 0);
+    atomic_store(&s_noise_run, 1);
+
+    TaskHandle_t h = NULL;
+    if (xTaskCreatePinnedToCore(noise_task, "conf_noise", 3072,
+                                NULL, tskIDLE_PRIORITY + 1, &h, 1) != pdPASS) {
+        snprintf(d, dz, "xTaskCreate failed");
+        atomic_store(&s_noise_run, 0);
+        return false;
+    }
+
+    /* Brief delay so the noise task actually starts logging before the
+     * test does. */
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    static deck_test_t re = { "log-concurrent-sanity",
+                              "/conformance/sanity.deck",
+                              "DECK_CONF_OK:sanity",
+                              DECK_RT_OK, false, 0, 0, 0 };
+    bool ok = run_deck_test(&re);
+
+    atomic_store(&s_noise_run, 0);
+    /* Give the noise task one tick to exit on its own. */
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    unsigned n = atomic_load(&s_noise_count);
+    snprintf(d, dz, "noise_count=%u sentinel=%s", n, ok ? "hit" : "MISS");
+    return ok && n > 0;
+}
+
 static stress_test_t STRESS_TESTS[] = {
     { "memory.heap_idle_budget",   s_heap_idle_budget,       false, {0} },
     { "memory.no_residual_leak",   s_no_residual_leak,       false, {0} },
     { "stress.rerun_sanity_x10",   s_rerun_sanity_no_growth, false, {0} },
     { "perf.boot_time_budget",     s_boot_time_budget,       false, {0} },
     { "perf.flash_size_reasonable", s_flash_size_reasonable, false, {0} },
+    { "stress.log_hook_concurrent", s_log_hook_concurrent,   false, {0} },
 };
 
 #define N_STRESS_TESTS (sizeof(STRESS_TESTS) / sizeof(STRESS_TESTS[0]))
@@ -367,6 +433,8 @@ deck_err_t deck_conformance_run(void)
     /* Boot-time snapshot: time since reset at harness entry. Used by
      * perf.boot_time_budget stress check. */
     s_boot_to_conformance_us = deck_sdi_time_monotonic_us();
+
+    if (!s_log_mtx) s_log_mtx = xSemaphoreCreateMutex();
 
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
 

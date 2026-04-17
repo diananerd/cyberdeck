@@ -35,3 +35,9 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # SPIFFS — bump object name len from default 32 so conformance paths fit.
 # The bundled .deck tests live under /conformance/* with descriptive names.
 CONFIG_SPIFFS_OBJ_NAME_LEN=64
+
+# Main task stack: 3584 bytes is tight for the DL1 conformance harness,
+# which on top of the runtime + SPIFFS + log-capture hook also runs a
+# concurrent-logging stress test. 6 KB leaves headroom without pushing
+# footprint meaningfully.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
