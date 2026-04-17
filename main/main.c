@@ -18,6 +18,7 @@
 #include "drivers/deck_sdi_nvs.h"
 #include "drivers/deck_sdi_fs.h"
 #include "drivers/deck_sdi_info.h"
+#include "drivers/deck_sdi_time.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -65,6 +66,7 @@ void app_main(void)
     ESP_ERROR_CHECK(deck_sdi_nvs_register_esp32() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(deck_sdi_fs_register_spiffs() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(deck_sdi_info_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_time_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
     deck_sdi_log_registered();
 
     deck_sdi_err_t nvs_st = deck_sdi_nvs_selftest();
@@ -78,6 +80,10 @@ void app_main(void)
     deck_sdi_err_t info_st = deck_sdi_info_selftest();
     if (info_st != DECK_SDI_OK) {
         ESP_LOGE(TAG, "INFO selftest FAILED: %s", deck_sdi_strerror(info_st));
+    }
+    deck_sdi_err_t time_st = deck_sdi_time_selftest();
+    if (time_st != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "TIME selftest FAILED: %s", deck_sdi_strerror(time_st));
     }
 
     log_heap("idle");

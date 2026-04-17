@@ -4,6 +4,7 @@ idf_component_register(
          "src/drivers/deck_sdi_nvs_esp32.c"
          "src/drivers/deck_sdi_fs_spiffs.c"
          "src/drivers/deck_sdi_info.c"
+         "src/drivers/deck_sdi_time.c"
     INCLUDE_DIRS "include"
-    REQUIRES log nvs_flash spiffs esp_hw_support
+    REQUIRES log nvs_flash spiffs esp_hw_support esp_timer
 )
