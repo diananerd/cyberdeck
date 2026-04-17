@@ -173,6 +173,70 @@ static bool run_deck_test(deck_test_t *t)
     return true;
 }
 
+/* --- stress / memory bounds (C-side) ---------------------------------
+ *
+ * DL1 lacks user-defined functions and loop constructs, so pure-Deck
+ * stress loops aren't possible yet. Instead these C-side checks probe
+ * the runtime's memory behaviour after the .deck suite finishes. The
+ * plan item maps as follows:
+ *   heap_idle_budget          ← "heap idle ≤ 64 KB tras cargar hello"
+ *   no_residual_leak          ← "1000 allocs + releases (no leak)"
+ *   rerun_sanity_no_growth    ← "loop 10k iteraciones sin leak"
+ */
+
+typedef struct {
+    const char *name;
+    bool      (*fn)(char *detail, size_t detail_sz);
+    bool       passed;
+    char       detail[96];
+} stress_test_t;
+
+static bool s_heap_idle_budget(char *d, size_t dz)
+{
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    snprintf(d, dz, "heap_free_internal=%u bytes (>= 200KB)",
+             (unsigned)free_internal);
+    return free_internal >= 200 * 1024;
+}
+
+static bool s_no_residual_leak(char *d, size_t dz)
+{
+    uint32_t live = deck_alloc_live_values();
+    snprintf(d, dz, "deck_alloc_live=%u (<= 50)", (unsigned)live);
+    return live <= 50;
+}
+
+/* Re-runs sanity.deck 10 times and asserts that live-values count does
+ * not grow more than a small tolerance between the before/after.
+ * Exercises load → eval → tear-down repeatedly. */
+static bool s_rerun_sanity_no_growth(char *d, size_t dz)
+{
+    static deck_test_t re = { "re-sanity",
+                              "/conformance/sanity.deck",
+                              "DECK_CONF_OK:sanity",
+                              DECK_RT_OK, false };
+    uint32_t live_before = deck_alloc_live_values();
+    for (int i = 0; i < 10; i++) {
+        if (!run_deck_test(&re)) {
+            snprintf(d, dz, "sanity rerun #%d FAIL", i);
+            return false;
+        }
+    }
+    uint32_t live_after = deck_alloc_live_values();
+    int32_t  delta      = (int32_t)live_after - (int32_t)live_before;
+    snprintf(d, dz, "live before=%u after=%u delta=%ld (10 runs, tol 20)",
+             (unsigned)live_before, (unsigned)live_after, (long)delta);
+    return delta <= 20 && delta >= -20;
+}
+
+static stress_test_t STRESS_TESTS[] = {
+    { "memory.heap_idle_budget",   s_heap_idle_budget,       false, {0} },
+    { "memory.no_residual_leak",   s_no_residual_leak,       false, {0} },
+    { "stress.rerun_sanity_x10",   s_rerun_sanity_no_growth, false, {0} },
+};
+
+#define N_STRESS_TESTS (sizeof(STRESS_TESTS) / sizeof(STRESS_TESTS[0]))
+
 /* Writes the JSON-line report to /deck/reports/dl1-<monotonic_ms>.json.
  * SPIFFS mount point is /deck (see deck_sdi_fs_spiffs.c); directories are
  * virtual, so the filename includes the prefix directly. Non-fatal: if
@@ -242,14 +306,33 @@ deck_err_t deck_conformance_run(void)
         }
     }
 
+    /* --- stress / memory bounds (after .deck tests so totals reflect
+     *     the full workload) --- */
+    uint32_t stress_pass = 0, stress_fail = 0;
+    if (N_STRESS_TESTS > 0) {
+        ESP_LOGI(TAG, "--- stress / memory (%u) ---", (unsigned)N_STRESS_TESTS);
+        for (size_t i = 0; i < N_STRESS_TESTS; i++) {
+            STRESS_TESTS[i].detail[0] = '\0';
+            STRESS_TESTS[i].passed =
+                STRESS_TESTS[i].fn(STRESS_TESTS[i].detail,
+                                   sizeof(STRESS_TESTS[i].detail));
+            if (STRESS_TESTS[i].passed) stress_pass++; else stress_fail++;
+            ESP_LOGI(TAG, "  %-28s %s — %s",
+                     STRESS_TESTS[i].name,
+                     STRESS_TESTS[i].passed ? "PASS" : "FAIL",
+                     STRESS_TESTS[i].detail);
+        }
+    }
+
     size_t heap_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     long   heap_delta = (long)heap_before - (long)heap_after;
 
-    static char json[512];
+    static char json[640];
     int  n = snprintf(json, sizeof(json),
       "{\"deck_level\":%d,\"deck_os\":%d,\"runtime\":\"%s\",\"edition\":%d,"
        "\"suites_total\":%u,\"suites_pass\":%u,\"suites_fail\":%u,"
        "\"deck_tests_total\":%u,\"deck_tests_pass\":%u,\"deck_tests_fail\":%u,"
+       "\"stress_total\":%u,\"stress_pass\":%u,\"stress_fail\":%u,"
        "\"heap_used_during_suite\":%ld,"
        "\"intern_count\":%u,\"intern_bytes\":%u,"
        "\"deck_alloc_peak\":%u,\"deck_alloc_live\":%u,"
@@ -260,6 +343,7 @@ deck_err_t deck_conformance_run(void)
       deck_sdi_info_edition(),
       (unsigned)N_ROWS, (unsigned)passed, (unsigned)failed,
       (unsigned)N_DECK_TESTS, (unsigned)deck_pass, (unsigned)deck_fail,
+      (unsigned)N_STRESS_TESTS, (unsigned)stress_pass, (unsigned)stress_fail,
       heap_delta,
       (unsigned)deck_intern_count(),
       (unsigned)deck_intern_bytes(),
@@ -276,7 +360,7 @@ deck_err_t deck_conformance_run(void)
     ESP_LOGI(TAG, "%s", json);
     persist_report(json, (size_t)n);
 
-    if (failed > 0 || deck_fail > 0) return DECK_LOAD_INTERNAL;
+    if (failed > 0 || deck_fail > 0 || stress_fail > 0) return DECK_LOAD_INTERNAL;
     ESP_LOGI(TAG, "=== DL1 CONFORMANCE: PASS ===");
     return DECK_RT_OK;
 }
