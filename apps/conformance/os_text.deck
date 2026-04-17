@@ -1,0 +1,18 @@
+@app
+  name: "Conf os.text"
+  id: "conf.os.text"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let s       = "Deck"
+  let ok_up   = text.upper(s) == "DECK"
+  let ok_low  = text.lower(s) == "deck"
+  let ok_len  = text.len(s) == 4
+  let ok_sw   = text.starts_with("railway", "rail")
+  let ok_ew   = text.ends_with("railway", "way")
+  let ok_ct   = text.contains("railway", "ilw")
+  let ok = ok_up && ok_low && ok_len && ok_sw && ok_ew && ok_ct
+  log.info(if ok then "DECK_CONF_OK:os.text" else "DECK_CONF_FAIL:os.text")

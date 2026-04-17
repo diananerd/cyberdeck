@@ -1,0 +1,15 @@
+@app
+  name: "Conf os.time"
+  id: "conf.os.time"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let t1      = time.now()
+  let t2      = time.now()
+  let ok_mono = t2 >= t1
+  let ok_pos  = t1 > 0
+  let ok = ok_mono && ok_pos
+  log.info(if ok then "DECK_CONF_OK:os.time" else "DECK_CONF_FAIL:os.time")

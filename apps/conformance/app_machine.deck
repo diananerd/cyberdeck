@@ -1,0 +1,19 @@
+@app
+  name: "Conf app.machine"
+  id: "conf.app.machine"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  log.info("DECK_CONF_OK:app.machine")
+
+@machine lifecycle
+  state boot:
+    on enter:
+      log.info("app.machine: boot")
+    transition :ready
+  state ready:
+    on enter:
+      log.info("app.machine: ready")

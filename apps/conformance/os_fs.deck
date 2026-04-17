@@ -1,0 +1,13 @@
+@app
+  name: "Conf os.fs"
+  id: "conf.os.fs"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let ok_self    = fs.exists("/conformance/os_fs.deck")
+  let ok_missing = not fs.exists("/nope/ghost.deck")
+  let ok = ok_self && ok_missing
+  log.info(if ok then "DECK_CONF_OK:os.fs" else "DECK_CONF_FAIL:os.fs")

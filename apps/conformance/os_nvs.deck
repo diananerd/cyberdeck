@@ -1,0 +1,16 @@
+@app
+  name: "Conf os.nvs"
+  id: "conf.os.nvs"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let ns  = "conftest"
+  let k   = "probe"
+  let w1  = nvs.set(ns, k, "hello-1337")
+  let v   = nvs.get(ns, k)
+  let w2  = nvs.delete(ns, k)
+  let ok  = v == "hello-1337"
+  log.info(if ok then "DECK_CONF_OK:os.nvs" else "DECK_CONF_FAIL:os.nvs")

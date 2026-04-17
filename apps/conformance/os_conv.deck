@@ -1,0 +1,15 @@
+@app
+  name: "Conf os.conv"
+  id: "conf.os.conv"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let ok_i = int("42") == 42
+  let ok_f = float("3.5") > 3.49 && float("3.5") < 3.51
+  let ok_s = str(123) == "123"
+  let ok_b = bool(1) == true && bool(0) == false
+  let ok = ok_i && ok_f && ok_s && ok_b
+  log.info(if ok then "DECK_CONF_OK:os.conv" else "DECK_CONF_FAIL:os.conv")

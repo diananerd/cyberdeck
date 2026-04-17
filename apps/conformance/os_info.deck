@@ -1,0 +1,17 @@
+@app
+  name: "Conf os.info"
+  id: "conf.os.info"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let lvl   = system.info.deck_level()
+  let heap  = system.info.free_heap()
+  let dev   = system.info.device_id()
+  let ok_lvl  = lvl == 1
+  let ok_heap = heap > 0
+  let ok_dev  = text.len(dev) > 0
+  let ok = ok_lvl && ok_heap && ok_dev
+  log.info(if ok then "DECK_CONF_OK:os.info" else "DECK_CONF_FAIL:os.info")
