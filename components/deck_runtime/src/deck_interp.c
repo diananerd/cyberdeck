@@ -6,6 +6,7 @@
 #include "drivers/deck_sdi_info.h"
 #include "drivers/deck_sdi_nvs.h"
 #include "drivers/deck_sdi_fs.h"
+#include "drivers/deck_sdi_shell.h"
 
 #include "esp_log.h"
 
@@ -406,6 +407,26 @@ static deck_value_t *b_fs_list(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return deck_new_str(s_buf, (uint32_t)lc.len);
 }
 
+/* ---- os.* lifecycle ---- */
+static deck_value_t *b_os_resume(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n; (void)c;
+    /* DL1 single-app: resume is a no-op from the app's POV. */
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_os_suspend(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n; (void)c;
+    /* DL1 single-app: suspend is a no-op. DL2 hands control back to shell. */
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_os_terminate(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n; (void)c;
+    (void)deck_sdi_shell_terminate();
+    return deck_retain(deck_unit());
+}
+
 /* ---- type conversions (bare ident calls) ---- */
 static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -503,6 +524,11 @@ static const builtin_t BUILTINS[] = {
     { "fs.exists",              b_fs_exists,         1, 1 },
     { "fs.read",                b_fs_read,           1, 1 },
     { "fs.list",                b_fs_list,           1, 1 },
+
+    /* os lifecycle (single-app stubs in DL1) */
+    { "os.resume",              b_os_resume,         0, 0 },
+    { "os.suspend",             b_os_suspend,        0, 0 },
+    { "os.terminate",           b_os_terminate,      0, 0 },
 
     { NULL, NULL, 0, 0 },
 };

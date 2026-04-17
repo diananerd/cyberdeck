@@ -1,0 +1,13 @@
+@app
+  name: "Conf os.lifecycle"
+  id: "conf.os.lifecycle"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let r1 = os.resume()
+  let r2 = os.suspend()
+  let r3 = os.terminate()
+  log.info("DECK_CONF_OK:os.lifecycle")
