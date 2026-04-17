@@ -49,6 +49,8 @@ Full SQLite3 engine compiled into the OS. Each app gets an isolated database fil
   exec_on   (h: DbHandle, sql: str, params: [any]) -> Result unit db.Error
   query_on  (h: DbHandle, sql: str, params: [any]) -> Result [{str: any}] db.Error
 
+@opaque DbHandle  -- bridge-owned database connection; passed to exec_on/query_on
+
   @errors
     :constraint    "Constraint violation"
     :syntax        "SQL syntax error"
@@ -87,7 +89,7 @@ Rows are `{str: any}` maps. The `row` builtin module (declared in `03-deck-os §
 ### 2.4 Transactions
 
 ```
-let result = db.transaction(() ->
+let result = db.transaction(_ ->
   do
     db.exec("INSERT INTO a VALUES (?)", [x])
     db.exec("UPDATE b SET count = count + 1 WHERE id = ?", [y])
@@ -133,7 +135,7 @@ Writes directly to flash. Atomic per key. Survives filesystem corruption and pow
   set_bytes (key: str, v: [byte])  -> Result unit nvs.Error
 
   delete    (key: str)             -> Result unit nvs.Error
-  keys      ()                     -> [str]
+  keys      ()                     -> Result [str] nvs.Error
   clear     ()                     -> Result unit nvs.Error
 
   @errors
@@ -169,6 +171,8 @@ Sandboxed to `/sdcard/{app.id}/`. The app never sees the full path. All paths re
   open_write  (path: str)                    -> Result FsWriter fs.Error
   write_chunk (w: FsWriter, data: [byte])    -> Result unit fs.Error
   close_write (w: FsWriter)                  -> Result unit fs.Error
+
+@opaque FsWriter  -- bridge-owned write handle; passed to write_chunk/close_write
 
   @errors
     :not_found      "Path does not exist"
@@ -290,7 +294,7 @@ Fast, TTL-based cache. Not persisted. Lost on app restart. For API responses or 
 
 ```
 fn timeline_posts () -> [{str: any}] !api !cache =
-  cache.get_or_set("timeline", 30s, () ->
+  cache.get_or_set("timeline", 30s, _ ->
     match api.get("/feed.getTimeline")
       | :ok r  -> unwrap_opt_or(r.json, [])
       | :err _ -> []

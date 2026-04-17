@@ -639,7 +639,7 @@ DeckResult deck_bridge_call(
 DeckSubscription* deck_bridge_subscribe(
   const char*    capability,
   const char*    method,
-  DeckValue*     args,
+  DeckValue**    args,
   int            argc,
   DeckCallback   on_value,
   DeckCallback   on_error,
@@ -728,3 +728,4 @@ The interpreter evaluates `when:` conditions continuously in response to OS even
 | `App is :state_name` | every `send()` to the named machine (internal event) |
 
 `when:` condition expressions are pure read-only expressions. They may call `@pure`-marked capability methods (e.g., `ble.is_connected(conn)`, `system.battery.level()`), access `@config` values, and use the `is` operator. They may **not** contain `!effect` calls, `send()`, `do` blocks, or `match` on mutable state.
+

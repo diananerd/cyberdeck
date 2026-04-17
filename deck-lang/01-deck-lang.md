@@ -102,7 +102,11 @@ Used in `@config range:` and pattern guards. Not a collection type.
 ```
 let  fn  match  when  is  as  and  or  not  with
 from  to  on  every  optional  true  false  unit  do
+for
 ```
+
+`when` and `for` are valid both as pattern-match guards (§8) and as content-body constructs (§7.6).
+`for` is only a keyword; it is not an expression in the general sense — it is restricted to content bodies and `do` blocks.
 
 ---
 
@@ -481,6 +485,42 @@ do
   App.send(:session_loaded, session: session)
   log.info("Session loaded for {session.handle}")
 ```
+
+### 7.6 `when` and `for` as Content-Body Constructs
+
+`when` and `for` appear in content bodies (inside `content =` blocks and `@flow` steps) as layout-control constructs. They are not general expressions — they are only valid inside content bodies and `do` blocks.
+
+**`when`** — conditional content inclusion:
+```
+when bool_expr
+  content_node
+  content_node
+```
+Sugar for `match bool_expr | true -> (nodes) | false -> unit`. Produces the content nodes only when the condition is true; produces nothing otherwise. The body is one or more content nodes, indented.
+
+**`for`** — inline content iteration:
+```
+for binding in list_expr
+  content_node
+  content_node
+```
+Evaluates the body for each element in `list_expr`, producing a flat sequence of content nodes. `binding` is a value name scoped to the body. `list_expr` must be a `[T]`. Produces no content for an empty list.
+
+Both can be combined:
+```
+content =
+  list
+    items: posts
+    p ->
+      group
+        p.text
+        when p.liked_by_me
+          status :liked  label: "Liked"
+        for img in p.images
+          media img  hint: :inline
+```
+
+`when` and `for` outside a content body are a load error.
 
 ### 7.7 Pipe Operator `|>`
 ```

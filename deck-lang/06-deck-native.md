@@ -1480,3 +1480,309 @@ deck_value_release()    → Decrement; free if zero.
 deck_value_free()       → Immediate free (only when refcount is 1).
 get_ accessors          → Pointer into value; valid while parent lives.
 ```
+
+---
+
+## 21. Implementing the Rendering Bridge
+
+This section is for bridge authors. It covers the rendering side of the bridge: receiving semantic content from the runtime and presenting it to the user in whatever form the platform supports.
+
+### 21.1 The Rendering Callbacks
+
+The bridge registers three rendering-related callbacks in `DeckRuntimeConfig`:
+
+```c
+typedef struct DeckRuntimeConfig {
+    /* ... existing fields ... */
+
+    /* Called every time the runtime has new content to display.
+       The DeckViewContent* is valid only for the duration of this call.
+       The bridge must copy any data it needs to retain.
+       Called from the runtime's main loop — thread context depends on platform. */
+    void (*render_fn)(const char* view_name,
+                      DeckViewContent* content,
+                      void* ctx);
+
+    /* Called to feed a user intent back to the runtime.
+       The bridge calls this when the user interacts with a rendered intent node
+       (taps a toggle, submits a text field, selects a choice, etc.).
+       Thread-safe. Can be called from any thread. */
+    void (*intent_fn)(const char* view_name,
+                      const char* intent_name,
+                      DeckValue*  value,       /* new value; bridge owns, runtime copies */
+                      void*       ctx);
+
+    /* Called when the runtime needs to go back (to history transition).
+       The bridge owns the back stack and must restore the previous visual state.
+       Thread-safe. */
+    void (*nav_back_fn)(const char* view_name, void* ctx);
+
+    void* render_ctx;   /* passed as ctx to all three callbacks */
+} DeckRuntimeConfig;
+```
+
+The bridge does not call `render_fn` — the runtime does. The bridge calls `intent_fn` and `nav_back_fn` — the runtime does not.
+
+### 21.2 The Rendering Contract
+
+`render_fn` receives a `DeckViewContent*` that describes what content exists. The bridge must ensure:
+
+- Every `DVC_NAVIGATE` node results in something the user can activate to trigger that navigation
+- Every `DVC_TOGGLE`, `DVC_RANGE`, `DVC_CHOICE`, `DVC_MULTISELECT`, `DVC_TEXT`, `DVC_PASSWORD`, `DVC_PIN`, `DVC_DATE`, `DVC_SEARCH` node results in something the user can interact with to produce a new value
+- Every `DVC_TRIGGER`, `DVC_CONFIRM`, `DVC_CREATE` node results in something the user can activate
+- Every `DVC_DATA`, `DVC_RICH_TEXT`, `DVC_STATUS`, `DVC_MEDIA` node results in content the user can perceive (read, hear, see)
+- Every `DVC_LIST` node makes all its items reachable (scroll, pagination, voice enumeration — any form that works on the platform)
+- Every `DVC_GROUP` distinguishes its children from siblings at the same nesting level
+
+Everything else — layout direction, visual style, widget form, animation, color, spacing — is the bridge's decision entirely. The runtime has no opinion and no visibility into these choices.
+
+### 21.3 Traversing DeckViewContent
+
+Use the accessors from `04-deck-runtime §4.3`. The full traversal pattern:
+
+```c
+static void render_node(DeckViewNode* n, MyRenderCtx* ctx) {
+    switch (deck_node_type(n)) {
+
+    case DVC_LIST: {
+        int count = deck_node_child_count(n);
+        if (count == 0) {
+            /* Render empty state */
+            int ec = deck_node_empty_count(n);
+            for (int i = 0; i < ec; i++)
+                render_node(deck_node_empty_child(n, i), ctx);
+        } else {
+            /* Render items — bridge decides: scroll, pager, voice enum, etc. */
+            for (int i = 0; i < count; i++)
+                render_node(deck_node_child(n, i), ctx);
+
+            /* "Load more" affordance if more: is true */
+            if (deck_node_more(n))
+                render_load_more_button(ctx);
+        }
+        break;
+    }
+
+    case DVC_GROUP: {
+        const char* label = deck_node_label(n);
+        if (label) render_section_header(label, ctx);
+        for (int i = 0; i < deck_node_child_count(n); i++)
+            render_node(deck_node_child(n, i), ctx);
+        break;
+    }
+
+    case DVC_FORM: {
+        begin_form(ctx);
+        for (int i = 0; i < deck_node_child_count(n); i++)
+            render_node(deck_node_child(n, i), ctx);
+        end_form(ctx);  /* bridge adds submit affordance */
+        break;
+    }
+
+    case DVC_DATA: {
+        DeckValue* v = deck_node_value(n);
+        render_text(deck_value_to_str(v), ctx);
+        break;
+    }
+
+    case DVC_MEDIA: {
+        DeckValue*  v   = deck_node_value(n);   /* AssetRef or bytes */
+        const char* alt = deck_node_alt(n);
+        render_image_or_alt(v, alt, ctx);       /* bridge decides: image widget or alt text */
+        break;
+    }
+
+    case DVC_NAVIGATE: {
+        const char* label = deck_node_text(n);
+        const char* route = deck_node_route(n);
+        /* Bridge renders this as tappable row, voice option, button, etc.
+           On activation, bridge calls intent_fn with intent_name="navigate",
+           value=deck_atom(route) */
+        render_navigation_item(label, route, ctx);
+        break;
+    }
+
+    case DVC_TOGGLE: {
+        const char* name = deck_node_name(n);
+        DeckValue*  val  = deck_node_intent_value(n);  /* current bool value */
+        bool current = val ? deck_get_bool(val) : false;
+        /* On change, bridge calls intent_fn(view, name, deck_bool(new_value), ctx) */
+        render_toggle(name, current, ctx);
+        break;
+    }
+
+    case DVC_RANGE: {
+        const char* name = deck_node_name(n);
+        double val  = deck_get_float(deck_node_intent_value(n));
+        double min  = deck_node_min(n);
+        double max  = deck_node_max(n);
+        /* On change, bridge calls intent_fn(view, name, deck_float(new_val), ctx) */
+        render_slider(name, val, min, max, ctx);
+        break;
+    }
+
+    case DVC_TEXT:
+    case DVC_PASSWORD:
+    case DVC_SEARCH: {
+        const char* name = deck_node_name(n);
+        const char* hint = deck_node_hint_text(n);
+        DeckValue*  val  = deck_node_intent_value(n);
+        const char* cur  = val ? deck_get_str(val) : "";
+        bool masked = (deck_node_type(n) == DVC_PASSWORD);
+        /* On submit, bridge calls intent_fn(view, name, deck_str(text), ctx) */
+        render_text_input(name, hint, cur, masked, ctx);
+        break;
+    }
+
+    case DVC_CONFIRM: {
+        const char* label   = deck_node_text(n);
+        const char* message = deck_node_confirm_msg(n);
+        /* Bridge shows a confirmation step before firing.
+           On confirm, bridge calls intent_fn(view, name=deck_node_name(n),
+           value=deck_bool(true), ctx) */
+        render_confirm_item(label, message, ctx);
+        break;
+    }
+
+    case DVC_LOADING:
+        render_loading_indicator(ctx);
+        break;
+
+    case DVC_ERROR:
+        render_error(deck_node_message(n), ctx);
+        break;
+
+    /* ... handle remaining node types ... */
+    }
+}
+
+void my_render_fn(const char* view_name, DeckViewContent* content, void* ctx) {
+    MyRenderCtx* rc = (MyRenderCtx*)ctx;
+    begin_render(rc);
+
+    int count = deck_content_count(content);
+    for (int i = 0; i < count; i++)
+        render_node(deck_content_node(content, i), ctx);
+
+    commit_render(rc);
+    /* DeckViewContent* is invalid after this function returns.
+       Do not store it. Copy anything you need during traversal. */
+}
+```
+
+### 21.4 Feeding Intents Back to the Runtime
+
+When the user interacts with a rendered intent node, the bridge calls `intent_fn`. The runtime routes this to the correct `on ->` handler:
+
+```c
+/* User tapped a toggle named :wifi_enabled, new value: true */
+DeckValue* new_val = deck_bool(true);
+cfg.intent_fn(view_name, "wifi_enabled", new_val, cfg.render_ctx);
+deck_value_free(new_val);
+
+/* User submitted a text field named :password */
+DeckValue* new_val = deck_str(text_buffer);
+cfg.intent_fn(view_name, "password", new_val, cfg.render_ctx);
+deck_value_free(new_val);
+
+/* User tapped a VCNavigate to route :thread with uri param */
+/* Navigation is handled differently — the bridge fires the navigate intent */
+DeckValue* route_val = deck_atom("thread");
+cfg.intent_fn(view_name, "navigate", route_val, cfg.render_ctx);
+/* The runtime resolves the route atom to a machine transition and fires it.
+   The next render_fn call will deliver the new state's content. */
+deck_value_free(route_val);
+```
+
+**Named route params**: for `VCNavigate` with params (e.g., `NTRoute(:thread, uri: post.uri)`), the runtime has already baked the param values into the route atom at evaluation time. The bridge receives the route atom name only; params are resolved by the runtime when the transition fires.
+
+**`to history` (back navigation)**: when the user triggers a back action on the platform (swipe, back button, voice "go back"), the bridge calls `nav_back_fn`:
+
+```c
+/* User swiped back / pressed back button */
+cfg.nav_back_fn(view_name, cfg.render_ctx);
+/* The runtime fires the FLOW_BACK event, which triggers the to history transition.
+   The next render_fn call delivers the previous state's content. */
+```
+
+### 21.5 Diffing: The Bridge's Responsibility
+
+The runtime always delivers a complete `DeckViewContent*` — the full semantic tree of the current state. It does not deliver diffs.
+
+The bridge is responsible for comparing the new content to whatever it currently has on screen and updating only what changed. The runtime makes no assumptions about how the bridge manages its widget tree.
+
+A simple approach for low-resource bridges: re-render completely on every `render_fn` call. Acceptable for e-ink or small displays with fast clear cycles.
+
+A more sophisticated approach for responsive UIs: maintain a shadow tree of the last rendered content, diff it against the new content, and update only the changed widgets.
+
+The runtime never calls `render_fn` more frequently than once per event loop cycle. It batches all machine state changes from a single event dispatch into a single `render_fn` call.
+
+### 21.6 Platform-Specific Rendering Decisions
+
+How the bridge maps semantic nodes to platform affordances is entirely the bridge's domain. The runtime spec does not prescribe this. Examples of decisions that belong to each bridge implementation:
+
+- Whether `DVC_LIST` renders as a scroll list, a pager, a card grid, or a voice enumeration
+- Whether `DVC_NAVIGATE` renders as a tappable row, a crown press, a voice option, or a D-pad selection
+- Whether `DVC_FORM` renders as inline fields, a wizard (one field per screen), or sequential voice prompts
+- Whether `DVC_GROUP` renders as a section header, a card, a tab, or a spoken category prefix
+- Whether `DVC_TEXT` is handled by a software keyboard, a hardware keyboard, voice dictation, or is declared unsupported
+- How many items a `DVC_LIST` shows before paginating
+- Whether navigation is a push stack, a tab bar, a pager, or a voice menu
+
+These are implementation decisions. Document them in bridge-specific implementation notes, not in the Deck language or runtime spec.
+
+### 21.7 Asset Resolution
+
+When a node's value is an `AssetRef` (returned by `asset()` in Deck), the bridge receives it as a `DECK_OPAQUE` value. The bridge resolves it to the actual file path or in-memory bytes using:
+
+```c
+/* deck_bridge.h */
+
+/* Returns the resolved filesystem path for a bundled AssetRef.
+   The pointer is valid for the lifetime of the runtime.
+   Returns NULL if the ref is an in-memory asset (created via asset_from_bytes). */
+const char* deck_asset_path(DeckRuntime* rt, DeckValue* asset_ref);
+
+/* Returns a pointer to the in-memory bytes and their size.
+   Returns NULL data if the ref is a filesystem asset. */
+const uint8_t* deck_asset_bytes(DeckRuntime* rt, DeckValue* asset_ref, size_t* out_size);
+```
+
+The bridge never loads asset bytes into the Deck value heap — it resolves them at render time or when passing them to a capability (TLS stack, audio player, image decoder, etc.):
+
+```c
+case DVC_MEDIA: {
+    DeckValue* v = deck_node_value(n);
+    if (deck_get_type(v) == DECK_OPAQUE) {
+        const char* path = deck_asset_path(rt, v);
+        if (path) {
+            load_image_from_file(path, ctx);
+        } else {
+            size_t sz;
+            const uint8_t* bytes = deck_asset_bytes(rt, v, &sz);
+            load_image_from_bytes(bytes, sz, ctx);
+        }
+    }
+    break;
+}
+```
+
+### 21.8 Unsupported Nodes
+
+If a bridge cannot present a node to the user at all, it may silently skip it during traversal. There is no API to report this to the runtime at render time — the bridge simply omits the node from its output.
+
+For developer-visible feedback, the bridge may log a warning the first time it encounters an unsupported node type, keyed by `(view_name, node_type)` to avoid log spam:
+
+```c
+static uint32_t s_unsupported_warned = 0;  /* bitmask by DvcNodeType */
+
+case DVC_CHART:
+    if (!(s_unsupported_warned & (1u << DVC_CHART))) {
+        DECK_LOG_WARN("Bridge does not support VCChart — node skipped in view '%s'",
+                      view_name);
+        s_unsupported_warned |= (1u << DVC_CHART);
+    }
+    break;
+```
+
+This is a developer-time warning, not a user-visible error. The Deck app is not notified and does not need to handle it — the content tree is always fully evaluated regardless of what the bridge can render.

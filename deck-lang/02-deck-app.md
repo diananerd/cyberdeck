@@ -41,8 +41,6 @@ An annotation is `@keyword` followed by an indented body. Annotations are not ca
 
 **Module imports**: `@use ./path` entries for local modules are declared **only in `app.deck`**. Individual `.deck` files do not have their own `@use` declarations — the module graph is established once from `app.deck` and all declared modules are in scope project-wide. See `01-deck-lang §10.3`.
 
-`app.deck` is also a `.deck` file for annotation placement purposes. Annotations in the "Any `.deck` file" column are also valid in `app.deck`.
-
 ---
 
 ## 3. @app — Identity
@@ -457,11 +455,11 @@ Declares a named reactive stream. App-level streams are active from app load unt
   skip:      int
 ```
 
-### 9.1 Source Streams
+### 10.1 Source Streams
 
 `source:` must be a capability method returning `Stream T`. If the capability is `optional` and unavailable, the stream produces no values.
 
-### 9.2 Derived Streams
+### 10.2 Derived Streams
 
 `from:` references another declared `@stream`. Operators chain in declaration order. All operator lambdas are pure. Circular stream references are a load error.
 
@@ -473,7 +471,7 @@ Declares a named reactive stream. App-level streams are active from app load unt
 `take_while: x -> ...` — stop emitting when predicate becomes false.
 `skip: n` — discard first n values.
 
-### 9.3 Stream Access
+### 10.3 Stream Access
 
 ```
 StreamName.last()        -- T?   (most recent value, or :none if none yet)
@@ -833,7 +831,7 @@ The position of a declaration in the content determines its scope:
 
 ### 12.6 Language Integration
 
-`match`, `let`, and `for` work naturally inside content:
+`match`, `let`, `when`, and `for` work naturally inside content:
 
 ```
 content =
@@ -863,7 +861,9 @@ content =
   create "Compose" -> App.send(:open_compose)     -- context-level; always available
 ```
 
-`for` iterates over any `[T]` and is equivalent to `list` without `more:` and `empty ->` semantics. Use `list` when the OS should treat the collection as a navigable, potentially paginated data set; use `for` for repeated inline content inside a larger structure.
+`when bool_expr content*` — conditional content inclusion. Sugar for `match bool_expr | true -> (nodes) | false -> unit`. Produces the body nodes only when the condition is true; produces nothing otherwise. Valid only inside content bodies (see `01-deck-lang §7.6`).
+
+`for binding in list_expr content*` — inline content iteration. Evaluates the body for each element, producing a flat sequence of nodes. `for` is equivalent to `list` without `more:` and `empty ->` semantics. Use `list` when the OS should treat the collection as a navigable, potentially paginated data set; use `for` for repeated inline content inside a larger structure.
 
 View content functions (§6.3 of `01-deck-lang`) may be called freely inside content bodies. Their nodes are spliced inline at the call site. Business logic (`let`, `match`, pure functions) may appear alongside content nodes anywhere in the body — the evaluator resolves the full body to a `[ViewContentNode]` sequence.
 
@@ -1201,3 +1201,148 @@ fn celsius (t: float) -> str
 ```
 
 **What the topology expresses:** `App` is a 2-state peer flow (tab bar or sidebar on phone/tablet). `MainFlow` reads reactively from `Sensor` and both streams — no `@listens` needed. `PollSensor` is flow-scoped: active only while `MainFlow` is on the stack. `HistoryFlow` queries the DB on demand. The OS infers all affordances from the structure.
+
+---
+
+## 19. @assets — Bundle y Recursos Estáticos
+
+### 19.1 Estructura del Bundle
+
+Una app en SD card es un directorio. El Loader lo trata como una unidad:
+
+```
+/apps/myapp/
+  app.deck               ← entrada obligatoria
+  flows/
+    *.deck
+  assets/
+    icon.png             ← 64×64 PNG mínimo; usado en launcher y task switcher
+    icon@2x.png          ← 128×128 para alta densidad (opcional)
+    splash.png           ← mostrado durante @on launch (opcional)
+    certs/
+      api.pem            ← CA certificate para conexiones TLS
+      client.pem         ← client cert para mutual TLS (si se necesita)
+    fonts/
+      custom.ttf         ← fuente personalizada (si el bridge la soporta)
+    audio/
+      beep.wav           ← recurso de audio (si el device tiene audio)
+    data/
+      seed.db            ← SQLite pre-poblado; se copia al app storage en first launch
+```
+
+`assets/` es el único directorio accesible desde Deck code. El Loader rechaza cualquier path fuera de este directorio.
+
+### 19.2 La Anotación @assets
+
+Declarada en `app.deck`. Enumera todos los recursos estáticos que la app necesita:
+
+```deck
+@assets
+  required:
+    icon:        assets/icon.png          as :icon
+    api_cert:    assets/certs/api.pem     as :api_cert
+
+  optional:
+    splash:      assets/splash.png        as :splash
+    custom_font: assets/fonts/custom.ttf  as :custom_font
+    beep:        assets/audio/beep.wav    as :beep
+
+  data:
+    seed_db: assets/data/seed.db  as :seed_db
+             copy_to: "database.db"
+             on: :first_launch
+```
+
+- **`required:`** — deben existir al cargar. Si falta cualquiera, el Loader falla en Stage 0 listando todos los archivos ausentes. La app no se lanza.
+- **`optional:`** — pueden estar ausentes. En runtime, `asset(:name)` retorna `:err :not_found` si el archivo no existe. La app maneja esto normalmente.
+- **`data:`** — archivos copiados al app storage antes de que corra `@on launch`. `copy_to:` es relativo al directorio de storage de la app. `on: :first_launch` significa "copiar solo si el destino no existe todavía" — no sobreescribe datos del usuario en actualizaciones.
+
+### 19.3 Tipos de Asset
+
+| Átomo convencional | Contenido | Cómo lo usa el bridge |
+|---|---|---|
+| `:icon` | PNG RGBA, 64×64 mínimo | Launcher grid, task switcher |
+| `:splash` | PNG, cualquier tamaño | Pantalla durante @on launch |
+| `:image_*` | PNG / JPEG | Nodos `VCMedia` |
+| `:cert_*` | PEM (CA certificate) | Pasado al TLS stack en `net.fetch!()` |
+| `:client_cert_*` | PEM (client certificate) | Mutual TLS en `net.fetch!()` |
+| `:font_*` | TTF / OTF | Fuente personalizada, registrada en el bridge renderer |
+| `:audio_*` | WAV / MP3 | `system.audio.play!()` capability |
+| `:seed_db` | SQLite 3 | Copiado a app storage en first launch |
+
+El nombre del átomo (`as :icon`, `as :api_cert`) es libre — lo define el developer. La convención de la tabla no es forzada por el Loader. La única excepción es `:icon`: el OS busca exactamente ese átomo para mostrar el ícono en el launcher.
+
+### 19.4 Referenciando Assets en Deck Code
+
+El builtin `asset()` está siempre en scope — sin `@use`, sin `!effect`:
+
+```deck
+-- En un content= body (contexto puro)
+media
+  source: asset(:splash)
+  alt:    "App logo"
+
+-- En un @on hook o @task (con efectos)
+net.fetch!(url, tls_ca_cert: asset(:api_cert))
+net.fetch!(url, tls_ca_cert: asset(:api_cert), tls_client_cert: asset(:client_cert))
+```
+
+`asset(name: atom) -> AssetRef` — retorna un handle opaco. No carga el archivo en el heap de Deck. El bridge resuelve el path real cuando la capability lo necesita. El heap de Deck nunca contiene los bytes crudos de imágenes, certs, ni audio, salvo que la app los pida explícitamente.
+
+Para acceso directo a bytes (necesario solo para formatos propios o procesamiento en Deck):
+
+```deck
+asset_bytes! (name: atom) -> Result [byte] :not_found
+```
+
+Carga el archivo completo como lista de bytes en el heap. Usar solo para assets pequeños. Para usos estándar (imágenes, certs, audio) pasar `AssetRef` — el bridge hace el I/O.
+
+### 19.5 Assets Descargables
+
+Los assets que no van en el bundle se gestionan con `net` y `store` — no son `@assets`. El patrón habitual es fetch-and-cache:
+
+```deck
+fn ensure_avatar (did: str) -> Result AssetRef net.Error =
+  let key = "avatar_{did}"
+  match store.get_bytes!(key)
+    | :ok bytes  -> :ok (asset_from_bytes(bytes))
+    | :err :not_found ->
+        match net.fetch!("https://cdn.bsky.app/img/avatar/{did}")
+          | :ok r ->
+              store.set_bytes!(key, r.body)
+              :ok (asset_from_bytes(r.body))
+          | :err e -> :err e
+```
+
+`asset_from_bytes(bytes: [byte]) -> AssetRef` — envuelve bytes en memoria como un AssetRef efímero. El bridge retiene los bytes en su propio buffer; el heap de Deck solo guarda el handle.
+
+### 19.6 Verificación del Loader (Stage 0)
+
+```
+Stage 0: ASSET VERIFICATION (antes de todo lo demás)
+  Para cada required: entry:
+    Verificar que assets/<path> exista en el directorio de la app
+    Verificar que sea legible
+    Si falta o no es legible → load error (listar TODOS los ausentes de una vez)
+  Para cada optional: entry:
+    Verificar existencia; si falta → marcar como :not_found en el asset registry
+  Para cada data: entry:
+    Verificar que el source exista (se aplican las mismas reglas required/optional)
+    Si copy_to + on: :first_launch:
+      Verificar si el destino existe en app storage
+      Si no existe → encolar copia (el bridge la ejecuta antes de @on launch)
+```
+
+La verificación de assets ocurre antes del module graph (Stage 1), antes del OS surface (Stage 2), y antes de cualquier type checking. Una app que no puede cargar sus certificados no vale la pena parsear.
+
+### 19.7 Icono — Contrato Específico
+
+El ícono (declarado `as: :icon`) tiene un contrato especial porque el OS lo usa cuando la app no está corriendo:
+
+- **Formato**: PNG, RGBA o RGB, sin animación
+- **Tamaño mínimo**: 64×64 px. El bridge escala según necesite.
+- **Tamaño recomendado**: proveer también `assets/icon@2x.png` (128×128); el bridge elige el mejor
+- **Alpha**: soportado; el launcher lo pone sobre el color de fondo del sistema
+- **Átomo exacto**: debe declararse `as: :icon`. Cualquier otro nombre lo convierte en imagen ordinaria
+
+Apps sin `:icon` reciben el placeholder del sistema (el carácter `?` del bridge renderer del launcher).

@@ -872,7 +872,7 @@ Navigation in Deck is not a push/pop stack operation — the flow structure defi
 
 **Machine.send() is the only navigation primitive.** When a transition fires (via an explicit `send()` call in an `on ->` handler, a `VCTrigger` action, or a `watch:` condition), the evaluator updates the machine instance and emits `MACHINE_STATE_CHANGED`.
 
-The OS bridge receives `FLOW_STATE_CHANGED` events from the runtime and re-renders the `content =` of the newly active state:
+The OS bridge receives `MACHINE_STATE_CHANGED` events from the Navigation Manager and re-renders the `content =` of the newly active state:
 ```
 send(:event, args)
   → transition fires → machine instance updated

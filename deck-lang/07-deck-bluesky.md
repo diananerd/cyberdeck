@@ -249,7 +249,7 @@ bluesky/
   transition :paginate
     from :loaded s
     when: s.cursor is :some
-    to   :paginating (posts: s.posts, cursor: s.cursor.value)
+    to   :paginating (posts: s.posts, cursor: unwrap_opt(s.cursor))
 
   transition :paginated (new_posts: [Post], cursor: str?)
     from :paginating s
@@ -317,22 +317,20 @@ bluesky/
 
 -- ── Streams ──────────────────────────────────────────────────────────────────
 
-@stream UnreadCount
-  from: Notifs
-  map:  state -> match state
-    | :loaded s -> s.unread
-    | _         -> 0
+-- UnreadCount is read directly from Notifs.state in content bodies.
+-- No @stream needed: if a content= body reads from a machine, the runtime
+-- re-evaluates automatically when the machine transitions (02-deck-app §8.7).
 
 -- ── Lifecycle ────────────────────────────────────────────────────────────────
 
 @on launch
-  api.configure({
+  api.configure(ApiConfig {
     base_url:    "{config.bsky_host}/xrpc",
-    timeout:     15s,
-    cache_ttl:   30s,
-    retry_count: 2,
-    retry_on:    [:timeout, :server_error],
-    user_agent:  "Bluesky-Deck/1.0"
+    timeout:     :some 15s,
+    cache_ttl:   :some 30s,
+    retry_count: :some 2,
+    retry_on:    :some [:timeout, :server_error],
+    user_agent:  :some "Bluesky-Deck/1.0"
   })
   match auth.load_session()
     | :none -> unit
@@ -575,7 +573,7 @@ fn get_thread (uri: str) -> Result Thread str !api =
 
 fn search_posts (q: str, cursor: str?) -> Result FeedPage str !api =
   let params = map.set(base_params(cursor), "q", q)
-  match xrpc.get("app.bsky.feed.searchPosts", { "q": q, "limit": "25" })
+  match xrpc.get("app.bsky.feed.searchPosts", params)
     | :err e -> :err e
     | :ok body ->
         let posts  = body |> get_list("posts") |> map(parse_post_view)
@@ -832,7 +830,7 @@ fn delete_record (collection: str, rkey: str) -> Result unit str !api =
   )
 
 @private
-fn with_did (fn: str -> Result T str) -> Result T str =
+fn with_did (fn: str -> Result any str) -> Result any str =
   match Auth.state
     | :authenticated s -> fn(s.did)
     | _                -> :err "Not authenticated"
@@ -1405,8 +1403,9 @@ fn do_logout () -> unit !api !nvs =
   priority: :normal
 
   run =
-    Auth.send(:refresh_start)
-    auth.refresh()
+    do
+      Auth.send(:refresh_start)
+      auth.refresh()
 ```
 
 ---

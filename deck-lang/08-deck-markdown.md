@@ -36,11 +36,12 @@ The `@include` directive is defined in `03-deck-os §2.1`. It inserts all declar
 -- ── Types ────────────────────────────────────────────────────────────────────
 
 @type MdDocument
-  source     : str
-  nodes      : [MdNode]
-  toc        : [MdHeading]
-  word_count : int
-  image_urls : [str]
+  source       : str
+  nodes        : [MdNode]
+  toc          : [MdHeading]
+  word_count   : int
+  image_urls   : [str]
+  front_matter : {str: any}?  -- populated when parsed with front_matter: true
 
 @type MdNode
   type     : atom
@@ -115,7 +116,7 @@ The `@include` directive is defined in `03-deck-os §2.1`. It inserts all declar
   headings      (doc: MdDocument)               -> [MdHeading]
   heading_id    (text: str)                     -> str
   strip_images  (src: str)                      -> str
-  extract_links (src: str)                      -> [(text: str, url: str)]
+  extract_links (src: str)                      -> [(str, str)]  -- (link_text, url)
   extract_code  (src: str)                      -> [(lang: str, code: str)]
   has_front_matter(src: str)                    -> bool
   front_matter  (src: str)                      -> {str: any}
@@ -283,18 +284,18 @@ markdown_editor
 **Minimal:**
 ```deck
 markdown_editor
-  value: state.content
-  on change -> send(:update_content, text: event.value)
+  value: Editor.state.content   -- read from machine state
+  on change -> Editor.send!(:update_content, text: event.value)
 ```
 
 **Full external control:**
 ```deck
 -- Machine owns the editor state, not just the string
 markdown_editor
-  editor_state: state.editor
-  on change    -> send(:content_changed, text: event.value)
-  on cursor    -> send(:cursor_moved, at: event.cursor, formats: event.formats)
-  on selection -> send(:selection, range: event.selection)
+  editor_state: Editor.state.editor
+  on change    -> Editor.send!(:content_changed, text: event.value)
+  on cursor    -> Editor.send!(:cursor_moved, at: event.cursor, formats: event.formats)
+  on selection -> Editor.send!(:selection, range: event.selection)
   toolbar:       true
   toolbar_items: [:bold, :italic, :code, :separator, :heading_1, :heading_2,
                   :separator, :bullet_list, :ordered_list, :blockquote,
@@ -366,7 +367,8 @@ md.heading_id("Getting Started!")
 -- "getting-started"
 
 md.extract_links(content)
--- [(text: "Anthropic", url: "https://anthropic.com"), ...]
+-- [(str, str)]: [("Anthropic", "https://anthropic.com"), ...]
+-- Each tuple: (link_text, url)
 
 md.extract_code(content)
 -- [(lang: "python", code: "import os\n..."), (lang: "", code: "npm install")]
@@ -479,13 +481,11 @@ For AI chat responses, live document sync, or streaming file reads.
     from :streaming _
     to   :done (document: doc)
 
-  body =
-    screen
-      scroll
-        match state
-          | :empty      -> spinner
-          | :streaming s -> markdown s.accumulated
-          | :done s     -> markdown s.document
+  content =
+    match ChatView.state
+      | :empty      -> status items: [(label: "STATUS", value: "Waiting...")]
+      | :streaming s -> markdown s.accumulated  style: :compact
+      | :done s     -> markdown s.document      style: :prose
 ```
 
 The `md_cap.stream_parse` capability handles the accumulation and incremental parsing:
@@ -761,11 +761,11 @@ static DeckValue* build_node_record(MdNodeEntry* e) {
         OPT_STR(e->url),
         OPT_STR(e->alt),
         OPT_STR(e->title),
-        e->type[0] == 'l' ? deck_some(deck_bool(e->ordered)) : deck_none(),
-        e->type[0] == 'l' ? deck_some(deck_bool(e->tight))   : deck_none(),
+        strncmp(e->type, "list", 4) == 0 ? deck_some(deck_bool(e->ordered)) : deck_none(),
+        strncmp(e->type, "list", 4) == 0 ? deck_some(deck_bool(e->tight))   : deck_none(),
         OPT_BOOL(e->checked),
         e->align > 0 ? deck_some(deck_atom(align_atom(e->align))) : deck_none(),
-        e->type[0] == 't' ? deck_some(deck_bool(e->is_header)) : deck_none(),
+        strcmp(e->type, "table_cell") == 0 ? deck_some(deck_bool(e->is_header)) : deck_none(),
         children
     };
 
@@ -1282,7 +1282,7 @@ static DeckValue* md_editor_format(DeckRuntime* rt, DeckValue** args, size_t arg
     }
 
     char* new_content = apply_format(content, format, range);
-    if (!new_content) return state;  /* no-op: format not applicable */
+    if (!new_content) { deck_value_retain(state); return state; }  /* no-op */
 
     DeckValue* new_content_v = deck_str(new_content);
     DeckValue* formats = infer_active_formats(new_content, cursor);
@@ -1479,20 +1479,13 @@ void markdown_module_register(DeckRuntime* rt) {
       updated_at TEXT    NOT NULL
     )
   """)
+  NoteListView.send!(:load)
+  load_notes!()
 
-@flow Nav
-  state :list
-  state :editor
-  state :reader
-  state :search
-  initial :list
-
-  transition :to_editor  from :list      to :editor  watch: App is :editing _
-  transition :to_reader  from :list      to :reader  watch: App is :reading _ or App is :new_note _
-  transition :to_search  from :list      to :search  watch: App is :searching _
-  transition :to_list    from :editor    to :list    watch: App is :list
-  transition :to_list    from :reader    to :list    watch: App is :list
-  transition :to_list    from :search    to :list    watch: App is :list
+-- Navigation is driven by App.state directly in content bodies.
+-- No separate Nav machine needed — machines are reactive by default.
+-- App.send!(:edit_note, ...) transitions App to :editing; the content
+-- body re-evaluates and renders the editor view automatically.
 ```
 
 ```deck
@@ -1594,60 +1587,49 @@ fn extract_meta_title (content: str) -> str? =
   transition :failed (message: str)   from :loading  to :error (message: message)
   transition :reload  from *  to :loading
 
-  on enter -> do  send(:load)  load_notes()
-
-  body =
-    screen
-      header "Notes"
-        actions
-          button "⌕"
-            -> App.send(:search)
-            accessibility: "Search notes"
-          button "✦"
-            -> new_note()
-            accessibility: "New note"
-      match state
-        | :idle | :loading -> center  spinner
-        | :error s ->
-            center
-              status  icon: :error  message: s.message
-              button "Retry"  -> do  send(:reload)  load_notes()
-        | :loaded s ->
+  content =
+    match NoteListView.state
+      | :idle | :loading ->
+          status items: [(label: "STATUS", value: "Loading notes...")]
+      | :error s ->
+          group
+            status items: [(label: "ERROR", value: s.message)]
+            trigger
+              label: "Retry"
+              -> do
+                  NoteListView.send!(:reload)
+                  load_notes!()
+      | :loaded s ->
+          group
             when len(s.notes) == 0
-              center
-                text "No notes yet"  style: :muted
-                text "Tap ✦ to create your first note"  style: :muted :small
-            list s.notes
+              status items: [(label: "NOTES", value: "No notes yet. Tap New to create one.")]
+            list
+              items: s.notes
               item n ->
                 note_card(n)
-              on refresh -> do  send(:reload)  load_notes()
+            create
+              label: "New Note"
+              -> new_note!()
 
 fn note_card (n: Note) =
-  card
-    row
-      column
-        row
-          when n.pinned  text "📌"  style: :small
-          text (unwrap_opt_or(n.meta_title, n.title))  style: :heading
-        text "{md.reading_time(n.content) |> time.duration_str} read · {n.word_count} words"
-          style: :caption :muted
-        text n.excerpt  style: :muted :small
-        when len(n.tags) > 0
-          row
-            for tag in n.tags
-              text "#{tag}"  style: :caption :muted
-    actions
-      button "Edit"
-        -> App.send(:edit_note, note: n)
-        style: :ghost
-      button "Open"
-        -> App.send(:open_note, note: n)
-        style: :ghost
+  group
+    navigate
+      label: unwrap_opt_or(n.meta_title, n.title)
+      hint:  "{md.reading_time(n.content) |> time.duration_str} read · {n.word_count} words"
+      to:    :reading
+      params: (note_id: n.id)
+    when n.pinned
+      status items: [(label: "PINNED", value: "yes")]
+    when len(n.tags) > 0
+      rich_text (n.tags |> map(t -> "#{t}") |> text.join("  "))
+    trigger
+      label: "Edit"
+      -> App.send!(:edit_note, note: n)
 
 fn load_notes () -> unit !db =
   match note.all()
-    | :err e -> send(:failed, message: e)
-    | :ok ns -> send(:loaded, notes: ns)
+    | :err e -> NoteListView.send!(:failed, message: e)
+    | :ok ns -> NoteListView.send!(:loaded, notes: ns)
 
 fn new_note () -> unit !db =
   let n = Note {
@@ -1655,17 +1637,16 @@ fn new_note () -> unit !db =
     created_at: "", updated_at: "", word_count: 0,
     excerpt: "", has_meta: false, meta_title: :none
   }
-  App.send(:edit_note, note: n)
+  App.send!(:edit_note, note: n)
 ```
 
 ```deck
 -- views/note_editor_view.deck
 
 @machine NoteEditorView
-  param note : Note
-
   state :editing  (current: Note, saved: bool, editor: MdEditorState?)
-  initial :editing (current: note, saved: true, editor: :none)
+  -- No initial state: NoteEditorView is activated via App machine transitions.
+  -- The App machine drives which note is loaded; see @on launch in app.deck.
 
   transition :update_content (text: str)
     from :editing s
@@ -1697,54 +1678,51 @@ fn new_note () -> unit !db =
     from :editing s
     to   :editing (current: note, saved: true, editor: s.editor)
 
-  body =
-    screen
-      match state
-        | :editing s ->
-            column
-              row
-                text s.current.title  style: :heading
-                spacer
-                text (match s.saved | true -> "Saved" | false -> "Editing")  style: :muted :small
-              text "{s.current.word_count} words · {time.duration_str(md.reading_time(s.current.content))}"
-                style: :caption :muted
-              divider
-              match config.preview_on_edit
-                | false ->
-                    markdown_editor
-                      value:    s.current.content
-                      on change -> send(:update_content, text: event.value)
-                      toolbar:    true
-                      min_lines:  20
-                | true ->
-                    markdown_editor
-                      value:       s.current.content
-                      on change -> send(:update_content, text: event.value)
-                      on cursor -> send(:update_editor,
-                                        editor: md_cap.editor_set_cursor(
-                                          unwrap_opt_or(s.editor, md_cap.editor_new(s.current.content)),
-                                          event.cursor))
-                      editor_state: s.editor
-                      toolbar:     true
-                      preview:     :side
-                      min_lines:   20
-              row
-                button "Save"
-                  -> do_save(s.current)
-                  style: :primary
-                  enabled: not s.saved
-                button "Discard"
-                  confirm:       "Discard changes?"
-                  confirm_label: "Discard"
-                  on confirm -> App.send(:discard)
-                  style: :ghost
+  content =
+    match NoteEditorView.state
+      | :editing s ->
+          group
+            status
+              items: [
+                (label: "TITLE",  value: s.current.title),
+                (label: "WORDS",  value: "{s.current.word_count}"),
+                (label: "STATUS", value: match s.saved | true -> "Saved" | false -> "Editing")
+              ]
+            match config.preview_on_edit
+              | false ->
+                  markdown_editor
+                    value:    s.current.content
+                    on change -> NoteEditorView.send!(:update_content, text: event.value)
+                    toolbar:    true
+                    min_lines:  20
+              | true ->
+                  markdown_editor
+                    value:       s.current.content
+                    on change -> NoteEditorView.send!(:update_content, text: event.value)
+                    on cursor -> NoteEditorView.send!(
+                                   :update_editor,
+                                   editor: md_cap.editor_set_cursor(
+                                     unwrap_opt_or(s.editor, md_cap.editor_new(s.current.content)),
+                                     event.cursor))
+                    editor_state: s.editor
+                    toolbar:      true
+                    preview:      :side
+                    min_lines:    20
+            trigger
+              label:   "Save"
+              enabled: not s.saved
+              -> do_save!(s.current)
+            confirm
+              label:   "Discard"
+              message: "Discard changes?"
+              -> App.send!(:discard)
 
 fn do_save (n: Note) -> unit !db =
   match note.save(n)
     | :err _ -> unit
     | :ok saved -> do
-        send(:saved, note: saved)
-        App.send(:save, note: saved)
+        NoteEditorView.send!(:saved, note: saved)
+        App.send!(:save, note: saved)
 
 fn extract_title (content: str) -> str =
   let headings = md.headings(content)
@@ -1762,56 +1740,56 @@ fn extract_title (content: str) -> str =
 -- views/note_reader_view.deck
 
 @machine NoteReaderView
-  param note : Note
+  state :reading (note: Note, scroll_to: str?)
+  initial :reading (note: Note { id: 0, title: "", content: "", tags: [],
+                                  pinned: false, created_at: "", updated_at: "",
+                                  word_count: 0, excerpt: "", has_meta: false,
+                                  meta_title: :none }, scroll_to: :none)
 
-  state :reading (scroll_to: str?)
-  initial :reading (scroll_to: :none)
+  transition :load (note: Note)
+    from *
+    to   :reading (note: note, scroll_to: :none)
 
   transition :jump_to (id: str)
-    from *
-    to   :reading (scroll_to: :some id)
+    from :reading s
+    to   :reading (note: s.note, scroll_to: :some id)
 
-  on enter -> unit
-
-  body =
-    screen
-      match state
-        | :reading s ->
-            column
-              row
-                text (unwrap_opt_or(note.meta_title, note.title))  style: :large :heading
-                spacer
-                text time_ago.format(note.updated_at)  style: :muted :small
-              text "{note.word_count} words · {time.duration_str(md.reading_time(note.content))}"
-                style: :caption :muted
-              when len(md.headings(note.content)) > 3
-                -- Table of contents for longer docs
-                card
-                  text "Contents"  style: :subheading
-                  for h in md.headings(note.content)
-                    button (text.repeat("  ", h.level - 1) ++ h.text)
-                      -> send(:jump_to, id: h.id)
-                      style: :ghost
-              divider
-              markdown note.content
-                style:     config.default_style
-                show_toc:  false
-                scroll_to: s.scroll_to
-                code_copy: true
-                on link ->
-                  match event.url |> text.starts("note://")
-                    | true  ->
-                        let target_id = text.slice(event.url, 7, text.length(event.url))
-                        send(:jump_to, id: target_id)
-                    | false -> unit
-              spacer
-              actions
-                button "Edit"
-                  -> App.send(:edit_note, note: note)
-                  style: :primary
-                button "Back"
-                  -> App.send(:back)
-                  style: :ghost
+  content =
+    match NoteReaderView.state
+      | :reading s ->
+          group
+            status
+              items: [
+                (label: "TITLE",   value: unwrap_opt_or(s.note.meta_title, s.note.title)),
+                (label: "WORDS",   value: "{s.note.word_count}"),
+                (label: "UPDATED", value: s.note.updated_at)
+              ]
+            when len(md.headings(s.note.content)) > 3
+              list
+                items: md.headings(s.note.content)
+                item h ->
+                  navigate
+                    label: h.text
+                    hint:  "H{h.level}"
+                    to:    :jump_to
+                    params: (id: h.id)
+            markdown s.note.content
+              style:     config.default_style
+              show_toc:  false
+              scroll_to: s.scroll_to
+              code_copy: true
+              on link ->
+                match event.url |> text.starts("note://")
+                  | true  ->
+                      let target_id = text.slice(event.url, 7, text.length(event.url))
+                      NoteReaderView.send!(:jump_to, id: target_id)
+                  | false -> unit
+            trigger
+              label: "Edit"
+              -> App.send!(:edit_note, note: s.note)
+            trigger
+              label: "Back"
+              -> App.send!(:back)
 ```
 
 ### 7.2 E-Reader
@@ -1872,18 +1850,15 @@ fn extract_title (content: str) -> str =
   transition :close_search  from :searching s  to :open (book: s.book, position: 0, chapter_id: :none)
   transition :close         from *             to :closed
 
-@flow App
-  state :library
-  state :reading
-  initial :library
-
-  transition :open   from :library  to :reading  watch: Reader is :open or Reader is :searching
-  transition :close  from :reading  to :library  watch: Reader is :closed
+-- Navigation is driven by Reader.state directly in content.
+-- Reader.send(:open_book, ...) causes App content to re-evaluate reactively.
 
 @on hardware.button (id: 0, action: :press)
   match Reader.state
-    | :open _ -> display.backlight_toggle()
-    | _       -> unit
+    | :open _ ->
+        let current = shell.get_brightness()
+        shell.set_brightness(match current > 0.3 | true -> 0.1 | false -> 0.8)
+    | _ -> unit
 ```
 
 ```deck
@@ -1905,54 +1880,54 @@ fn extract_title (content: str) -> str =
     from :loading _
     to   :error (message: message)
 
-  on enter ->
-    match Reader.state
-      | :open s      -> do  send(:load, path: s.book.path)
-      | :searching s -> do  send(:load, path: s.book.path)
-      | _            -> unit
-
-  body =
-    screen
-      match state
-        | :idle | :loading _ -> center  spinner
-        | :error s           -> status  icon: :error  message: s.message
-        | :ready s ->
-            match Reader.state
-              | :open r ->
-                  reader_body(s.doc, r.chapter_id, build_theme())
-              | :searching r ->
-                  column
-                    input
-                      value:       r.query
-                      placeholder: "Search in book…"
-                      style:       :search
-                      on change -> Reader.send(:search, query: event.value)
-                    when len(r.results) > 0
-                      list r.results
-                        item h ->
-                          card
-                            text "H{h.level}: {h.text}"
-                            button "Jump"
-                              -> Reader.send(:jump, heading_id: h.id)
-                              style: :ghost
-                    button "Close search"
-                      -> Reader.send(:close_search)
-                      style: :ghost
-              | _ -> unit
+  content =
+    match ReaderView.state
+      | :idle | :loading _ ->
+          status items: [(label: "STATUS", value: "Loading...")]
+      | :error s ->
+          group
+            status items: [(label: "ERROR", value: s.message)]
+            trigger
+              label: "Retry"
+              -> do
+                  match Reader.state
+                    | :open s      -> ReaderView.send!(:load, path: s.book.path)
+                    | :searching s -> ReaderView.send!(:load, path: s.book.path)
+                    | _            -> unit
+      | :ready s ->
+          match Reader.state
+            | :open r ->
+                reader_body(s.doc, r.chapter_id, build_theme())
+            | :searching r ->
+                group
+                  search
+                    value:       r.query
+                    placeholder: "Search in book…"
+                    on change -> Reader.send!(:search, query: event.value)
+                  when len(r.results) > 0
+                    list
+                      items: r.results
+                      item h ->
+                        navigate
+                          label: "H{h.level}: {h.text}"
+                          to:    :jump
+                          params: (heading_id: h.id)
+                  trigger
+                    label: "Close search"
+                    -> Reader.send!(:close_search)
+            | _ -> unit
 
 fn reader_body (doc: MdDocument, chapter_id: str?, theme: MdTheme) =
-  scroll
-    column
-      markdown doc
-        style:      :prose
-        theme:      theme
-        show_toc:   true
-        scroll_to:  chapter_id
-        selectable: true
-        code_copy:  true
-        virtual:    true
-        on link -> handle_link(event.url)
-        on image -> unit
+  markdown doc
+    style:      :prose
+    theme:      theme
+    show_toc:   true
+    scroll_to:  chapter_id
+    selectable: true
+    code_copy:  true
+    virtual:    true
+    on link -> handle_link(event.url)
+    on image -> unit
 
 fn build_theme () -> MdTheme =
   let base_scale = float(config.font_size) / 16.0
@@ -1971,15 +1946,15 @@ fn handle_link (url: str) -> unit =
   match text.starts(url, "#")
     | true  ->
         let id = text.slice(url, 1, text.length(url))
-        Reader.send(:jump, heading_id: id)
+        Reader.send!(:jump, heading_id: id)
     | false -> unit
 
 fn load_book (path: str) -> unit !fs =
   match fs.read(path)
-    | :err e -> send(:failed, message: "Cannot open file: {e}")
+    | :err e -> ReaderView.send!(:failed, message: "Cannot open file: {e}")
     | :ok content ->
         let doc = md.parse(content, { "front_matter": true, "heading_ids": true })
-        send(:ready, content: content, doc: doc)
+        ReaderView.send!(:ready, content: content, doc: doc)
 ```
 
 ### 7.3 Markdown in Chat (AI Responses)
@@ -2004,49 +1979,33 @@ fn load_book (path: str) -> unit !fs =
 
   transition :response_done
     from :waiting s
-    to   :idle with messages: s.messages ++ [ChatMsg { role: :assistant, content: s.partial }]
+    to   :idle (messages: s.messages ++ [ChatMsg { role: :assistant, content: s.partial }])
 
-  body =
-    screen
-      scroll
-        match state
-          | :idle s -> message_list(s.messages)
-          | :waiting s ->
-              column
-                message_list(s.messages)
-                -- Streaming response with live markdown render
-                card
-                  markdown s.partial
-                    style:   :compact
-                    virtual: false
-                    -- As partial grows, component re-renders reactively
-
-      row
-        input
-          value:       compose_text
-          placeholder: "Message…"
-          on change -> update_compose(event.value)
-        button "Send"
-          -> do_send()
-          enabled: not text.is_blank(compose_text)
-          style: :primary
+  content =
+    match ChatView.state
+      | :idle s ->
+          group
+            message_list(s.messages)
+            text
+              placeholder: "Message…"
+              on change -> ChatView.send!(:user_sent, msg: event.value)
+      | :waiting s ->
+          group
+            message_list(s.messages)
+            -- Streaming response re-renders reactively as :partial grows
+            markdown s.partial
+              style:   :compact
+              virtual: false
 
 fn message_list (msgs: [ChatMsg]) =
-  column
-    for msg in msgs
-      card
-        match msg.role
-          | :user ->
-              row
-                spacer
-                text msg.content  style: :body
-          | :assistant ->
-              row
-                column
-                  markdown msg.content
-                    style:     :compact
-                    code_copy: true
-                spacer
+  for msg in msgs
+    match msg.role
+      | :user ->
+          rich_text msg.content
+      | :assistant ->
+          markdown msg.content
+            style:     :compact
+            code_copy: true
 ```
 
 ### 7.4 Technical Documentation Browser
@@ -2055,46 +2014,41 @@ fn message_list (msgs: [ChatMsg]) =
 -- views/docs_view.deck
 
 @machine DocsView
-  param source : str      -- markdown content
-
-  state :navigating (scroll_to: str?)
-  initial :navigating (scroll_to: :none)
+  -- source: str is passed in as initial state payload
+  state :navigating (source: str, scroll_to: str?)
 
   transition :section (id: str)
-    from *
-    to   :navigating (scroll_to: :some id)
+    from :navigating s
+    to   :navigating (source: s.source, scroll_to: :some id)
 
-  body =
-    screen
-      let doc = md.parse(source, { "heading_ids": true })
-      row
-        -- Sidebar ToC (wider screens via adaptive layout hint)
-        when len(doc.toc) > 0
-          column
-            text "Contents"  style: :subheading
-            for h in doc.toc
-              button h.text
-                -> send(:section, id: h.id)
-                style: :ghost
-        -- Content
-        scroll
-          match state
-            | :navigating s ->
-                column
-                  markdown doc
-                    style:     :normal
-                    scroll_to: s.scroll_to
-                    code_copy: true
-                    show_toc:  false
-                    virtual:   true
-                    on link -> handle_doc_link(event.url, event.text)
+  content =
+    match DocsView.state
+      | :navigating s ->
+          let doc = md.parse(s.source, { "heading_ids": true })
+          group
+            when len(doc.toc) > 0
+              list
+                items: doc.toc
+                item h ->
+                  navigate
+                    label: h.text
+                    hint:  "H{h.level}"
+                    to:    :section
+                    params: (id: h.id)
+            markdown doc
+              style:     :normal
+              scroll_to: s.scroll_to
+              code_copy: true
+              show_toc:  false
+              virtual:   true
+              on link -> handle_doc_link(event.url, event.text)
 
 fn handle_doc_link (url: str, label: str) -> unit =
   match text.starts(url, "#")
     | true  ->
         let id = text.slice(url, 1, text.length(url))
-        send(:section, id: id)
-    | false -> notify.send("External link: {label}")
+        DocsView.send!(:section, id: id)
+    | false -> unit
 ```
 
 ---
@@ -2156,7 +2110,7 @@ Never render full markdown in a list of notes/posts. Use `md.excerpt()` for list
 
 ```deck
 -- List view (fast):
-text md.excerpt(note.content, 120, "…")  style: :muted :small
+rich_text (md.excerpt(note.content, 120, "…"))
 
 -- Reader view (full):
 markdown note.content  style: :prose
