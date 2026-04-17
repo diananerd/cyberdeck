@@ -54,8 +54,10 @@ typedef struct { binop_t op; int prec; bool right_assoc; } binop_info_t;
 static bool binop_for(deck_tok_t t, binop_info_t *out)
 {
     switch (t) {
-        case TOK_OR_OR:   *out = (binop_info_t){ BINOP_OR,     1, false }; return true;
-        case TOK_AND_AND: *out = (binop_info_t){ BINOP_AND,    2, false }; return true;
+        case TOK_OR_OR:
+        case TOK_KW_OR:   *out = (binop_info_t){ BINOP_OR,     1, false }; return true;
+        case TOK_AND_AND:
+        case TOK_KW_AND:  *out = (binop_info_t){ BINOP_AND,    2, false }; return true;
         case TOK_EQ:      *out = (binop_info_t){ BINOP_EQ,     3, false }; return true;
         case TOK_NE:      *out = (binop_info_t){ BINOP_NE,     3, false }; return true;
         case TOK_LT:      *out = (binop_info_t){ BINOP_LT,     4, false }; return true;

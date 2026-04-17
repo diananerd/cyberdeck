@@ -69,6 +69,7 @@ static deck_test_t DECK_TESTS[] = {
     { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      DECK_RT_OK, false },
     { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       DECK_RT_OK, false },
     { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    DECK_RT_OK, false },
+    { "lang.and_or_kw","/conformance/lang_and_or_kw.deck", "DECK_CONF_OK:lang.and_or_kw",DECK_RT_OK, false },
     { "os.math",       "/conformance/os_math.deck",       "DECK_CONF_OK:os.math",       DECK_RT_OK, false },
     { "os.text",       "/conformance/os_text.deck",       "DECK_CONF_OK:os.text",       DECK_RT_OK, false },
     { "os.time",       "/conformance/os_time.deck",       "DECK_CONF_OK:os.time",       DECK_RT_OK, false },

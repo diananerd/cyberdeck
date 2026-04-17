@@ -1,0 +1,17 @@
+@app
+  name: "Conf lang.and_or_kw"
+  id: "conf.lang.and_or_kw"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a = true and true
+  let b = true and false
+  let c = false or true
+  let d = false or false
+  let e = (1 < 2) and (3 > 2)
+  let f = (5 == 5) or (5 == 6)
+  let ok = a and (not b) and c and (not d) and e and f
+  log.info(if ok then "DECK_CONF_OK:lang.and_or_kw" else "DECK_CONF_FAIL:lang.and_or_kw")
