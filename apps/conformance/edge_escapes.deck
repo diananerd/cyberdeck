@@ -1,0 +1,19 @@
+@app
+  name: "Conf edge.escapes"
+  id: "conf.edge.escapes"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let nl     = "a\nb"
+  let tab    = "x\ty"
+  let quote  = "q\"q"
+  let bksl   = "b\\b"
+  let ok_nl  = text.len(nl) == 3
+  let ok_tab = text.len(tab) == 3
+  let ok_qt  = text.len(quote) == 3
+  let ok_bk  = text.len(bksl) == 3
+  let ok = ok_nl and ok_tab and ok_qt and ok_bk
+  log.info(if ok then "DECK_CONF_OK:edge.escapes" else "DECK_CONF_FAIL:edge.escapes")

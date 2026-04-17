@@ -1,0 +1,14 @@
+@app
+  name: "Conf edge.double_neg"
+  id: "conf.edge.double_neg"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let v  = true
+  let nn = not not v
+  let triple = not not not v
+  let ok = nn and (not triple)
+  log.info(if ok then "DECK_CONF_OK:edge.double_neg" else "DECK_CONF_FAIL:edge.double_neg")

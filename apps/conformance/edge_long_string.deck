@@ -1,0 +1,19 @@
+@app
+  name: "Conf edge.long_string"
+  id: "conf.edge.long_string"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let base  = "abcdefghijklmnopqrstuvwxyz"
+  let two   = base <> base
+  let four  = two <> two
+  let eight = four <> four
+  let ok_len  = text.len(eight) == 208
+  let ok_head = text.starts_with(eight, "abcdefgh")
+  let ok_tail = text.ends_with(eight, "stuvwxyz")
+  let ok_mid  = text.contains(eight, "xyzabc")
+  let ok = ok_len and ok_head and ok_tail and ok_mid
+  log.info(if ok then "DECK_CONF_OK:edge.long_string" else "DECK_CONF_FAIL:edge.long_string")

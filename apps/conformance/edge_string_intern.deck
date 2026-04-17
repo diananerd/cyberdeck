@@ -1,0 +1,16 @@
+@app
+  name: "Conf edge.string_intern"
+  id: "conf.edge.string_intern"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a = "interning"
+  let b = "interning"
+  let c = "different"
+  let ok_eq  = a == b
+  let ok_neq = a != c
+  let ok = ok_eq and ok_neq
+  log.info(if ok then "DECK_CONF_OK:edge.string_intern" else "DECK_CONF_FAIL:edge.string_intern")

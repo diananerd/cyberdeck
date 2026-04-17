@@ -339,6 +339,9 @@ static ast_node_t *parse_suite(deck_parser_t *p)
 {
     if (at(p, TOK_NEWLINE)) {
         advance(p);
+        /* Tolerate extra NEWLINE tokens inserted by blank/comment-only
+         * lines before the indented block begins. */
+        while (at(p, TOK_NEWLINE)) advance(p);
         if (!expect(p, TOK_INDENT, "expected indented suite")) return NULL;
         ast_node_t *d = mknode(p, AST_DO); if (!d) return NULL;
         ast_list_init(&d->as.do_.exprs);
@@ -384,6 +387,7 @@ static ast_node_t *parse_app_block(deck_parser_t *p)
     ast_node_t *n = mknode(p, AST_APP); if (!n) return NULL;
     advance(p); /* @app */
     if (!expect(p, TOK_NEWLINE, "expected newline after @app")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented @app body")) return NULL;
     if (!parse_app_fields(p, &n->as.app.fields, &n->as.app.n_fields)) return NULL;
     if (!expect(p, TOK_DEDENT, "expected dedent closing @app")) return NULL;
@@ -403,6 +407,7 @@ static bool parse_app_fields(deck_parser_t *p, ast_app_field_t **out, uint32_t *
         if (at(p, TOK_NEWLINE)) {
             /* Nested block (e.g. requires:). */
             advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
             if (!expect(p, TOK_INDENT, "expected indented nested block")) return false;
             ast_node_t *nested = ast_new(p->arena, AST_APP, p->cur.line, p->cur.col);
             if (!nested) return false;
@@ -471,6 +476,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
     advance(p);
     if (!expect(p, TOK_COLON, "expected ':' after state name")) return NULL;
     if (!expect(p, TOK_NEWLINE, "expected newline after state ':'")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented state body")) return NULL;
     ast_list_init(&st->as.state.hooks);
 
@@ -511,6 +517,7 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
     m->as.machine.name = p->cur.text;
     advance(p);
     if (!expect(p, TOK_NEWLINE, "expected newline after machine name")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented machine body")) return NULL;
     ast_list_init(&m->as.machine.states);
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {

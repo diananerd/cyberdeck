@@ -1,0 +1,20 @@
+@app
+  name: "Conf edge.nested_match"
+  id: "conf.edge.nested_match"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a = :ready
+  let b = 2
+  let r = match a
+    :ready => match b
+      1 => "ready-1"
+      2 => "ready-2"
+      _ => "ready-?"
+    :boot  => "boot"
+    _      => "other"
+  let ok = r == "ready-2"
+  log.info(if ok then "DECK_CONF_OK:edge.nested_match" else "DECK_CONF_FAIL:edge.nested_match")

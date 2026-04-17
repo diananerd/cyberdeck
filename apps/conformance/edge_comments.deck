@@ -1,0 +1,18 @@
+# pre-app comment
+@app
+  name: "Conf edge.comments"
+  id: "conf.edge.comments"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+# between app and on launch
+@on launch:
+  # leading comment inside block
+  let x = 10
+  let y = 20
+  # mid-block comment
+  let ok = x + y == 30
+  log.info(if ok then "DECK_CONF_OK:edge.comments" else "DECK_CONF_FAIL:edge.comments")
+  # trailing comment at end
