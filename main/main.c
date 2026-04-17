@@ -22,6 +22,7 @@
 #include "drivers/deck_sdi_shell.h"
 
 #include "deck_runtime.h"
+#include "deck_shell.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -127,6 +128,12 @@ void app_main(void)
 #endif
 
     log_heap("idle");
+
+    ESP_LOGI(TAG, "--- booting DL1 shell ---");
+    deck_err_t shell_rc = deck_shell_boot();
+    if (shell_rc != DECK_RT_OK) {
+        ESP_LOGE(TAG, "shell boot FAILED: %s", deck_err_name(shell_rc));
+    }
 
     ESP_LOGI(TAG, "Bootstrap complete — idle loop (10s heartbeat)");
 

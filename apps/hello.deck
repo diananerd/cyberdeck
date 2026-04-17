@@ -1,0 +1,21 @@
+@app
+  name: "Hello"
+  id: "sys.hello"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  log.info("Hello from /deck/apps/hello.deck")
+  log.info(str(system.info.deck_level))
+  log.info(text.upper("running on dl1"))
+
+@machine lifecycle
+  state boot:
+    on enter:
+      log.info("boot state")
+    transition :ready
+  state ready:
+    on enter:
+      log.info("ready state — system idle")

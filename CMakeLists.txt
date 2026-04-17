@@ -9,3 +9,6 @@ set(EXTRA_COMPONENT_DIRS
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(cyberdeck)
+
+# Bundle apps/ into the "apps" SPIFFS partition.
+spiffs_create_partition_image(apps apps FLASH_IN_PROJECT)
