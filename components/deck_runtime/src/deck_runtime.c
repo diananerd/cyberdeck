@@ -1,4 +1,5 @@
 #include "deck_runtime.h"
+#include "deck_intern.h"
 
 #include "esp_log.h"
 
@@ -12,6 +13,7 @@ static void on_panic(deck_err_t code, const char *message)
 deck_err_t deck_runtime_init(size_t heap_limit_bytes)
 {
     deck_alloc_init(heap_limit_bytes, on_panic);
+    deck_intern_init(64);
     ESP_LOGI(TAG, "initialized (heap_limit=%u bytes)", (unsigned)heap_limit_bytes);
     return DECK_RT_OK;
 }
@@ -102,7 +104,31 @@ deck_err_t deck_runtime_selftest(void)
     deck_release(some);
     CHECK(deck_alloc_used() == baseline, "optional freed");
 
-    /* 8. stress — 1000 cycles */
+    /* 8. atoms + interning — same name returns same interned ptr */
+    uint32_t intern_before = deck_intern_count();
+    deck_value_t *a1 = deck_new_atom("ok");
+    deck_value_t *a2 = deck_new_atom("ok");
+    deck_value_t *a3 = deck_new_atom("error");
+    CHECK(a1 && a2 && a3, "atom new");
+    CHECK(a1->type == DECK_T_ATOM, "atom type");
+    CHECK(a1->as.atom == a2->as.atom, "atom interning (same ptr)");
+    CHECK(a1->as.atom != a3->as.atom, "different atoms distinct");
+    CHECK(deck_intern_count() == intern_before + 2, "intern added 2 unique");
+    deck_release(a1); deck_release(a2); deck_release(a3);
+    CHECK(deck_alloc_used() == baseline, "atoms freed (intern retained)");
+
+    /* 9. strings — same content interned */
+    deck_value_t *s1 = deck_new_str_cstr("hello");
+    deck_value_t *s2 = deck_new_str_cstr("hello");
+    deck_value_t *s3 = deck_new_str_cstr("world");
+    CHECK(s1 && s2 && s3, "str new");
+    CHECK(s1->as.s.ptr == s2->as.s.ptr, "str interning");
+    CHECK(s1->as.s.ptr != s3->as.s.ptr, "str distinct");
+    CHECK(s1->as.s.len == 5, "str len");
+    deck_release(s1); deck_release(s2); deck_release(s3);
+    CHECK(deck_alloc_used() == baseline, "strs freed");
+
+    /* 10. stress — 1000 cycles */
     for (int k = 0; k < 1000; k++) {
         deck_value_t *v = deck_new_int(k);
         deck_retain(v);
@@ -112,8 +138,10 @@ deck_err_t deck_runtime_selftest(void)
     CHECK(deck_alloc_used() == baseline,      "stress used balance");
     CHECK(deck_alloc_live_values() == live_base, "stress live count");
 
-    ESP_LOGI(TAG, "selftest: PASS (baseline=%u peak=%u live=%u)",
+    ESP_LOGI(TAG, "selftest: PASS (baseline=%u peak=%u live=%u intern_count=%u intern_bytes=%u)",
              (unsigned)baseline, (unsigned)deck_alloc_peak(),
-             (unsigned)deck_alloc_live_values());
+             (unsigned)deck_alloc_live_values(),
+             (unsigned)deck_intern_count(),
+             (unsigned)deck_intern_bytes());
     return DECK_RT_OK;
 }

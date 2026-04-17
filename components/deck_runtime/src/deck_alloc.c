@@ -1,4 +1,5 @@
 #include "deck_alloc.h"
+#include "deck_intern.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -111,6 +112,32 @@ deck_value_t *deck_new_float(double v)
     deck_value_t *val = alloc_value(DECK_T_FLOAT);
     if (val) val->as.f = v;
     return val;
+}
+
+deck_value_t *deck_new_atom(const char *name)
+{
+    if (!name) return NULL;
+    const char *interned = deck_intern_cstr(name);
+    if (!interned) return NULL;
+    deck_value_t *val = alloc_value(DECK_T_ATOM);
+    if (val) val->as.atom = interned;
+    return val;
+}
+
+deck_value_t *deck_new_str(const char *s, uint32_t len)
+{
+    const char *interned = deck_intern(s, len);
+    if (!interned) return NULL;
+    deck_value_t *val = alloc_value(DECK_T_STR);
+    if (!val) return NULL;
+    val->as.s.ptr = interned;
+    val->as.s.len = len;
+    return val;
+}
+
+deck_value_t *deck_new_str_cstr(const char *s)
+{
+    return deck_new_str(s, s ? (uint32_t)strlen(s) : 0);
 }
 
 deck_value_t *deck_new_bytes(const uint8_t *buf, uint32_t len)

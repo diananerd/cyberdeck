@@ -49,6 +49,13 @@ deck_value_t *deck_new_int(int64_t v);
 deck_value_t *deck_new_float(double v);
 deck_value_t *deck_new_bytes(const uint8_t *buf, uint32_t len);  /* copies */
 
+/* Atoms + strings route through the intern table — payload is a stable
+ * pointer into intern storage, never owned by this value. Release does
+ * NOT free the intern entry. */
+deck_value_t *deck_new_atom(const char *name);
+deck_value_t *deck_new_str(const char *s, uint32_t len);
+deck_value_t *deck_new_str_cstr(const char *s);
+
 /* --- Composite constructors --- */
 
 /* Empty list with initial capacity slots. */
