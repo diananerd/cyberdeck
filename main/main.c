@@ -22,6 +22,7 @@
 #include "drivers/deck_sdi_shell.h"
 
 #include "deck_runtime.h"
+#include "deck_conformance.h"
 #include "deck_shell.h"
 
 static const char *TAG = "cyberdeck";
@@ -64,30 +65,7 @@ static void run_sdi_selftests(void)
     run_one("shell", deck_sdi_shell_selftest);
     ESP_LOGI(TAG, "--- SDI selftests done ---");
 
-    ESP_LOGI(TAG, "--- runtime selftests ---");
-    {
-        deck_err_t r = deck_runtime_selftest();
-        if (r != DECK_RT_OK) {
-            ESP_LOGE(TAG, "runtime selftest FAILED: %s", deck_err_name(r));
-        }
-        r = deck_lexer_run_selftest();
-        if (r != DECK_RT_OK) {
-            ESP_LOGE(TAG, "lexer selftest FAILED: %s", deck_err_name(r));
-        }
-        r = deck_parser_run_selftest();
-        if (r != DECK_RT_OK) {
-            ESP_LOGE(TAG, "parser selftest FAILED: %s", deck_err_name(r));
-        }
-        r = deck_loader_run_selftest();
-        if (r != DECK_RT_OK) {
-            ESP_LOGE(TAG, "loader selftest FAILED: %s", deck_err_name(r));
-        }
-        r = deck_interp_run_selftest();
-        if (r != DECK_RT_OK) {
-            ESP_LOGE(TAG, "interp selftest FAILED: %s", deck_err_name(r));
-        }
-    }
-    ESP_LOGI(TAG, "--- runtime selftests done ---");
+    (void)deck_conformance_run();
 }
 #endif
 
