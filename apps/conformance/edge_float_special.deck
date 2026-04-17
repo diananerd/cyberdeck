@@ -1,0 +1,20 @@
+@app
+  name: "Conf edge.float_special"
+  id: "conf.edge.float_special"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let small_f = 0.000001
+  let neg_f   = -3.14
+  let zero_f  = 0.0
+  let one     = 1.0
+  let ok_pos  = small_f > 0.0
+  let ok_neg  = neg_f < 0.0
+  let ok_zero = zero_f == 0.0
+  let ok_mul  = one * one == 1.0
+  let ok_add  = (0.1 + 0.2) > 0.29 and (0.1 + 0.2) < 0.31
+  let ok = ok_pos and ok_neg and ok_zero and ok_mul and ok_add
+  log.info(if ok then "DECK_CONF_OK:edge.float_special" else "DECK_CONF_FAIL:edge.float_special")

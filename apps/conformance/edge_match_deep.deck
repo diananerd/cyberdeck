@@ -1,0 +1,34 @@
+@app
+  name: "Conf edge.match_deep"
+  id: "conf.edge.match_deep"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let pick = 15
+  let r = match pick
+    1  => "a"
+    2  => "b"
+    3  => "c"
+    4  => "d"
+    5  => "e"
+    6  => "f"
+    7  => "g"
+    8  => "h"
+    9  => "i"
+    10 => "j"
+    11 => "k"
+    12 => "l"
+    13 => "m"
+    14 => "n"
+    15 => "o"
+    16 => "p"
+    17 => "q"
+    18 => "r"
+    19 => "s"
+    20 => "t"
+    _  => "?"
+  let ok = r == "o"
+  log.info(if ok then "DECK_CONF_OK:edge.match_deep" else "DECK_CONF_FAIL:edge.match_deep")

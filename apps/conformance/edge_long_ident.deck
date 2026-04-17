@@ -1,0 +1,14 @@
+@app
+  name: "Conf edge.long_ident"
+  id: "conf.edge.long_ident"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let this_is_a_deliberately_long_identifier_to_ensure_the_lexer_parser_handle_it = 42
+  let another_reasonably_verbose_variable_name_with_underscores_and_numbers_123 = 7
+  let sum = this_is_a_deliberately_long_identifier_to_ensure_the_lexer_parser_handle_it + another_reasonably_verbose_variable_name_with_underscores_and_numbers_123
+  let ok = sum == 49
+  log.info(if ok then "DECK_CONF_OK:edge.long_ident" else "DECK_CONF_FAIL:edge.long_ident")

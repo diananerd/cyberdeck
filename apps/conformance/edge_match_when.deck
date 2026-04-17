@@ -1,0 +1,17 @@
+@app
+  name: "Conf edge.match_when"
+  id: "conf.edge.match_when"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let x = 7
+  let r = match x
+    n when n < 0  => "negative"
+    n when n == 0 => "zero"
+    n when n < 10 => "small"
+    _             => "big"
+  let ok = r == "small"
+  log.info(if ok then "DECK_CONF_OK:edge.match_when" else "DECK_CONF_FAIL:edge.match_when")

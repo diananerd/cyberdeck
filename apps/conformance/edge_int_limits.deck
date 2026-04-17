@@ -1,0 +1,17 @@
+@app
+  name: "Conf edge.int_limits"
+  id: "conf.edge.int_limits"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let big   = 9223372036854775807
+  let small = -9223372036854775807
+  let ok_pos = big > 0
+  let ok_neg = small < 0
+  let ok_gt  = big > small
+  let ok_eq_self = big == big
+  let ok = ok_pos and ok_neg and ok_gt and ok_eq_self
+  log.info(if ok then "DECK_CONF_OK:edge.int_limits" else "DECK_CONF_FAIL:edge.int_limits")

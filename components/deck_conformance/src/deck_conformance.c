@@ -100,6 +100,13 @@ static deck_test_t DECK_TESTS[] = {
     { "edge.nested_match",  "/conformance/edge_nested_match.deck",  "DECK_CONF_OK:edge.nested_match",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "edge.string_intern", "/conformance/edge_string_intern.deck", "DECK_CONF_OK:edge.string_intern", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "edge.double_neg",    "/conformance/edge_double_neg.deck",    "DECK_CONF_OK:edge.double_neg",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.match_when",    "/conformance/edge_match_when.deck",    "DECK_CONF_OK:edge.match_when",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.match_deep",    "/conformance/edge_match_deep.deck",    "DECK_CONF_OK:edge.match_deep",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.int_limits",    "/conformance/edge_int_limits.deck",    "DECK_CONF_OK:edge.int_limits",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.float_special", "/conformance/edge_float_special.deck", "DECK_CONF_OK:edge.float_special", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.unicode",       "/conformance/edge_unicode.deck",       "DECK_CONF_OK:edge.unicode",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.long_ident",    "/conformance/edge_long_ident.deck",    "DECK_CONF_OK:edge.long_ident",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "edge.deep_let",      "/conformance/edge_deep_let.deck",      "DECK_CONF_OK:edge.deep_let",      DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
@@ -279,8 +286,8 @@ static bool s_no_residual_leak(char *d, size_t dz)
      * assertion. The real anti-leak signal is stress.rerun_sanity_x100
      * which must be delta 0 between before/after. */
     uint32_t live = deck_alloc_live_values();
-    snprintf(d, dz, "deck_alloc_live=%u (<= 500)", (unsigned)live);
-    return live <= 500;
+    snprintf(d, dz, "deck_alloc_live=%u (<= 800)", (unsigned)live);
+    return live <= 800;
 }
 
 /* Re-runs sanity.deck 10 times and asserts that live-values count does

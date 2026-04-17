@@ -1,0 +1,18 @@
+@app
+  name: "Conf edge.unicode"
+  id: "conf.edge.unicode"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let spanish = "día"
+  let tag     = "cat"
+  let mixed   = "hola-ñ-día"
+  # text.len counts bytes in DL1, not codepoints; á is 2 bytes in UTF-8.
+  let ok_bytes = text.len("á") >= 2
+  let ok_mix   = text.contains(mixed, "ñ")
+  let ok_cat   = (spanish <> tag) == "díacat"
+  let ok = ok_bytes and ok_mix and ok_cat
+  log.info(if ok then "DECK_CONF_OK:edge.unicode" else "DECK_CONF_FAIL:edge.unicode")
