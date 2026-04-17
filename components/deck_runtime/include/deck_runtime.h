@@ -37,6 +37,9 @@ deck_err_t deck_lexer_run_selftest(void);
 /* Parser selftest — 40+ AST-comparison cases. */
 deck_err_t deck_parser_run_selftest(void);
 
+/* Loader selftest — DL1 load pipeline with valid + each failure class. */
+deck_err_t deck_loader_run_selftest(void);
+
 #ifdef __cplusplus
 }
 #endif
