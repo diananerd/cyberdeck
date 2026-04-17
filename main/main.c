@@ -14,6 +14,8 @@
 #include "nvs_flash.h"
 #include "driver/usb_serial_jtag.h"
 
+#include "deck_sdi_registry.h"
+
 static const char *TAG = "cyberdeck";
 
 static void log_device_id(void)
@@ -55,6 +57,10 @@ void app_main(void)
              usj_ret == ESP_OK ? "OK" : esp_err_to_name(usj_ret));
 
     log_device_id();
+
+    deck_sdi_registry_init();
+    deck_sdi_log_registered();
+
     log_heap("idle");
 
     ESP_LOGI(TAG, "Bootstrap complete — idle loop (10s heartbeat)");
