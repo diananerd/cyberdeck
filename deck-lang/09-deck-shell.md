@@ -390,9 +390,12 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
 ```deck
 -- launcher/flows/home_flow.deck
 
+-- Badge counts stream: emits [(app_id, unread)] on any change.
+@stream NotifCounts from: apps.notif_counts_watch()
+
 @flow HomeFlow
 
-  step :idle _ ->
+  step :idle (counts: [(app_id: str, unread: int)] = []) ->
     content =
       group
         status
@@ -409,9 +412,13 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
         list
           items: apps.installed!()
           item app ->
+            let badge_count = first_or(
+                               filter(counts, c -> c.app_id == app.id),
+                               (app_id: app.id, unread: 0)).unread
             trigger
               label: app.name
               icon:  match app.icon | :some s -> s | :none -> "?"
+              badge: if badge_count > 0 then :some badge_count else :none
               -> apps.launch!(app.id)
         trigger
           label: "Apps recientes"
@@ -419,6 +426,14 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
         trigger
           label: "Buscar"
           -> Launcher.send!(:show_search)
+
+  -- Stream drives badge updates without full re-render.
+  on NotifCounts counts ->
+    HomeFlow.send!(:refresh_counts (counts: counts))
+
+  transition :refresh_counts (counts: [(app_id: str, unread: int)])
+    from :idle _
+    to   :idle (counts: counts)
 ```
 
 ```deck
@@ -667,6 +682,9 @@ La capability `system.shell` está disponible únicamente para apps cuyo `app.id
   launch!         (id: str)                   -> Result unit system.Error
   launch_url!     (id: str, url: str)         -> Result unit system.Error
   kill            (id: str)                   -> unit
+  notif_counts_watch ()                       -> Stream [(app_id: str, unread: int)]
+  -- Stream que emite un snapshot completo cada vez que cambia el unread count de cualquier app.
+  -- El Launcher lo usa para renderizar badges sobre los iconos.
 
   @errors
     :not_found     "App not installed"
@@ -1626,10 +1644,12 @@ El `@on resume` recibe la app en el **estado exacto** donde fue suspendida — e
    → os_event_init() / svc_event_init()
 
 3. System services init
-   → svc_settings (NVS — configuración persistente)
-   → svc_battery (ADC — nivel de batería)
-   → svc_time (RTC + SNTP — hora del sistema)
-   → svc_wifi (gestión de red)
+   → svc_settings      (NVS — configuración persistente)
+   → svc_battery       (ADC — nivel de batería)
+   → svc_time          (RTC + SNTP — hora del sistema)
+   → svc_wifi          (gestión de red)
+   → svc_notifications (SQLite history + NVS source config; inicia polling tasks
+                        solo cuando hay fuentes registradas)
 
 4. UI Engine init
    → LVGL init, display driver, touch driver
@@ -1708,6 +1728,8 @@ Estas tareas existen desde el boot hasta el apagado. No pertenecen a ninguna app
 | `esp_event_loop_task` | 0 | 4 KB SRAM | Bus de eventos del OS |
 | `os_poller_task` | 0 | 2 KB SRAM | Pollers de servicios (resolución 100ms) |
 | `svc_wifi_task` | 0 | 8 KB PSRAM | Gestión WiFi (esp_netif) |
+| `svc_notif_poll_{n}` | 0 | 4 KB PSRAM | Una task por fuente HTTP activa; se crea al registrar y muere al eliminar la fuente |
+| `svc_notif_mqtt` | 0 | 6 KB PSRAM | Cliente MQTT permanente para todas las fuentes MQTT registradas (única task compartida) |
 
 ### 22.2 Tareas por App (Lifetime = Efecto en Vuelo)
 
@@ -1725,15 +1747,29 @@ Todas las tareas creadas por el bridge para una app se registran en el `os_task`
 
 ### 22.3 Servicios del Sistema como Capabilities
 
-Los servicios del sistema no son apps Deck — son tasks C permanentes que el bridge expone como capabilities:
+Los servicios del sistema no son apps Deck — son módulos C permanentes que el bridge expone como capabilities. Dos niveles:
+- **OS surface capabilities** (declaradas en `03-deck-os.md`): primitivas de hardware y OS — red, almacenamiento, sensores, BLE, crypto, OTA.
+- **High-level service capabilities** (declaradas en `05-deck-os-api.md`): construidas sobre las anteriores — `api_client` (sobre `network.http`), `cache` (memoria del VM, sin backing C permanente).
 
 ```
-svc_wifi     → capability "network"       → @use network as net
-svc_battery  → (en system.shell)          → shell.battery_level()
-svc_time     → capability "time"          → time.now(), time.sync!()
-os_db        → capability "db"            → db.query!(), db.execute!()
-svc_ota      → capability "system.ota"    → ota.check!(), ota.install!()
-os_settings  → capability "nvs"           → nvs.get!(), nvs.set!()
+-- OS surface capabilities (03-deck-os.md)
+svc_wifi          → network.http, network.ws, network.socket → @use network.http as net
+svc_battery       → (parte de system.shell)                  → shell.battery_level()
+svc_time          → @builtin time (siempre en scope)         → time.now(), time.format(), …
+svc_db            → capability "db"                          → db.query!(), db.execute!()
+svc_nvs           → capability "nvs"                         → nvs.get!(), nvs.set!()
+svc_storage       → capability "storage.local"               → store.get(), store.set()
+svc_fs            → capability "fs"                          → fs.read!(), fs.write!()
+svc_mqtt          → capability "mqtt"                        → mqtt.subscribe(), mqtt.publish()
+svc_ble           → capability "ble"                         → ble.scan!(), ble.connect!()
+svc_crypto        → capability "crypto.aes"                  → crypto.aes.encrypt(), decrypt()
+svc_bgfetch       → capability "background_fetch"            → background_fetch.register()
+svc_ota           → capability "ota"                         → ota.check!(), ota.install!()
+svc_notifications → capability "notifications"               → notif.list!(), notif.register_source!(), …
+
+-- High-level service capabilities (05-deck-os-api.md) — sin svc_* propio
+(sobre network.http)   → api_client   → api.get!(), api.post!(), …
+(memoria del VM)       → cache        → cache.get(), cache.set()
 ```
 
 Estos servicios existen independientemente de cualquier app. Cuando una app termina, su VM se destruye pero los servicios siguen corriendo — solo se cancelan las suscripciones y los efectos pendientes de esa VM.
@@ -1754,6 +1790,63 @@ El teardown siempre ocurre en este orden exacto:
 ```
 
 El orden importa: primero se desregistra todo (pasos 2–5) para que no lleguen más eventos o callbacks mientras la VM se destruye en el paso 7. El destroy de la VM es siempre lo último porque los pasos 2–5 necesitan acceder a ella para cancelar sus suscripciones activas.
+
+### 22.5 Arquitectura de Servicios del OS
+
+**Principio fundamental:** los servicios del OS no son wrappers delgados sobre ESP-IDF. Son módulos C autónomos con sus propios recursos, ciclo de vida, y acceso directo a infraestructura del sistema. El `app_id` es la clave de aislamiento universal — todo dato per-app se almacena o consulta bajo ese key, sea main task o background task.
+
+#### Recursos por servicio
+
+| Servicio | Capability | NVS namespace | SQLite / FS | WiFi/HTTP | Timers | Notas |
+|---|---|---|---|---|---|---|
+| `svc_settings` | — (interno) | `"cyberdeck"` | — | — | — | Configuración global del OS; no expuesta directamente como capability |
+| `svc_battery` | `system.battery` | — | — | — | esp_timer 30 s | ADC polling; métodos básicos también en `system.shell` |
+| `svc_time` | `@builtin time` | `"time"` | — | SNTP | esp_timer | Builtin, siempre en scope; re-sync periódico vía NTP |
+| `svc_wifi` | `network.http/ws/socket` | `"wifi"` | — | esp_netif | — | Gestión de red; tarea permanente `svc_wifi_task` |
+| `svc_db` | `db` | — | `/sdcard/data/{app_id}/db.sqlite` | — | — | Una DB SQLite por app; acceso sandboxeado |
+| `svc_nvs` | `nvs` | `app_id` | — | — | — | Namespace NVS por app; atómico, sobrevive corrupción de FS |
+| `svc_storage` | `storage.local` | — | `/sdcard/data/{app_id}/local/` | — | — | KV store de strings, file-backed; más lento que NVS |
+| `svc_fs` | `fs` | — | `/sdcard/{app_id}/` | — | — | FS completo sandboxeado; paths relativos al root del app |
+| `svc_mqtt` | `mqtt` | — | — | MQTT (esp-mqtt) | esp_timer (keepalive) | Una conexión por app; broker, QoS, y client ID por app |
+| `svc_ble` | `ble` | — | — | BLE (nimble) | — | Scan y GATT client; una conexión activa por app |
+| `svc_crypto` | `crypto.aes` | — | — | — | — | Stateless; usa hardware AES del ESP32 (AES-CBC) |
+| `svc_bgfetch` | `background_fetch` | — | — | — | esp_timer (min_interval) | Despierta VM suspendida periódicamente |
+| `svc_ota` | `ota` | `"ota"` | — | HTTP | — | Descarga y validación de firmware; partición OTA en flash |
+| `svc_notifications` | `notifications` | `"notif_src"` | `/sdcard/system/notifications.db` | HTTP (por fuente) | esp_timer (TTL, poll) | Historia global; fuentes registradas en NVS del servicio |
+
+#### Reglas de aislamiento
+
+```
+app_id → clave de aislamiento universal
+  svc_nvs:     nvs_open(app_id, NVS_READWRITE)
+  svc_db:      "/sdcard/data/{app_id}/db.sqlite"
+  svc_notif:   SELECT * FROM notifications WHERE app_id = ?
+  svc_ota:     registro de versión en NVS bajo app_id
+```
+
+- Un background task del mismo `app_id` accede exactamente a los mismos datos que el main task. No hay separación dentro del mismo `app_id`.
+- Los servicios nunca exponen datos de un `app_id` a otro. El bridge verifica el `app_id` en cada llamada de capability antes de delegarla al servicio.
+- `svc_notifications` es el único servicio que lee datos NVS de otra app (`app_id` del registrante) para recuperar tokens de autenticación — esto es por diseño y está documentado en `05-deck-os-api §10.2`.
+
+#### Ciclo de vida de servicios vs ciclo de vida de apps
+
+```
+Boot:   svc_notifications init → leer fuentes del NVS → lanzar poll tasks activas
+                                                              ↓
+App lanza:    register_source!(opts) → svc_notifications guarda en NVS, lanza poll task
+                                                              ↓
+App suspende: poll task sigue corriendo — el servicio no sabe ni le importa que la app esté suspendida
+                                                              ↓
+App termina:  svc_notifications cancela subscripción del @on os.notification de esa VM.
+              Las fuentes registradas SIGUEN ACTIVAS — su config está en NVS del servicio,
+              no en la VM. Las notificaciones se almacenan en SQLite normalmente.
+              El Launcher puede seguir mostrando el badge unread count.
+                                                              ↓
+App re-lanza: svc_notifications re-entrega el unread count via notif_counts_watch().
+              La app puede llamar notif.list!() para obtener las notificaciones acumuladas.
+```
+
+Esta separación es lo que hace posible que `svc_notifications` funcione como sistema autónomo: el config persiste en el NVS del servicio (no en la app), el historial persiste en SQLite, y el badge del Launcher refleja la realidad aunque la app esté muerta.
 
 ---
 

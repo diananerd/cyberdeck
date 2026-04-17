@@ -22,6 +22,8 @@ The long-term goal is to run apps written in **Deck** — a purpose-built embedd
 | `deck-lang/06-deck-native.md` | How to extend the runtime with C capabilities and events |
 | `deck-lang/07-deck-bluesky.md` | Reference Deck app: complete Bluesky ATProto client |
 | `deck-lang/08-deck-markdown.md` | Markdown as a first-class Deck capability |
+| `deck-lang/09-deck-shell.md` | OS shell integration — launcher, navigation, lifecycle, system events, service architecture |
+| `deck-lang/10-deck-bridge-ui.md` | CyberDeck LVGL bridge UI reference — component catalog, UI services, UX patterns, inference rules |
 
 When working on anything related to how apps are structured, what services they consume, or what the interpreter needs from the OS — consult `GROUND-STATE.md` first.
 

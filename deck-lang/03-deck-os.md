@@ -314,7 +314,11 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
 
 ### 4.2 Storage
 
+Four complementary storage primitives — choose based on data size, durability requirements, and access pattern. Full API docs in `05-deck-os-api`.
+
 ```
+-- Simple string KV store. File-backed. Survives app restart; not guaranteed to survive
+-- filesystem corruption. Use for blobs, cached data, user preferences that can be reconstructed.
 @capability storage.local
   get    (key: str)              -> str?
   set    (key: str, v: str)      -> Result unit storage.Error
@@ -325,6 +329,61 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
     :full        "Storage is full"
     :permission  "Storage access denied"
     :corrupt     "Storage data is corrupted"
+
+-- Flash NVS. Atomic per-key. Always survives power loss and filesystem corruption.
+-- Use for tokens, counters, feature flags, values that must never be lost.
+@capability nvs
+  get       (key: str)                -> str?
+  get_int   (key: str)                -> int?
+  set       (key: str, value: str)    -> Result unit nvs.Error
+  set_int   (key: str, value: int)    -> Result unit nvs.Error
+  delete    (key: str)                -> Result unit nvs.Error
+  keys      ()                        -> [str]
+  clear     ()                        -> Result unit nvs.Error
+  @errors
+    :full      "NVS partition full"
+    :not_found "Key does not exist"
+
+-- SQLite database. One database file per app. Full SQL — transactions, indices, foreign keys.
+-- Use for structured data, search, relations. Backed by SD card.
+@capability db
+  exec        (sql: str)                         -> Result unit db.Error
+  query!      (sql: str)                         -> Result [{str: any}] db.Error
+  query_one!  (sql: str)                         -> Result {str: any}? db.Error
+  scalar!     (sql: str)                         -> Result any? db.Error
+  transaction (body: () -> Result unit db.Error) -> Result unit db.Error
+  @errors
+    :syntax   "SQL syntax error"
+    :corrupt  "Database file is corrupted"
+    :locked   "Database is locked"
+    :full     "Disk full"
+  @requires_permission
+
+-- Filesystem. Sandboxed to /sdcard/{app.id}/. Full file and directory operations.
+-- Use for large blobs, downloads, media, config files.
+@capability fs
+  read        (path: str)                          -> Result str fs.Error
+  read_bytes  (path: str)                          -> Result [byte] fs.Error
+  write       (path: str, content: str)            -> Result unit fs.Error
+  write_bytes (path: str, data: [byte])            -> Result unit fs.Error
+  append      (path: str, content: str)            -> Result unit fs.Error
+  delete      (path: str)                          -> Result unit fs.Error
+  exists      (path: str)                          -> bool
+  list        (dir: str)                           -> Result [FsEntry] fs.Error
+  mkdir       (path: str)                          -> Result unit fs.Error
+  move        (from: str, to: str)                 -> Result unit fs.Error
+  @errors
+    :not_found   "File or directory not found"
+    :permission  "Access denied"
+    :full        "Disk full"
+    :io          "I/O error"
+  @requires_permission
+
+@type FsEntry
+  name     : str
+  is_dir   : bool
+  size     : int
+  modified : Timestamp
 ```
 
 ### 4.3 Network
@@ -390,6 +449,30 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
     :refused  "Connection refused"
     :timeout  "Connection timed out"
     :closed   "Socket closed by remote"
+  @requires_permission
+
+-- MQTT pub/sub. OS manages connection, reconnection, and QoS. One connection per app.
+-- Full API docs in 05-deck-os-api §7.
+@type MqttConfig
+  broker   : str
+  port     : int         -- default 1883 (plain) or 8883 (TLS)
+  client_id: str?        -- auto-generated if absent
+  username : str?
+  password : str?
+  tls      : bool        -- default false
+
+@capability mqtt
+  configure   (opts: MqttConfig)              -> unit
+  publish     (topic: str, payload: str)      -> Result unit mqtt.Error
+  publish     (topic: str, payload: str, qos: int) -> Result unit mqtt.Error
+  subscribe   (topic: str)                    -> Stream str
+  unsubscribe (topic: str)                    -> unit
+  disconnect  ()                              -> unit
+  @errors
+    :not_configured  "mqtt.configure() not called"
+    :offline         "No network connection"
+    :refused         "Broker refused connection"
+    :timeout         "Connection timed out"
   @requires_permission
 ```
 
@@ -536,7 +619,38 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   commit   : str?
 ```
 
-### 4.9 Privileged System Capabilities
+### 4.9 Cryptography
+
+```
+-- AES-CBC symmetric encryption with PKCS#7 padding. Uses ESP32 hardware AES when available.
+-- Stateless — no connection, no config. Full API docs in 05-deck-os-api §8.
+@capability crypto.aes
+  encrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
+  -- key: 16 | 24 | 32 bytes. iv: 16 bytes. Returns ciphertext (PKCS#7-padded length).
+  decrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
+  -- Strips PKCS#7 padding. Returns :err :decrypt_failed if padding is invalid.
+  @errors
+    :bad_key         "Key must be 16, 24, or 32 bytes"
+    :bad_iv          "IV must be 16 bytes"
+    :decrypt_failed  "Decryption failed — wrong key or corrupted data"
+```
+
+### 4.10 Background Fetch
+
+```
+-- Lets the OS wake the app periodically while suspended to do background work.
+-- The app receives @on os.background_fetch events at approximately min_interval.
+-- Full API docs in 05-deck-os-api §9.
+@capability background_fetch
+  register   (min_interval: Duration)  -> unit
+  unregister ()                        -> unit
+  @errors
+    :not_supported  "Background fetch not supported on this platform"
+    :permission     "Permission denied"
+  @requires_permission
+```
+
+### 4.11 Privileged System Capabilities
 
 These capabilities are available only to apps whose `app.id` starts with `"system."`. The Loader rejects any other app that declares them in `@use`. They expose the OS app stack and process monitor to system apps (Launcher, Task Manager, Lock Screen).
 
@@ -642,6 +756,83 @@ These capabilities are available only to apps whose `app.id` starts with `"syste
   message  : str
   stack    : str
   occurred : Timestamp
+
+-- ─────────────────────────────────────────────────────────────────
+-- Notifications capability (all apps, requires @permissions notifications)
+-- ─────────────────────────────────────────────────────────────────
+
+@capability notifications
+  list!             ()                           -> [NotifEntry]
+  unread_count!     ()                           -> int
+  mark_read!        (id: str)                    -> unit
+  mark_all_read!    ()                           -> unit
+  clear!            (id: str)                    -> unit
+  clear_all!        ()                           -> unit
+  post_local!       (opts: LocalNotifOpts)       -> Result str notifications.Error
+  register_source!  (src: NotifSource)           -> Result unit notifications.Error
+  unregister_source!(id: str)                    -> unit
+  sources!          ()                           -> [NotifSource]
+
+  @errors
+    :permission      "Requires @permissions notifications"
+    :limit           "Notification quota exceeded (max per app)"
+    :invalid_source  "Source config is malformed"
+    :not_found       "Notification or source not found"
+    :duplicate_id    "A source with this id is already registered"
+
+@type NotifEntry
+  id         : str
+  source_id  : str?       -- nil for local notifications
+  title      : str
+  body       : str?
+  read       : bool
+  received   : Timestamp
+  url        : str?       -- deep link; delivered to @on os.notification as open target
+
+@type LocalNotifOpts
+  title    : str
+  body     : str?
+  url      : str?
+  expires  : Duration?
+
+@type NotifSource
+  id       : str
+  type     : :http_poll | :mqtt
+  interval : Duration?             -- required for :http_poll
+  request  : HttpPollConfig?       -- required for :http_poll
+  mqtt     : MqttSourceConfig?     -- required for :mqtt
+  extract  : NotifExtract
+  enabled  : bool                  -- default true; set false to pause without unregistering
+
+@type HttpPollConfig
+  url     : str
+  method  : :get | :post
+  headers : {str: str}?
+  body    : str?
+  auth    : NotifAuth
+
+@type MqttSourceConfig
+  broker : str
+  topic  : str
+  auth   : NotifAuth
+
+-- NotifAuth: how svc_notifications authenticates when polling on behalf of this app.
+-- bearer_nvs / basic_nvs: the service reads the token from the APP's NVS namespace
+-- at poll time (key must exist; if missing the poll is skipped and a warning logged).
+@type NotifAuth = :none
+               | (type: :bearer_nvs, key: str)
+               | (type: :basic_nvs,  key: str)
+               | (type: :static,     token: str)
+
+@type NotifExtract
+  -- Subset of JSONPath (RFC 9535). Applied to the HTTP response body or MQTT payload.
+  items_path     : str    -- e.g. "$.notifications[*]"  (array of items)
+  id_path        : str    -- unique ID per item, relative to item root
+  title_path     : str?
+  body_path      : str?
+  read_path      : str?   -- bool field; true = already read on server (skip posting)
+  url_path       : str?
+  timestamp_path : str?   -- ISO 8601 or unix epoch int
 ```
 
 ---
@@ -660,6 +851,10 @@ OS events are pushed to the interpreter — never polled. The interpreter routes
 @event os.time_change
 @event os.storage_pressure
 @event os.permission_change (capability: str, granted: bool)
+@event os.notification   (entry: NotifEntry)
+-- Fired by svc_notifications when a new notification arrives for this app.
+-- Fires if app is in foreground or if it has a background:true @task.
+-- If app is terminated, notification is stored; event fires on next resume.
 
 -- Physical hardware buttons (board-specific, declared by OS author)
 @event hardware.button (id: int, action: atom)   -- :press | :long_press | :release

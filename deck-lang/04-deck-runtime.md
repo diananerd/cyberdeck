@@ -273,8 +273,8 @@ ViewContentNode
   | VCPin         { name: atom, length: int, on_: Expr }
   | VCDate        { name: atom, value?: Expr, hint?: Expr, on_: Expr }
   | VCSearch      { name: atom, value?: Expr, hint?: Expr, on_: Expr }
-  | VCNavigate    { label: Expr, target: NavTarget }
-  | VCTrigger     { label: Expr, action: Expr }
+  | VCNavigate    { label: Expr, target: NavTarget, badge?: Expr }
+  | VCTrigger     { label: Expr, action: Expr,     badge?: Expr }
   | VCConfirm     { label: Expr, message: Expr, action: Expr }
   | VCCreate      { label: Expr, target: NavTarget }
   | VCShare       { expr: Expr, label?: Expr }

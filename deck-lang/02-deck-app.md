@@ -130,6 +130,30 @@ Declares which sensitive capabilities require user/OS authorization and why. Pre
 
 **Runtime behavior**: If the user denies a permission at the OS dialog, the capability behaves identically to an `optional` capability that is currently absent. Calls return `:err :permission` as a `Result` value. The app does not crash.
 
+**Permissions that require `@permissions`** (non-exhaustive):
+
+| Capability path | What it gates |
+|---|---|
+| `notifications` | Registrar fuentes, post_local, recibir `@on os.notification`, y que el badge aparezca en el Launcher |
+| `network.http` | Cualquier llamada de red saliente (`net.fetch!()`, `api_client`) |
+| `storage.local` | Acceso a storage persistente del app |
+| `sensors.*` | Cualquier sensor de hardware |
+| `ble` | Bluetooth LE scan y conexiones |
+
+Ejemplo — app con notificaciones:
+
+```
+@use
+  notifications as notif   -- requires_permission
+  network.http  as net
+  storage.local as store
+
+@permissions
+  notifications reason: "To alert you when new posts arrive from people you follow"
+  network.http  reason: "To fetch your timeline from bsky.social"
+  storage.local reason: "To cache your timeline for offline reading"
+```
+
 ---
 
 ## 6. @config — Typed Persistent Configuration
@@ -536,6 +560,17 @@ OS-declared events (from `.deck-os`) can also appear in `@on`:
     | :authenticated _ -> App.send(:background_refresh)
     | _                -> unit
 ```
+
+**Notification events**: Apps that declare `notifications` in `@permissions` and register sources via `notif.register_source!()` receive OS events when new notifications arrive:
+
+```
+@on os.notification (entry: NotifEntry)
+  -- Called whether the app is foreground, suspended, or freshly relaunched.
+  -- entry: { id, app_id, source_id, title, body, url?, received_at, read }
+  App.send(:new_notification (entry: entry))
+```
+
+The hook fires even if the app is suspended — `svc_notifications` stores the entry in SQLite and the bridge delivers the event as a `MSG_OS_EVENT` to the VM. If the app is suspended, the bridge temporarily restores it for hook execution (same mechanism as `background: true` tasks — see §14.4). If the VM is destroyed (app terminated), the event is stored but not dispatched until the app re-launches and calls `notif.list!()`.
 
 **Load-time validation**: Every event name in an `@on` hook must exist in the OS event registry (declared in `.deck-os`). An `@on` referencing an unknown event name is a **load error**.
 
