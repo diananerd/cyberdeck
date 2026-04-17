@@ -1,0 +1,14 @@
+@app
+  name: "Conf lang.if"
+  id: "conf.lang.if"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a = if 1 < 2 then 100 else 200
+  let b = if 5 == 6 then 100 else 200
+  let c = if true then "ja" else "nein"
+  let ok = a == 100 && b == 200 && c == "ja"
+  log.info(if ok then "DECK_CONF_OK:lang.if" else "DECK_CONF_FAIL:lang.if")

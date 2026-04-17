@@ -1,0 +1,27 @@
+@app
+  name: "Conf lang.match"
+  id: "conf.lang.match"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let by_atom = match :ready
+    :boot    => 1
+    :ready   => 2
+    _        => 0
+  let by_int = match 42
+    0  => "zero"
+    42 => "answer"
+    _  => "other"
+  let by_bool = match false
+    true  => 1
+    false => 2
+    _     => 0
+  let wildcard = match 999
+    0 => :hit
+    1 => :hit
+    _ => :miss
+  let ok = by_atom == 2 && by_int == "answer" && by_bool == 2 && wildcard == :miss
+  log.info(if ok then "DECK_CONF_OK:lang.match" else "DECK_CONF_FAIL:lang.match")

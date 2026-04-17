@@ -1,0 +1,20 @@
+@app
+  name: "Conf lang.strings"
+  id: "conf.lang.strings"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a        = "hello"
+  let b        = "world"
+  let joined   = a <> " " <> b
+  let ok_len   = text.len(joined) == 11
+  let ok_up    = text.upper("abc") == "ABC"
+  let ok_low   = text.lower("XYZ") == "xyz"
+  let ok_sw    = text.starts_with(joined, "hello")
+  let ok_ew    = text.ends_with(joined, "world")
+  let ok_ct    = text.contains(joined, "lo wo")
+  let ok = ok_len && ok_up && ok_low && ok_sw && ok_ew && ok_ct
+  log.info(if ok then "DECK_CONF_OK:lang.strings" else "DECK_CONF_FAIL:lang.strings")

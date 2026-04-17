@@ -1,0 +1,17 @@
+@app
+  name: "Conf lang.let"
+  id: "conf.lang.let"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let x = 10
+  let y = 20
+  let z = x + y
+  let ok_sum = z == 30
+  let x = 99
+  let ok_shadow = x == 99 && y == 20
+  let ok = ok_sum && ok_shadow
+  log.info(if ok then "DECK_CONF_OK:lang.let" else "DECK_CONF_FAIL:lang.let")

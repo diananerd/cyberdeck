@@ -58,8 +58,12 @@ static deck_test_t DECK_TESTS[] = {
     { "sanity",        "/conformance/sanity.deck",        "DECK_CONF_OK:sanity",        false },
     { "lang.literals", "/conformance/lang_literals.deck", "DECK_CONF_OK:lang.literals", false },
     { "lang.arith",    "/conformance/lang_arith.deck",    "DECK_CONF_OK:lang.arith",    false },
-    { "lang.compare",  "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  false },
+    { "lang.compare", "/conformance/lang_compare.deck",  "DECK_CONF_OK:lang.compare",  false },
     { "lang.logic",    "/conformance/lang_logic.deck",    "DECK_CONF_OK:lang.logic",    false },
+    { "lang.strings",  "/conformance/lang_strings.deck",  "DECK_CONF_OK:lang.strings",  false },
+    { "lang.let",      "/conformance/lang_let.deck",      "DECK_CONF_OK:lang.let",      false },
+    { "lang.if",       "/conformance/lang_if.deck",       "DECK_CONF_OK:lang.if",       false },
+    { "lang.match",    "/conformance/lang_match.deck",    "DECK_CONF_OK:lang.match",    false },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))
