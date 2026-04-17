@@ -833,6 +833,89 @@ static const ast_node_t *find_on_launch(const ast_node_t *mod)
     return NULL;
 }
 
+static const ast_node_t *find_machine(const ast_node_t *mod)
+{
+    if (!mod || mod->kind != AST_MODULE) return NULL;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (it && it->kind == AST_MACHINE) return it;
+    }
+    return NULL;
+}
+
+static const ast_node_t *find_state(const ast_node_t *machine, const char *name)
+{
+    if (!machine || !name) return NULL;
+    for (uint32_t i = 0; i < machine->as.machine.states.len; i++) {
+        const ast_node_t *st = machine->as.machine.states.items[i];
+        if (st && st->kind == AST_STATE && st->as.state.name &&
+            strcmp(st->as.state.name, name) == 0) return st;
+    }
+    return NULL;
+}
+
+/* DL1 machine lifecycle: enter initial state, run on enter hook(s),
+ * execute transitions sequentially (max 32 to avoid loops), run on
+ * leave before switching, terminate when a state has no transition. */
+#define DECK_MACHINE_MAX_TRANSITIONS  32
+
+static void run_state_hooks(deck_interp_ctx_t *c, const ast_node_t *state,
+                            const char *kind, const char **transition_target)
+{
+    if (transition_target) *transition_target = NULL;
+    for (uint32_t i = 0; i < state->as.state.hooks.len; i++) {
+        const ast_node_t *h = state->as.state.hooks.items[i];
+        if (!h) continue;
+        if (h->kind == AST_STATE_HOOK && kind && h->as.state_hook.kind &&
+            strcmp(h->as.state_hook.kind, kind) == 0) {
+            deck_value_t *r = deck_interp_run(c, c->global, h->as.state_hook.body);
+            if (r) deck_release(r);
+            if (c->err != DECK_RT_OK) return;
+        }
+        if (transition_target && h->kind == AST_TRANSITION) {
+            *transition_target = h->as.transition.target;
+            /* First transition wins (DL1 simplification). */
+            return;
+        }
+    }
+}
+
+static deck_err_t run_machine(const ast_node_t *machine, deck_interp_ctx_t *c)
+{
+    if (!machine || machine->as.machine.states.len == 0) return DECK_RT_OK;
+    const ast_node_t *state = machine->as.machine.states.items[0];
+    ESP_LOGI(TAG, "machine '%s' start state :%s",
+             machine->as.machine.name, state->as.state.name);
+
+    for (int steps = 0; steps < DECK_MACHINE_MAX_TRANSITIONS; steps++) {
+        const char *next = NULL;
+        run_state_hooks(c, state, "enter", &next);
+        if (c->err != DECK_RT_OK) return c->err;
+        if (!next) {
+            /* No transition → terminate in this state. */
+            run_state_hooks(c, state, "leave", NULL);
+            ESP_LOGI(TAG, "machine '%s' terminated in :%s",
+                     machine->as.machine.name, state->as.state.name);
+            return c->err;
+        }
+        run_state_hooks(c, state, "leave", NULL);
+        if (c->err != DECK_RT_OK) return c->err;
+
+        const ast_node_t *nextst = find_state(machine, next);
+        if (!nextst) {
+            set_err(c, DECK_RT_INTERNAL, state->line, state->col,
+                    "transition target :%s not found", next);
+            return c->err;
+        }
+        ESP_LOGI(TAG, "machine '%s' :%s -> :%s",
+                 machine->as.machine.name, state->as.state.name, next);
+        state = nextst;
+    }
+    set_err(c, DECK_RT_INTERNAL, machine->line, machine->col,
+            "machine exceeded max transitions (%d)", DECK_MACHINE_MAX_TRANSITIONS);
+    return c->err;
+}
+
 deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
 {
     deck_arena_t  arena;
@@ -848,17 +931,19 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
         return rc;
     }
 
-    const ast_node_t *on = find_on_launch(ld.module);
-    if (!on) {
-        ESP_LOGW(TAG, "no @on launch — nothing to run");
-        deck_arena_reset(&arena);
-        return DECK_RT_OK;
-    }
-
     deck_interp_ctx_t c;
     deck_interp_init(&c, &arena);
-    deck_value_t *r = deck_interp_run(&c, c.global, on->as.on.body);
-    if (r) deck_release(r);
+
+    const ast_node_t *on = find_on_launch(ld.module);
+    if (on) {
+        deck_value_t *r = deck_interp_run(&c, c.global, on->as.on.body);
+        if (r) deck_release(r);
+    }
+
+    if (c.err == DECK_RT_OK) {
+        const ast_node_t *machine = find_machine(ld.module);
+        if (machine) run_machine(machine, &c);
+    }
 
     deck_err_t run_rc = c.err;
     if (run_rc != DECK_RT_OK) {

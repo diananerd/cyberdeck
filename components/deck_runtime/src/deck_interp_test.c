@@ -112,6 +112,21 @@ static bool t_match_wild(const char *name)
     CHECK(rc == DECK_RT_OK, "run");
     return true;
 }
+static bool t_machine_two_states(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\n@machine m\n"
+        "  state start:\n"
+        "    on enter:\n"
+        "      log.info(\"machine start\")\n"
+        "    transition :finish\n"
+        "  state finish:\n"
+        "    on enter:\n"
+        "      log.info(\"machine finish\")\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "run");
+    return true;
+}
 
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
@@ -146,8 +161,9 @@ static const case_t CASES[] = {
     { "conv_bool_str",    t_conv_bool_str },
     { "conv_roundtrip",   t_conv_roundtrip },
     { "time_duration",    t_time_duration },
-    { "hello",            t_hello },
-    { "match_wild",       t_match_wild },
+    { "hello",              t_hello },
+    { "match_wild",         t_match_wild },
+    { "machine_two_states", t_machine_two_states },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 
