@@ -128,7 +128,8 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             n->as.unary.op = UNARY_NEG; n->as.unary.expr = sub;
             return parse_postfix(p, n);
         }
-        case TOK_BANG: {
+        case TOK_BANG:
+        case TOK_KW_NOT: {
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
             ast_node_t *sub = parse_primary(p);

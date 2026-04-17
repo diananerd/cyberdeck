@@ -1,0 +1,19 @@
+@app
+  name: "Conf lang.literals"
+  id: "conf.lang.literals"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let i    = 42
+  let f    = 3.14
+  let b    = true
+  let s    = "hello"
+  let ok_i = i == 42
+  let ok_f = f > 3.13 && f < 3.15
+  let ok_b = b
+  let ok_s = text.len(s) == 5
+  let ok   = ok_i && ok_f && ok_b && ok_s
+  log.info(if ok then "DECK_CONF_OK:lang.literals" else "DECK_CONF_FAIL:lang.literals")

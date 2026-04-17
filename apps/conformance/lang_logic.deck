@@ -1,0 +1,17 @@
+@app
+  name: "Conf lang.logic"
+  id: "conf.lang.logic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let and_tt = true && true
+  let and_tf = true && false
+  let or_ft  = false || true
+  let or_ff  = false || false
+  let not_t  = not true
+  let not_f  = not false
+  let ok = and_tt && (not and_tf) && or_ft && (not or_ff) && (not not_t) && not_f
+  log.info(if ok then "DECK_CONF_OK:lang.logic" else "DECK_CONF_FAIL:lang.logic")

@@ -1,0 +1,16 @@
+@app
+  name: "Conf lang.arith"
+  id: "conf.lang.arith"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let a = 1 + 2 == 3
+  let b = 10 - 4 == 6
+  let c = 5 * 6 == 30
+  let d = 20 / 5 == 4
+  let e = 17 % 5 == 2
+  let ok = a && b && c && d && e
+  log.info(if ok then "DECK_CONF_OK:lang.arith" else "DECK_CONF_FAIL:lang.arith")

@@ -1,0 +1,17 @@
+@app
+  name: "Conf lang.compare"
+  id: "conf.lang.compare"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let eq = 3 == 3
+  let ne = 3 != 4
+  let lt = 2 < 3
+  let le = 3 <= 3
+  let gt = 4 > 3
+  let ge = 3 >= 3
+  let ok = eq && ne && lt && le && gt && ge
+  log.info(if ok then "DECK_CONF_OK:lang.compare" else "DECK_CONF_FAIL:lang.compare")
