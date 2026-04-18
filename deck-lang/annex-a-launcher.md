@@ -108,47 +108,44 @@ The Launcher does **not** poll. It subscribes to the two streams and re-renders 
 content =
   match state
     | :empty ->
-        column
-          spacer
-          text "NO APPS INSTALLED"      style: :dim center
-          text "INSERT SD CARD"         style: :dim center
-          spacer
+        "NO APPS INSTALLED"
+        "INSERT SD CARD"
+
     | :grid ->
-        column
-          status_bar
-          grid cols: orientation_grid_cols()
-            for app in installed_apps
-              card
-                icon  app.icon
-                label app.name
-                badge unread_count(notif_counts, app.id)
-                on tap   -> apps.launch(app.id)
-                on long  -> LauncherState.send(:open_search)
-          nav_bar
+        list installed_apps
+          empty ->
+            "NO APPS INSTALLED"
+          app ->
+            trigger app.name
+              badge: unread_badge(notif_counts, app.id)
+              -> apps.launch(app.id)
+
+        trigger "Search" -> LauncherState.send(:open_search)
+
     | :search q ->
-        column
-          status_bar title: "SEARCH"
-          search :query value: q
-            on -> LauncherState.send(:update_query, q: event.value)
-          list filtered(installed_apps, q)
-            item app ->
-              row
-                icon  app.icon
-                label app.name
-                on tap -> do
-                  apps.launch(app.id)
-                  LauncherState.send(:close_search)
-          nav_bar
+        search :query  value: q  hint: "Search apps"
+          on -> LauncherState.send(:update_query, q: event.value)
+
+        list filtered(installed_apps, q)
+          empty ->
+            "NO MATCHES"
+          app ->
+            trigger app.name -> do
+                apps.launch(app.id)
+                LauncherState.send(:close_search)
+
+        trigger "Cancel" -> LauncherState.send(:close_search)
+
+fn unread_badge (counts: [(app_id: str, unread: int)], app_id: str) -> int? =
+  let n = match first_or(filter(counts, c -> c.app_id == app_id),
+                         (app_id: app_id, unread: 0))
+            | (app_id: _, unread: v) -> v
+  if n > 0 then :some n else :none
 ```
 
-`orientation_grid_cols()` is a small helper:
+The content body declares **intent and semantic structure only** (per `02-deck-app §12`). There is no `column`, `row`, `card`, `grid`, `status_bar`, or `nav_bar`: those are presentation decisions the bridge makes for this device. The statusbar and navbar are rendered by the bridge unconditionally around every screen (`10-deck-bridge-ui §3.2–3.4`); apps never reference them.
 
-```deck
-fn orientation_grid_cols () -> int =
-  match orientation
-    | :portrait  -> 3
-    | :landscape -> 5
-```
+The long-press-to-open-search interaction from the older draft (`on long ->`) is dropped: `02-deck-app §12.4` has no long-press affordance on `trigger`. Long-press is a bridge-side gesture that the bridge may bind to its own semantic (e.g. "secondary action" on `lv_btnmatrix`); if an app wants a primary + secondary action pair, it declares two triggers and lets the bridge present them compactly (see `10-deck-bridge-ui §4.3`).
 
 ---
 
@@ -180,14 +177,16 @@ Note that `@on back` returning `:handled` is what makes the Launcher unswipe-fro
 
 ---
 
-## 8. Layout Inference
+## 8. Bridge Layout Decisions for This Board
+
+This section is **bridge-side inference**, not app-authored. It describes what the LVGL bridge on Waveshare 800×480 chooses when it receives the semantic tree above. Other bridges (e-ink, voice, smartwatch) make different choices for the same `.deck`.
 
 | Form factor | Grid layout | Card icon font |
 |---|---|---|
 | Portrait (480×800) | 3 columns × N rows, scrollable | `CYBERDECK_FONT_XL` (40 px) |
 | Landscape (800×480) | 5 columns × N rows, scrollable | `CYBERDECK_FONT_XL` |
 
-Cards are `~140×140 px` in portrait, `~140×120 px` in landscape. Tap targets meet a 44 px minimum on every theme.
+Cards are `~140×140 px` in portrait, `~140×120 px` in landscape. Tap targets meet a 44 px minimum on every theme. The card icon comes from the target app's `@app icon:` identity field (`13-deck-cyberdeck-platform §6.1`) — the Launcher's content never references it; the bridge resolves it per rendered trigger.
 
 A "stub slot" appears for any app slot in the manifest registry that has no installed bundle (e.g. an app referenced by another app's deep link but not installed). Stubs render with `primary_dim` color and a `?` icon. Tapping a stub fires `display.notify "Coming soon..."` for 1500 ms (per `10-deck-bridge-ui §5.10`).
 

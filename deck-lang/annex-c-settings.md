@@ -224,44 +224,31 @@ Each settings category that displays live state subscribes to the relevant strea
 
 ## 6. Top-Level Menu
 
+Per `02-deck-app §12`, content is semantic. No `column`, `status_bar`, `nav_bar`, `nav_row`, `icon:`. The top-level settings list is a sequence of `navigate` intents; the bridge lays them out as a tappable list with disclosures on this board.
+
 ```deck
 content =
   match SettingsState.state
     | :menu ->
-        column
-          status_bar title: "SETTINGS"
-          list
-            item -> nav_row "WIFI"          icon: wifi_icon()      detail: wifi_summary()
-              -> SettingsState.send(:open_category, cat: :wifi)
-            item -> nav_row "DISPLAY"       icon: "DI"
-              -> SettingsState.send(:open_category, cat: :display)
-            item -> nav_row "THEME"         icon: "TH"             detail: theme_name()
-              -> SettingsState.send(:open_category, cat: :theme)
-            item -> nav_row "SOUND"         icon: "SN"
-              -> SettingsState.send(:open_category, cat: :sound)
-            item -> nav_row "TIME"          icon: "TM"             detail: time_summary()
-              -> SettingsState.send(:open_category, cat: :time)
-            item -> nav_row "LANGUAGE"      icon: "LA"             detail: locale.locale_str()
-              -> SettingsState.send(:open_category, cat: :language)
-            item -> nav_row "SECURITY"      icon: "SC"             detail: security_summary()
-              -> SettingsState.send(:open_category, cat: :security)
-            item -> nav_row "BLE / BT"      icon: "BL"
-              -> SettingsState.send(:open_category, cat: :network_other)
-            item -> nav_row "APPS"          icon: "AP"
-              -> SettingsState.send(:open_category, cat: :apps)
-            item -> nav_row "UPDATES"       icon: "UP"             detail: ota_summary()
-              -> SettingsState.send(:open_category, cat: :ota)
-            item -> nav_row "DIAGNOSTICS"   icon: "DG"
-              -> SettingsState.send(:open_category, cat: :diagnostics)
-            item -> nav_row "ABOUT"         icon: "AB"             detail: device_summary()
-              -> SettingsState.send(:open_category, cat: :about)
-          nav_bar
+        navigate "WIFI"        -> SettingsState.send(:open_category, cat: :wifi)
+        navigate "DISPLAY"     -> SettingsState.send(:open_category, cat: :display)
+        navigate "THEME"       -> SettingsState.send(:open_category, cat: :theme)
+        navigate "SOUND"       -> SettingsState.send(:open_category, cat: :sound)
+        navigate "TIME"        -> SettingsState.send(:open_category, cat: :time)
+        navigate "LANGUAGE"    -> SettingsState.send(:open_category, cat: :language)
+        navigate "SECURITY"    -> SettingsState.send(:open_category, cat: :security)
+        navigate "BLE / BT"    -> SettingsState.send(:open_category, cat: :network_other)
+        navigate "APPS"        -> SettingsState.send(:open_category, cat: :apps)
+        navigate "UPDATES"     -> SettingsState.send(:open_category, cat: :ota)
+        navigate "DIAGNOSTICS" -> SettingsState.send(:open_category, cat: :diagnostics)
+        navigate "ABOUT"       -> SettingsState.send(:open_category, cat: :about)
+
     | :wifi          -> -- WifiFlow renders its own content
     | :security      -> -- SecurityFlow renders its own
     | -- ...
 ```
 
-`nav_row` is a helper that produces a row with an icon, label, optional `detail` summary, and a chevron pointing right.
+Showing a per-row **detail summary** (like the current SSID next to "WIFI") is a presentation concern. The app exposes the data via a stream or record field; the bridge chooses whether to show it as a secondary line, an icon, or not at all, based on available space. Apps do not author the summary text placement.
 
 ---
 
@@ -296,23 +283,21 @@ Only **destructive** actions (clear PIN, factory reset, uninstall app, force OTA
     to   :detail (app_id: id, schema: apps.config_schema(id))
 
 content :detail s =
-  column
-    status_bar title: app_name(s.app_id)
-    group "PERMISSIONS"
-      for cap, granted in security.permission_state_all(s.app_id)
-        toggle cap state: granted
-          on -> security.permission_set(s.app_id, cap, event.value)
-    group "CONFIG"
-      for field in s.schema
-        config_input field
-          on -> apps.config_set(s.app_id, field.name, event.value)
-    group "DANGER ZONE"
-      action_row
-        trigger "UNINSTALL"  variant: :danger
-          -> confirm_uninstall(s.app_id)
+  group "PERMISSIONS"
+    for (cap, granted) in security.permission_state_all(s.app_id)
+      toggle cap  state: granted
+        on -> security.permission_set(s.app_id, cap, event.value)
+
+  group "CONFIG"
+    for field in s.schema
+      config_input field
+        on -> apps.config_set(s.app_id, field.name, event.value)
+
+  confirm "UNINSTALL"  message: "Remove {app_name(s.app_id)} and all its data?"
+    -> confirm_uninstall(s.app_id)
 ```
 
-`config_input` infers widget per `field.type`: slider for `:int`/`:float` with range, toggle for `:bool`, choice picker for `:atom` with options, text input for `:str`.
+`config_input` is an app-defined helper that dispatches to the right §12.4 intent based on `field.type`: `range` for `:int`/`:float`, `toggle` for `:bool`, `choice` for `:atom` with options, `text` for `:str`. All four are spec primitives; the helper just picks which one for each schema field. There is no "danger zone" grouping declared by the app — `confirm` is semantically the destructive action and the bridge renders it accordingly (`10-deck-bridge-ui §4.3` destructive-action styling).
 
 System apps (Launcher, TaskMan, Settings, Files) appear in the list but UNINSTALL is dimmed and tapping it shows a toast "CANNOT UNINSTALL SYSTEM APP".
 

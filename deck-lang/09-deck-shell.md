@@ -388,54 +388,36 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
 
   transition :dismiss_search  from :search  to :home
 
-@on launch
-  shell.set_status_bar(true)
-  shell.set_navigation_bar(true)
-
 @on resume
   Launcher.send(:dismiss_tasks)
   Launcher.send(:dismiss_search)
 ```
 
+The app never calls anything like `shell.set_status_bar` — the statusbar and navbar are always rendered by the bridge around every screen (see `10-deck-bridge-ui §3`). Apps only declare `content =` bodies; presentation is not theirs to control.
+
 ```deck
 -- launcher/flows/home_flow.deck
 
 -- Badge counts stream: emits [(app_id, unread)] on any change.
-@stream NotifCounts from: apps.notif_counts_watch()
+@stream NotifCounts
+  source: apps.notif_counts_watch()
 
 @flow HomeFlow
 
   step :idle (counts: [(app_id: str, unread: int)] = []) ->
     content =
-      group
-        status
-          items: [
-            (label: "TIME",    value: time.format(time.now(), "HH:mm")),
-            (label: "BATTERY", value: "{shell.battery_level()}%"),
-            (label: "WIFI",    value: match shell.wifi_ssid()
-                                        | :some s -> s
-                                        | :none   -> "—"),
-            (label: "BT",      value: match shell.bluetooth_on()
-                                        | true  -> "ON"
-                                        | false -> "—")
-          ]
-        list
-          items: apps.installed()
-          item app ->
-            let badge_count = first_or(
-                               filter(counts, c -> c.app_id == app.id),
-                               (app_id: app.id, unread: 0)).unread
-            trigger
-              label: app.name
-              icon:  match app.icon | :some s -> s | :none -> "?"
-              badge: if badge_count > 0 then :some badge_count else :none
-              -> apps.launch(app.id)
-        trigger
-          label: "Apps recientes"
-          -> Launcher.send(:show_tasks)
-        trigger
-          label: "Buscar"
-          -> Launcher.send(:show_search)
+      list apps.installed()
+        empty ->
+          "NO APPS INSTALLED"
+        app ->
+          trigger app.name
+            badge: if unread_for(counts, app.id) > 0
+                     then :some unread_for(counts, app.id)
+                     else :none
+            -> apps.launch(app.id)
+
+      trigger "Apps recientes" -> Launcher.send(:show_tasks)
+      trigger "Buscar"         -> Launcher.send(:show_search)
 
   -- Stream drives badge updates without full re-render.
   on NotifCounts counts ->
@@ -444,7 +426,14 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
   transition :refresh_counts (counts: [(app_id: str, unread: int)])
     from :idle _
     to   :idle (counts: counts)
+
+fn unread_for (counts: [(app_id: str, unread: int)], app_id: str) -> int =
+  match first_or(filter(counts, c -> c.app_id == app_id),
+                 (app_id: app_id, unread: 0))
+    | (app_id: _, unread: n) -> n
 ```
+
+Nothing about the launcher mentions grid vs list, card vs row, columns, icons, or fonts. The app declares: "there is a list of installed apps; each one is a trigger that, when activated, launches it; some have unread badges." The bridge decides — for this 480×800 LVGL device — to render the list as a 3-column grid of cards with icons derived from each `@app icon:` metadata and badges drawn as top-right circles; on a voice device the same declaration would expose each app as a spoken menu option. The `.deck` is identical; the bridge chooses.
 
 ```deck
 -- launcher/flows/task_switcher_flow.deck
@@ -453,24 +442,17 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
 
   step :visible _ ->
     content =
-      list
-        items: filter(
-                 apps.running() ++ apps.suspended(),
-                 a -> not a.is_launcher)
-        item app ->
+      list (apps.running() ++ apps.suspended() |> filter(a -> not a.is_launcher))
+        empty ->
+          "NO RUNNING APPS"
+        app ->
           group
             when app.thumbnail is :some
-              media
-                source: unwrap_opt(app.thumbnail)
-                alt:    app.name
-            trigger
-              label: "Open {app.name}"
-              -> do
-                  apps.bring_to_front(app.id)
-                  Launcher.send(:dismiss_tasks)
-            confirm
-              label:   "Close {app.name}"
-              message: "Close {app.name}?"
+              media unwrap_opt(app.thumbnail)  alt: app.name  hint: :thumbnail
+            navigate "Open {app.name}" -> do
+                apps.bring_to_front(app.id)
+                Launcher.send(:dismiss_tasks)
+            confirm "Close {app.name}"  message: "Close {app.name}?"
               -> apps.kill(app.id)
 ```
 
@@ -481,21 +463,16 @@ El Launcher es una app Deck con `app.id: "system.launcher"`. Tiene acceso a las 
 
   step :active (query: str = "") ->
     content =
-      group
-        input
-          label: "BUSCAR"
-          value: query
-          -> q -> SearchFlow.send(:update (query: q))
-        list
-          items: apps.search(query)
-          item app ->
-            trigger
-              label: app.name
-              icon:  match app.icon | :some s -> s | :none -> "?"
-              -> apps.launch(app.id)
-        trigger
-          label: "Cancelar"
-          -> Launcher.send(:dismiss_search)
+      search :query  value: query  hint: "Buscar apps"
+        on -> SearchFlow.send(:update (query: event.value))
+
+      list apps.search(query)
+        empty ->
+          "NO MATCHES"
+        app ->
+          trigger app.name -> apps.launch(app.id)
+
+      trigger "Cancelar" -> Launcher.send(:dismiss_search)
 
   transition :update (query: str)
     from :active _
@@ -525,7 +502,7 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
   system.shell  as shell
 
 @stream ProcessSnapshot
-  from: tasks.cpu_watch()
+  source: tasks.cpu_watch()
 
 @flow TaskManager
   state :process_list  flow: ProcessListFlow
@@ -540,10 +517,6 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
   transition :back
     from :app_detail _
     to   history
-
-@on launch
-  shell.set_status_bar(true)
-  shell.set_navigation_bar(true)
 ```
 
 ```deck
@@ -553,34 +526,31 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
 
   step :idle _ ->
     content =
-      group
-        list
-          items: ProcessSnapshot.last() |> unwrap_opt_or([])
-                   |> filter(p -> p.kind is :main)
-          item p ->
-            group
-              data: "{p.app_id}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%"
-              list
-                items: ProcessSnapshot.last() |> unwrap_opt_or([])
-                         |> filter(bg -> bg.app_id == p.app_id
+      list main_processes()
+        empty ->
+          "NO PROCESSES"
+        p ->
+          group "{p.app_id}"
+            p
+            list background_tasks_of(p.app_id)
+              bg ->
+                group
+                  bg
+                  confirm "Stop task"  message: "Cancelar {unwrap_opt(bg.task_name)}?"
+                    -> tasks.kill_task(bg.app_id, unwrap_opt(bg.task_name))
+            when not p.app_id == "system.launcher"
+              navigate "Ver detalle" -> TaskManager.send(:show_detail, app_id: p.app_id)
+              confirm "Kill {p.app_id}"  message: "Forzar cierre de {p.app_id}?"
+                -> tasks.kill(p.app_id)
+
+fn main_processes () =
+  ProcessSnapshot.last() |> unwrap_opt_or([])
+                         |> filter(p -> p.kind is :main)
+
+fn background_tasks_of (app_id: str) =
+  ProcessSnapshot.last() |> unwrap_opt_or([])
+                         |> filter(bg -> bg.app_id == app_id
                                       and bg.kind is :background)
-                item bg ->
-                  group
-                    data: "  ↳ {unwrap_opt(bg.task_name)}  {bg.state}  {bg.heap_kb} KB"
-                    confirm
-                      label:   "Stop task"
-                      message: "Cancelar {unwrap_opt(bg.task_name)}?"
-                      -> tasks.kill_task(bg.app_id, unwrap_opt(bg.task_name))
-              when not p.app_id == "system.launcher"
-                navigate
-                  label: "Ver detalle"
-                  to:    :show_detail
-                  params: (app_id: p.app_id)
-              when not p.app_id == "system.launcher"
-                confirm
-                  label:   "Kill {p.app_id}"
-                  message: "Forzar cierre de {p.app_id}?"
-                  -> tasks.kill(p.app_id)
 ```
 
 ```deck
@@ -591,27 +561,22 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
   step :idle (app_id: str) ->
     let storage = tasks.storage(app_id)
     content =
-      group
-        data: "App: {app_id}"
-        group
-          data: "Almacenamiento local: {storage.local_kb} KB"
-          data: "Base de datos: {storage.db_kb} KB"
-          data: "NVS: {storage.nvs_bytes} bytes"
-        list
-          items: ProcessSnapshot.last() |> unwrap_opt_or([])
-                   |> filter(p -> p.app_id == app_id)
-          item p ->
+      group "{app_id}"
+        group "Storage"
+          storage
+        list processes_of(app_id)
+          p ->
             group
-              data: "{p.kind}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%  uptime {p.uptime_ms}ms"
+              p
               when p.kind is :background
-                confirm
-                  label:   "Stop {unwrap_opt(p.task_name)}"
-                  message: "Cancelar este background task?"
+                confirm "Stop {unwrap_opt(p.task_name)}"  message: "Cancelar este background task?"
                   -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
-        confirm
-          label:   "Kill app"
-          message: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
+        confirm "Kill app"  message: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
           -> tasks.kill(app_id)
+
+fn processes_of (app_id: str) =
+  ProcessSnapshot.last() |> unwrap_opt_or([])
+                         |> filter(p -> p.app_id == app_id)
 ```
 
 **Protecciones del OS**: el Task Manager no puede matar al Launcher (`system.launcher`) ni a sí mismo. El bridge de `system.tasks.kill()` verifica el `app_id` y retorna `:unauthorized` si alguno de los dos es el objetivo.
@@ -2007,24 +1972,19 @@ El task manager UI puede usar `system.tasks.kill_task()` para cancelar un sync q
 
 ```deck
 @stream ProcessSnapshot
-  from: tasks.cpu_watch()
+  source: tasks.cpu_watch()
 
 step :active _ ->
   content =
-    list
-      items: ProcessSnapshot.recent(1) |> unwrap_opt_or([])
-      item p ->
+    list (ProcessSnapshot.recent(1) |> unwrap_opt_or([]))
+      p ->
         group
-          data: "{p.id}  {p.state}  {p.heap_kb} KB  {p.cpu_pct}%"
+          p
           when p.kind is :main
-            confirm
-              label:   "Kill {p.app_id}"
-              message: "Forzar cierre de {p.app_id}?"
+            confirm "Kill {p.app_id}"  message: "Forzar cierre de {p.app_id}?"
               -> tasks.kill(p.app_id)
           when p.kind is :background
-            confirm
-              label:   "Stop {p.task_name}"
-              message: "Cancelar background task {p.task_name}?"
+            confirm "Stop {p.task_name}"  message: "Cancelar background task {p.task_name}?"
               -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
 ```
 

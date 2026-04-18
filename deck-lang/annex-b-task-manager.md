@@ -103,95 +103,77 @@ The CPU watch emits a fresh snapshot every 5 s. The Task Manager re-renders at m
 
 ## 6. Content Body
 
+Per `02-deck-app §12`, content bodies declare semantic intent only. No layout primitives (`column`, `row`, `card`, `grid`, `status_bar`, `nav_bar`, `data_row`, `action_row`, `spacer`) — those are bridge decisions. `style: :dim`, `variant: :danger` are presentation hints the app must not carry. The statusbar and navbar are rendered by the bridge around every screen (`10-deck-bridge-ui §3`).
+
 ### 6.1 Main list
 
 ```deck
 content =
   match state
     | :list ->
-        column
-          status_bar title: "TASK MANAGER"
-          group "RUNNING"
-            list apps_running
-              item app ->
-                row
-                  icon  app.icon
-                  column
-                    text app.name
-                    text "{format_heap_kb(app.heap_kb)} KB · {format_pct(app.cpu_pct)}"  style: :dim
-                  on tap -> TaskmanState.send(:open_detail, id: app.id)
-          spacer
-          row
-            navigate "DIAGNOSTICS" -> TaskmanState.send(:open_diagnostics)
-          nav_bar
+        group "RUNNING"
+          list apps_running
+            empty ->
+              "NO APPS RUNNING"
+            app ->
+              navigate app.name -> TaskmanState.send(:open_detail, id: app.id)
+
+        navigate "DIAGNOSTICS" -> TaskmanState.send(:open_diagnostics)
 ```
+
+Each running app is a `navigate` — a semantic "go into" affordance that the bridge renders as a tappable list row with a disclosure arrow on this device, or as a spoken menu option on a voice bridge. `app.name` is the label; supplementary stats (`heap_kb`, `cpu_pct`, etc.) travel with the app record and are auto-formatted by the bridge when it renders the navigate row for an `@type` with those fields. Apps do not compose dim secondary lines themselves.
 
 ### 6.2 Detail screen
 
 ```deck
     | :detail id ->
-        let app    = find_app(apps_running, id)
-        let proc   = find_proc(processes, id)
-        column
-          status_bar title: app.name
-          data_row label: "ID:"        value: app.id
-          data_row label: "VERSION:"   value: app.version
-          data_row label: "STATE:"     value: state_label(proc.state)
-          data_row label: "HEAP:"      value: "{proc.heap_kb} KB"
-          data_row label: "CPU:"       value: "{format_pct(proc.cpu_pct)} (5s avg)"
-          data_row label: "UPTIME:"    value: format_duration_ms(proc.uptime_ms)
+        let app  = find_app(apps_running, id)
+        let proc = find_proc(processes, id)
+
+        group "{app.name}"
+          app
+          proc
+
           group "BACKGROUND TASKS"
             list filter(processes, p -> p.app_id == id and p.kind == :background)
-              item bg ->
-                row
-                  text bg.task_name
-                  spacer
-                  text format_pct(bg.cpu_pct)  style: :dim
-          spacer
-          action_row
-            trigger "FORCE KILL"  variant: :danger
-              -> TaskmanState.send(:request_kill, id: id)
-          nav_bar
+              empty ->
+                "NO BACKGROUND TASKS"
+              bg ->
+                bg
+
+          confirm "FORCE KILL"  message: "Unsaved data will be lost."
+            -> TaskmanState.send(:request_kill, id: id)
 ```
 
-### 6.3 Killing (confirm + execute)
+The detail view hands the bridge an `@type AppInfo` record (`app`) and an `@type ProcessInfo` record (`proc`), and the bridge renders their fields with labels derived from field names. There is no app-side label formatting (`"ID:"`, `"VERSION:"`, `"HEAP:"`). The `confirm` is a single semantic intent — the bridge decides when and how to present the confirmation dialog (`10-deck-bridge-ui §5.2`).
+
+### 6.3 Killing
 
 ```deck
     | :killing id ->
-        confirm "Force kill {find_app(apps_running, id).name}?"
-          message: "Unsaved data will be lost."
-          confirm: "KILL"   variant: :danger
-            -> do
-                apps.kill(id)
-                TaskmanState.send(:kill_done)
-          cancel:  "CANCEL"
-            -> TaskmanState.send(:back_to_list)
+        loading
 ```
+
+The `confirm` above is a single intent; its interaction is the bridge's Confirm Dialog Service (`10-deck-bridge-ui §5.2`) — the app does not declare two separate labels for OK/CANCEL or a second `confirm` for the negative path. The `:killing` state shows a `loading` marker while `apps.kill(id)` completes; the machine transitions on completion.
 
 ### 6.4 Diagnostics
 
 ```deck
     | :diagnostics ->
-        column
-          status_bar title: "DIAGNOSTICS"
-          group "MEMORY"
-            data_row label: "FREE SRAM:"    value: "{sysinfo.free_heap_internal()} bytes"
-            data_row label: "FREE PSRAM:"   value: "{sysinfo.free_heap_psram()} bytes"
-            data_row label: "PRESSURE:"     value: pressure_label()
-          group "BATTERY"
-            data_row label: "LEVEL:"        value: "{battery.level()}%"
-            data_row label: "CHARGING:"     value: yesno(battery.charging())
-          group "VERSIONS"
-            data_row label: "RUNTIME:"      value: sysinfo.versions().runtime
-            data_row label: "DECK_OS:"      value: str(sysinfo.versions().deck_os)
-            data_row label: "EDITION:"      value: str(sysinfo.versions().edition_current)
-            data_row label: "SDI:"          value: "{v.sdi_major}.{v.sdi_minor}"
-                                              where v = sysinfo.versions()
-          spacer
-          nav_bar
+        group "MEMORY"
+          sysinfo.free_heap_internal()  -- labelled "FREE HEAP INTERNAL" by bridge
+          sysinfo.free_heap_psram()
+          pressure_label()
+
+        group "BATTERY"
+          battery.level()
+          battery.charging()
+
+        group "VERSIONS"
+          sysinfo.versions()             -- bridge renders the record
 ```
 
-`pressure_label()` reads the latest `EVT_MEMORY_PRESSURE` from `app_state` (mirrored by the bridge into the runtime).
+`pressure_label()` returns an atom describing pressure; `battery.level()` returns a `float` (0..1) which the bridge formats as a percentage; `battery.charging()` returns a `bool` which the bridge renders as a yes/no indicator. No app-side formatting — the bridge owns presentation.
 
 ---
 

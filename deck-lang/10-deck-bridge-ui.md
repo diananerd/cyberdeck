@@ -244,18 +244,17 @@ El runtime evalúa los bloques `content =` de la app y produce un árbol de nodo
 
 ```deck
 content =
-  list
-    items: posts
-    item p ->
+  list posts
+    p ->
       group
-        text "title"    value: p.title
-        text "author"   value: p.author
-        trigger
-          label: "Open"
-          -> App.send(:open (id: p.id))
+        p.title
+        p.author
+        trigger "Open" -> App.send(:open (id: p.id))
 ```
 
-El runtime produce `DVC_LIST → DVC_GROUP → [DVC_STATUS × 2, DVC_TRIGGER]`. El bridge recibe esa estructura y decide: lista scrollable con rows separadas por borde inferior, dos data-rows apiladas, botón outline al final de cada row. La app no sabe nada de esto.
+El runtime produce `DVC_LIST → DVC_GROUP → [DVC_DATA × 2, DVC_TRIGGER]`. El bridge recibe esa estructura y decide: lista scrollable con rows separadas por borde inferior, dos líneas de texto apiladas (primera prominente, segunda dim — regla del bridge), botón outline al final de cada row. La app no sabe nada de esto.
+
+La app nunca escribe `column`, `row`, `card`, `data_row`, ni coordenadas, colores, fuentes o estilos. Escribe sólo expresiones de valor y primitivas semánticas (`group`, `list`, `form`, `trigger`, etc., catálogo completo en `02-deck-app §12`). La presentación es decisión del bridge.
 
 ### 4.1 Nodos de Layout
 

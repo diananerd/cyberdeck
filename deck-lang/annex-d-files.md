@@ -129,109 +129,82 @@ Files does not use streams — its data is request/response from `fs.list()`, `f
 
 ## 6. Content Body
 
+Per `02-deck-app §12`, content is semantic. No `column`, `row`, `status_bar`, `nav_bar`, `action_row`, `scroll`, `center`, `menu`, `icon`, `checkbox`, `image`, `font:`, `style:`, `variant:`, `when:` (as attribute — only `when` as content-level conditional is spec'd). `menu` is not a §12 primitive; a set of secondary actions is expressed as sibling intents and the bridge groups them (`10-deck-bridge-ui §5.5 Choice Overlay Service`, `§4.3` inference for overflow menus).
+
 ### 6.1 Browser
 
 ```deck
 content =
   match state
     | :browsing s ->
-        column
-          status_bar title: short_path(s.path)
-          row
-            navigate "↑"  on tap -> FilesState.send(:navigate_up)
-              when: s.path != "/sdcard" and s.path != "/spiffs"
-            spacer
-            menu
-              item "SORT BY NAME"     -> set_sort(:name_asc)
-              item "SORT BY SIZE"     -> set_sort(:size_desc)
-              item "SORT BY MODIFIED" -> set_sort(:mtime_desc)
-              item "NEW FOLDER"       -> begin_new_folder()
-              item "SELECT"           -> FilesState.send(:start_picker, mode: :copy)
-          list s.entries
-            item entry ->
-              row
-                icon  entry_icon(entry)
-                column
-                  text entry.name
-                  text entry_subtitle(entry)  style: :dim
-                spacer
-                text format_size(entry.size)  style: :dim
-                on tap   -> FilesState.send(:open, entry: entry)
-                on long  -> FilesState.send(:start_picker, mode: :copy)
-          nav_bar
+        when s.path != "/sdcard" and s.path != "/spiffs"
+          navigate "↑ Up" -> FilesState.send(:navigate_up)
+
+        choice :sort  value: s.sort
+          options: [
+            (label: "Name",     value: :name_asc),
+            (label: "Size",     value: :size_desc),
+            (label: "Modified", value: :mtime_desc)
+          ]
+          on -> FilesState.send(:set_sort, sort: event.value)
+
+        trigger "New folder" -> begin_new_folder()
+        trigger "Select"     -> FilesState.send(:start_picker, mode: :copy)
+
+        list s.entries
+          empty ->
+            "FOLDER EMPTY"
+          entry ->
+            navigate entry.name -> FilesState.send(:open, entry: entry)
 ```
 
-`entry_subtitle` shows last modified time + (for top-level `apps/` subdirs) the app name owning that directory:
-
-```deck
-fn entry_subtitle (e: FsEntry) -> str =
-  match owner_of(e.path)
-    | :some app -> "{format_time(e.mtime)} · {app.name}"
-    | :none     -> format_time(e.mtime)
-```
+Each `FsEntry` is `@type`'d with name/size/mtime/kind; the bridge renders those fields with its own layout (first line, dim secondary line, size on the right — on this device). Apps do not compose rows.
 
 ### 6.2 Picker / multi-select
 
 ```deck
     | :picker s ->
-        column
-          status_bar title: "{len(s.selected)} SELECTED"
-          list s.entries
-            item entry ->
-              row
-                checkbox state: contains(s.selected, entry.path)
-                  on -> FilesState.send(:toggle_pick, path: entry.path)
-                column
-                  text entry.name
-                  text format_size(entry.size)  style: :dim
-          spacer
-          action_row
-            trigger "CANCEL"
-              -> FilesState.send(:loaded, entries: s.entries)
-            trigger "COPY HERE"  variant: :primary  when: s.mode == :copy
-              -> FilesState.send(:copy_now, dst: current_path())
-            trigger "MOVE HERE"  variant: :primary  when: s.mode == :move
-              -> FilesState.send(:move_now, dst: current_path())
-            trigger "DELETE"     variant: :danger   when: s.mode == :delete
-              -> confirm_delete(s.selected)
-          nav_bar
+        multiselect :paths  value: s.selected
+          options: map(s.entries, e -> (label: e.name, value: e.path))
+          on -> FilesState.send(:toggle_pick, paths: event.value)
+
+        match s.mode
+          | :copy ->
+              trigger "Copy here"
+                -> FilesState.send(:copy_now, dst: current_path())
+          | :move ->
+              trigger "Move here"
+                -> FilesState.send(:move_now, dst: current_path())
+          | :delete ->
+              confirm "Delete selected"  message: "Delete {len(s.selected)} item(s)?"
+                -> confirm_delete(s.selected)
+
+        trigger "Cancel"
+          -> FilesState.send(:loaded, entries: s.entries)
 ```
 
 ### 6.3 Viewer
 
 ```deck
     | :viewer v ->
-        column
-          status_bar title: file_basename(v.path)
-          match v.kind
-            | :text ->
-                scroll
-                  text fs.read_text(v.path)  font: :mono  style: :small
-            | :markdown ->
-                scroll
-                  markdown md.parse(fs.read_text(v.path))
-            | :image ->
-                center
-                  image src: fs.asset_from_path(v.path)
-            | :hex ->
-                scroll
-                  text format_hex(fs.read(v.path, max: 4096))  font: :mono  style: :small
-            | :unsupported ->
-                center
-                  text "PREVIEW NOT AVAILABLE"  style: :dim
-                  text format_size(file_size(v.path))  style: :dim
-          row
-            navigate "DETAILS"  -> show_details(v.path)
-            spacer
-            menu
-              item "RENAME"  -> FilesState.send(:start_rename, path: v.path)
-              item "MOVE"    -> FilesState.send(:start_move, path: v.path)
-              item "DELETE"  -> confirm_delete([v.path])
-              item "COPY"    -> FilesState.send(:start_copy, path: v.path)
-          nav_bar
+        match v.kind
+          | :text        -> rich_text fs.read_text(v.path)
+          | :markdown    -> markdown md.parse(fs.read_text(v.path))  purpose: :reading
+          | :image       -> media    fs.asset_from_path(v.path)  alt: file_basename(v.path)
+          | :hex         -> rich_text format_hex(fs.read(v.path, max: 4096))
+          | :unsupported ->
+              "PREVIEW NOT AVAILABLE"
+              format_size(file_size(v.path))
+
+        navigate "Details" -> show_details(v.path)
+        trigger  "Rename"  -> FilesState.send(:start_rename, path: v.path)
+        trigger  "Move"    -> FilesState.send(:start_move,   path: v.path)
+        confirm  "Delete"  message: "Delete {file_basename(v.path)}?"
+          -> confirm_delete([v.path])
+        trigger  "Copy"    -> FilesState.send(:start_copy,   path: v.path)
 ```
 
-The `markdown` and `image` viewer modes depend on the corresponding capabilities being available; if not, the viewer falls back to `:text` or `:hex`.
+`rich_text` is the §12.3 primitive for multi-line text content; the bridge picks the font (on this board: `CYBERDECK_FONT_MD`; a future mono preset is a bridge choice, not an app attribute). `markdown` handles the markdown case per §12.3 with the `purpose:` hint — the bridge decides density and code-block chrome. `media` handles the image (§12.3 positional `media expr alt:`). The `:unsupported` branch is bare expressions — the bridge displays them as two stacked text lines (details like "dim styling" are bridge decisions).
 
 ### 6.4 Copy / move progress
 
