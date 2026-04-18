@@ -251,6 +251,12 @@ User directive: "sigue iterando, no te detengas, esto es ad infinitum" — plus 
 
 - 2026-04-18 · session #2 close · committed concepts #2, #3, #4 as separate docs commits. Concept #5 (@flow / @machine parser coverage) documented; code fix is layer-4 future work spanning multiple sessions and requiring hardware validation. Also surfaced: `@app requires:` nested form may be silent-accepted by parser (layer-4 audit needed).
 
+### Concept #6 — `event` binding completeness (§02 §12.7)
+
+- 2026-04-18 · layer 1 discovery · `02-deck-app §12.7` documented `event` binding only for §12.4 input intents (`toggle`/`range`/`choice`/…), treating it as a single scalar. Missing bindings for structural handlers (`form on submit ->`, `list on more ->`), content handlers (`markdown on link ->`, `on image ->`, `markdown_editor on change ->`, `on cursor ->`, `on selection ->`), and stream handlers (`on StreamName v ->`). Consequence: app authors didn't know what fields were available in those handlers; implementations could differ silently.
+- 2026-04-18 · layer 1 edit · §12.7 rewritten with three tables: input intents (all carry `event.value`), structural handlers (`form` → `event.values: {str: any}`, `list` → `event.page: int`), content handlers (markdown link/image carry `event.url`+contextual `text`/`alt`; markdown_editor change/cursor/selection each carry their own fields), and an explicit note that stream handlers use the `var ->` binder and bind no `event`. The shape-per-handler model is intentional — a blanket "all handlers get event.value" would be wrong for handlers that carry structured payloads (like `cursor` that needs both `cursor: int` and `formats: [atom]`).
+- 2026-04-18 · layer 4 note · runtime almost certainly does not bind `event.values` for `form on submit ->`, `event.page` for `list on more ->`, or the markdown_editor multi-field events yet. Layer 5 should add tests that probe each binding path (press a trigger inside a form; tap a markdown link; submit a form; request more items on a list). Future work.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.

@@ -1283,21 +1283,48 @@ View content functions (§6.3 of `01-deck-lang`) may be called freely inside con
 
 ### 12.7 `event` Binding
 
-Inside `on ->` handlers of input intents, `event` is an implicit binding:
+Inside an `on … ->` handler, `event` is an implicit binding carrying the payload specific to that handler's triggering condition. The binding shape is handler-specific — not a single `event.value` scalar for every case.
 
-| Intent | `event.value` |
+**Input intents (§12.4)** — all carry a single `value`:
+
+| Intent | Binding |
 |---|---|
-| `toggle` | `bool` |
-| `range` | `float` |
-| `choice` | `any` |
-| `multiselect` | `[any]` |
-| `text` | `str` |
-| `password` | `str` |
-| `pin` | `str` (digits; invoked on completion) |
-| `date` | `Timestamp` |
-| `search` | `str` |
+| `toggle` | `event.value: bool` |
+| `range` | `event.value: float` |
+| `choice` | `event.value: any` (the selected option's `value:` field) |
+| `multiselect` | `event.value: [any]` |
+| `text` | `event.value: str` |
+| `password` | `event.value: str` |
+| `pin` | `event.value: str` (digits; handler invoked on completion) |
+| `date` | `event.value: Timestamp` |
+| `search` | `event.value: str` |
 
-`navigate`, `trigger`, `confirm`, `create`, and `share` do not bind `event`.
+`navigate`, `trigger`, `confirm`, `create`, `share` do **not** bind `event` — they are pure actions without user-supplied data.
+
+**Structural handlers**:
+
+| Handler | Binding |
+|---|---|
+| `form on submit ->` | `event.values: {str: any}` — map of input `name: atom` → submitted value. Keys are the atom names declared on each intent inside the form (e.g. `:handle`, `:password`). Values follow each intent's `event.value` shape above. |
+| `list on more ->` | `event.page: int` (0-based; 0 is the initial page, incremented each time the user requests more). The handler is expected to extend the list's source expression with the next batch; the bridge waits on any effects before rendering further. |
+
+**Content / annotation handlers (§12.3)**:
+
+| Handler | Binding |
+|---|---|
+| `markdown on link ->` | `event.url: str`, `event.text: str` (the visible anchor text) |
+| `markdown on image ->` | `event.url: str`, `event.alt: str` |
+| `markdown_editor on change ->` | `event.value: str` (new full content) |
+| `markdown_editor on cursor ->` | `event.cursor: int` (char offset), `event.formats: [atom]` (active formatting at cursor) |
+| `markdown_editor on selection ->` | `event.selection: MdRange`, `event.text: str` (selected text) |
+
+**Stream handlers** (`on StreamName var ->`):
+
+| Handler | Binding |
+|---|---|
+| `on StreamName v ->` | `v` is the emitted value; there is **no** implicit `event` binding inside this handler. Use the named binder `v` directly. |
+
+Handlers not listed here do not bind `event`.
 
 ---
 
