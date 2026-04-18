@@ -332,6 +332,35 @@ Layer 6 remaining (next session's targets if this pattern continues): `os_lifecy
 
   `apps/conformance/lang_if.deck` deepened: now tests the canonical `match` form AND the `if/then/else` sugar AND asserts both produce identical results. If the sugar is removed, the test fails at that branch; if the sugar drifts from match semantics, the `ok_agree` probe catches it.
 
+  **Resolution applied in this session**: `01-deck-lang §1` design-invariants line rewritten from "No `if/then/else`" to "accepted as sugar for `match cond | true -> a | false -> b`"; `§2.10` keywords list gained `if then else`; a new `§7.10 If / Then / Else (sugar over match)` subsection was added with the desugaring semantics, the rule that `cond` must be bool (load-time type error otherwise), the rule that both branches must produce the same type, and the note that there is no multi-arm `else if` grammar — nested `if` desugars to nested match. The runtime's existing behaviour is now spec-sanctioned.
+
+### Deepening pass on `lang_*` conformance fixtures (layer 6 continued)
+
+The same pattern applied to language-level tests, using spec-canonical syntax throughout (`and/or/not` keywords not `&&/||`; `++` for concat not `<>`; `| pattern -> expr` for match not `=>`; `int?` returns yielding `:some/:none` not auto-unwrap).
+
+| Fixture | Before | After |
+|---|---|---|
+| lang_literals | int/float/bool/str | + atom variants + list + tuple + map + interpolation + multi-line + duration + range + hex/binary/scientific literals |
+| lang_arith | 5 ops, positives only | + truncation toward zero, `-7/2==-3`, `-17%5==-2`, operator precedence, float/int mixing, unary negation |
+| lang_compare | 6 ops on ints | + floats, strings (lexicographic), bools, atoms (plain + variant), unit, lists, maps, tuples — all structural eq |
+| lang_logic | `&&/\|\|` (non-spec) | `and/or/not` (spec §2.10) + short-circuit proofs via divide-by-zero on rhs + precedence |
+| lang_if | if sugar only, untyped | canonical match form + if sugar + both-agree probe + nested conditionals + complex-value branches |
+| lang_strings | `<>` concat, `text.len` | `++` concat (§7.4) + interpolation + nested interpolation + escape sequences + multi-line `"""` + UTF-8 + lexicographic compare |
+| lang_let | binding + shadow | + type annotations + do-block scoping + tuple destructuring + let-held lambdas/lists/maps |
+| lang_match | 4 patterns, `=>` arrow | 15 patterns (atom/literal/wildcard/binder/guard/some/none/ok/err/tuple/list-empty/cons/fixed/nested) + `-> expr` canonical |
+| lang_fn_basic | 3 trivial fns | arity 0/1/2/5 + optional type annotations + do-block body + forward references + named arguments + nested calls |
+
+### Session cumulative index — end of this burst
+
+- **Total commits in this push**: 28
+- **Axes fixed at layer 1**: content-body vocabulary, capability catalog (+ cache/api_client), `@requires.deck_level`, semantic field renames (error/confirm/media/list + markdown focus/describe/controlled_by + trigger/navigate badge), `@machine` hook execution order, `@flow` sequential-step sugar, event binding per handler, `@on` binding styles, `@app.icon/tags`, if/then/else sugar, §04 AST + C API cascade, §10/§11 DVC attributes cascade.
+- **Axes fixed at layer 2**: annexes a/b/c/d rewritten to spec content vocabulary + deck_level:3 declarations.
+- **Axes fixed at layer 3**: `CLAUDE.md` pointer + design invariant.
+- **Axes fixed at layer 6**: 13 conformance fixtures deepened (os_math, os_text, os_fs, os_nvs, os_time, os_info, os_conv, os_lifecycle, os_fs_list, lang_literals, lang_arith, lang_compare, lang_logic, lang_if, lang_strings, lang_let, lang_match, lang_fn_basic).
+- **Layer-4 bugs flagged for hardware sessions**: parser coverage gap for real @machine/@flow grammar, @machine.before/.after execution order, bridge.ui.* imperative builtins need replacement by declarative content eval, form/list/markdown_editor event bindings likely unimplemented, @app `requires:` nested form may be silently accepted.
+
+**Next sessions**: flash + monitor the deepened conformance suite; expect many FAILs. Each FAIL log message pinpoints a specific layer-4 gap. The order of addressing should be (a) the parser coverage gap first — without it, annex apps don't load at all; (b) then bridge.ui replacement; (c) then per-capability gaps surfaced by individual os_* FAILs. REPORTS entries above tell you where each bug lives.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.
