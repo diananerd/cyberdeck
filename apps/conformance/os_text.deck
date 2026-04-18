@@ -6,13 +6,91 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every non-trivial `text` surface method in
+-- `03-deck-os §3 @builtin text`. Old version covered 6 of ~36.
+-- Note: uses the spec-canonical method names — `length` (not `len`),
+-- `starts` / `ends` (not `starts_with` / `ends_with`). If the runtime
+-- exposes them under different names, this test fails — and that
+-- naming drift IS the bug to surface.
 @on launch:
-  let s       = "Deck"
-  let ok_up   = text.upper(s) == "DECK"
-  let ok_low  = text.lower(s) == "deck"
-  let ok_len  = text.len(s) == 4
-  let ok_sw   = text.starts_with("railway", "rail")
-  let ok_ew   = text.ends_with("railway", "way")
-  let ok_ct   = text.contains("railway", "ilw")
-  let ok = ok_up && ok_low && ok_len && ok_sw && ok_ew && ok_ct
+  -- Case + length.
+  let ok_up    = text.upper("Deck") == "DECK" && text.upper("") == ""
+  let ok_low   = text.lower("Deck") == "deck"
+  let ok_len   = text.length("Deck") == 4 && text.length("") == 0
+
+  -- Prefix / suffix / contains / count / index.
+  let ok_sw    = text.starts("railway", "rail") && not text.starts("railway", "way")
+  let ok_ew    = text.ends("railway", "way")    && not text.ends("railway", "rail")
+  let ok_ct    = text.contains("railway", "ilw") && not text.contains("railway", "zzz")
+  let ok_idx_h = text.index_of("railway", "way") == :some 4
+  let ok_idx_m = text.index_of("railway", "zzz") == :none
+  let ok_cnt   = text.count("banana", "a") == 3 && text.count("banana", "z") == 0
+
+  -- Trim / is_empty / is_blank.
+  let ok_trim  = text.trim("  hi  ") == "hi" && text.trim("\t\n x \t") == "x"
+  let ok_empty = text.is_empty("") && not text.is_empty("x")
+  let ok_blank = text.is_blank("   ") && text.is_blank("\t\n") && not text.is_blank(" x ")
+
+  -- Slice / replace.
+  let ok_slice = text.slice("railway", 0, 4) == "rail"
+              && text.slice("railway", 4, 7) == "way"
+  let ok_rep1  = text.replace("foo bar foo", "foo", "baz") == "baz bar foo"
+  let ok_repA  = text.replace_all("foo bar foo", "foo", "baz") == "baz bar baz"
+
+  -- Padding / truncate.
+  let ok_padL  = text.pad_left("7", 3, "0") == "007"
+  let ok_padR  = text.pad_right("7", 3, "0") == "700"
+  let ok_padC  = text.pad_center("x", 5, "-") == "--x--"
+  let ok_trun  = text.truncate("abcdefgh", 5) == "abcde"
+  let ok_trunS = text.truncate("abcdefgh", 5, "…") == "abcd…"
+
+  -- Split / join / lines / words.
+  let ok_split = text.split("a,b,c", ",") == ["a", "b", "c"]
+              && text.split("", ",") == [""]
+  let ok_join  = text.join(["a", "b", "c"], "-") == "a-b-c"
+              && text.join([], ",") == ""
+  let ok_lines = text.lines("one\ntwo\nthree") == ["one", "two", "three"]
+  let ok_words = text.words("  hello   world  ") == ["hello", "world"]
+
+  -- Repeat.
+  let ok_rpt   = text.repeat("ab", 3) == "ababab" && text.repeat("x", 0) == ""
+
+  -- Format.
+  let ok_fmt   = text.format("Hello, {name}!", {"name": "World"}) == "Hello, World!"
+
+  -- Base64, URL, hex.
+  let ok_b64e  = text.base64_encode("Hello") == "SGVsbG8="
+  let ok_b64d  = text.base64_decode("SGVsbG8=") == :some "Hello"
+                                                -- bad padding returns :none
+              && text.base64_decode("!!!!!") == :none
+  let ok_urle  = text.url_encode("a b&c") == "a%20b%26c"
+  let ok_urld  = text.url_decode("a%20b%26c") == "a b&c"
+  let ok_hex   = text.hex_encode([0xDE, 0xAD, 0xBE, 0xEF]) == "deadbeef"
+              && text.hex_decode("deadbeef") == :some [0xDE, 0xAD, 0xBE, 0xEF]
+              && text.hex_decode("zz") == :none
+
+  -- Query string.
+  let ok_qb    = text.query_build({"a": "1", "b": "two words"}) == "a=1&b=two%20words"
+  let ok_qp    = text.query_parse("a=1&b=two%20words") == {"a": "1", "b": "two words"}
+
+  -- JSON round-trip.
+  let ok_json  = text.from_json("{\"a\":1}") == :some {"a": 1}
+              && text.json({"a": 1}) == "{\"a\":1}"
+              && text.from_json("not-json") == :none
+
+  -- Bytes / from_bytes.
+  let ok_b     = text.bytes("Hi") == [0x48, 0x69]
+              && text.from_bytes([0x48, 0x69]) == :some "Hi"
+
+  let ok = ok_up && ok_low && ok_len
+        && ok_sw && ok_ew && ok_ct && ok_idx_h && ok_idx_m && ok_cnt
+        && ok_trim && ok_empty && ok_blank
+        && ok_slice && ok_rep1 && ok_repA
+        && ok_padL && ok_padR && ok_padC && ok_trun && ok_trunS
+        && ok_split && ok_join && ok_lines && ok_words
+        && ok_rpt && ok_fmt
+        && ok_b64e && ok_b64d && ok_urle && ok_urld && ok_hex
+        && ok_qb && ok_qp
+        && ok_json && ok_b
+
   log.info(if ok then "DECK_CONF_OK:os.text" else "DECK_CONF_FAIL:os.text")
