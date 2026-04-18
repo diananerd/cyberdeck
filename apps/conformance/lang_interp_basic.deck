@@ -6,16 +6,48 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §2.6` string interpolation with `{expr}`.
+-- Old version used `${expr}` — not in §2.6 (that's JS / shell syntax,
+-- not Deck). Deck uses bare `{expr}` inside double-quoted strings and
+-- `"\{"` to escape a literal brace.
 @on launch:
   let name = "diana"
-  let n = 42
-  let s1 = "hello ${name}"
-  let s2 = "n = ${n}"
-  let s3 = "${n} + ${n} = ${n + n}"
+  let n    = 42
+
+  -- Basic.
+  let s1 = "hello {name}"
+  let s2 = "n = {n}"
+  let ok_basic = s1 == "hello diana" and s2 == "n = 42"
+
+  -- Expression interpolation, not just variables.
+  let s3 = "{n} + {n} = {n + n}"
+  let ok_expr = s3 == "42 + 42 = 84"
+
+  -- String with no interpolation is unchanged.
   let s4 = "no interp here"
-  let r1 = s1 == "hello diana"
-  let r2 = s2 == "n = 42"
-  let r3 = s3 == "42 + 42 = 84"
-  let r4 = s4 == "no interp here"
-  let ok = r1 && r2 && r3 && r4
+  let ok_none = s4 == "no interp here"
+
+  -- Function call inside interpolation.
+  let s5 = "length={text.length(name)}"
+  let ok_fn = s5 == "length=5"
+
+  -- Escape: `\{` produces a literal brace.
+  let s6 = "literal \{ brace"
+  let ok_esc = s6 == "literal { brace"
+
+  -- Multiple interpolations in one string.
+  let a = 1
+  let b = 2
+  let c = 3
+  let s7 = "{a}-{b}-{c}"
+  let ok_multi = s7 == "1-2-3"
+
+  -- Interpolation inside triple-quoted string.
+  let s8 = """
+x is {n}
+"""
+  let ok_multiline = text.contains(s8, "x is 42")
+
+  let ok = ok_basic and ok_expr and ok_none and ok_fn and ok_esc and ok_multi and ok_multiline
+
   log.info(if ok then "DECK_CONF_OK:lang.interp.basic" else "DECK_CONF_FAIL:lang.interp.basic")

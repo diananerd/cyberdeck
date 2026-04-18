@@ -6,28 +6,55 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §7.7` pipe `|>` + §7.9 error-propagating
+-- pipe `|>?` + §7.8 `is` operator. Old version used:
+--   - `${s}` interpolation (non-spec; §2.6 is `{s}`)
+--   - bare `some()` / `none` (non-spec; §3.7 is `:some x` / `:none`)
+--   - match arms without `|` and `=>` arrow (non-spec; §8.1 is `| … -> …`)
+--   - `!r` negation (non-spec; §7.3 is `not r`)
+-- All replaced with canonical spec syntax.
+
 fn double (x) = x * 2
-fn shout  (s) = "${s}!"
+fn shout  (s) = "{s}!"
 
 @on launch:
+  -- Plain pipe `|>`: value |> f is equivalent to f(value).
   let r1 = 21 |> double
   let r2 = "hello" |> shout
-  let r3 = 5 |> double |> double
-  let r4 = none |>? double
-  let r5 = some(7) |>? double
-  let r6 = 100 |>? double
-  let r7 = :ok is :ok
-  let r8 = :ok is :err
-  let r9 = 42 is 42
-  let r10 = :ready is :ready
-  let ok1 = r1 == 42 && r2 == "hello!" && r3 == 20
-  let r4_is_none = match r4
-    none => true
-    _    => false
-  let r5_unwrap = match r5
-    none => -1
-    _    => 14
-  let ok2 = r4_is_none && r5_unwrap == 14 && r6 == 200
-  let ok3 = r7 && (!r8) && r9 && r10
-  let ok = ok1 && ok2 && ok3
+  let r3 = 5 |> double |> double    -- chain
+
+  let ok_pipe = r1 == 42 and r2 == "hello!" and r3 == 20
+
+  -- Error-propagating pipe `|>?`:
+  --   :err e  -> short-circuit
+  --   :ok v   -> unwrap, pipe
+  --   :none   -> short-circuit
+  --   :some v -> unwrap, pipe
+  --   plain v -> runtime error (we don't probe that here)
+  let r4 = :none |>? double
+  let r5 = :some 7 |>? double
+  let r6 = :ok 100 |>? double
+  let r7 = :err :oops |>? double
+
+  let ok_none = r4 == :none
+  let ok_some = match r5
+                  | :some v -> v == 14
+                  | _        -> false
+  let ok_ok   = match r6
+                  | :ok v   -> v == 200
+                  | _        -> false
+  let ok_err  = match r7
+                  | :err :oops -> true
+                  | _           -> false
+
+  -- `is` operator (§7.8).
+  let ok_is_atom_hit   = :ok is :ok
+  let ok_is_atom_miss  = not (:ok is :err)
+  let ok_is_lit_int    = 42 is 42
+  let ok_is_atom2_hit  = :ready is :ready
+
+  let ok = ok_pipe
+        and ok_none and ok_some and ok_ok and ok_err
+        and ok_is_atom_hit and ok_is_atom_miss and ok_is_lit_int and ok_is_atom2_hit
+
   log.info(if ok then "DECK_CONF_OK:lang.pipe_is" else "DECK_CONF_FAIL:lang.pipe_is")
