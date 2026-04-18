@@ -593,7 +593,42 @@ Scoped declarations (§8.8) work identically inside `@flow`.
 
 In practice, almost everything the user sees is a `@flow`. Pure `@machine` stays for background state.
 
-### 9.3 Navigation Topology
+### 9.3 Sequential Step Sugar (auto-transition)
+
+When a `@flow` declares **only** `step :name -> …` blocks (no explicit `transition` declarations and no `state :name` with composition), the flow desugars to a linear state machine where each step's `on enter` body is the declared content and each step auto-transitions to the next in declaration order. The last step has no transition and the machine terminates in it.
+
+```
+@flow onboard
+  step :welcome ->
+    trigger "Continue" -> App.send(:start)
+  step :collect ->
+    form
+      on submit -> App.send(:submitted)
+      text :handle  hint: "Enter handle"  on -> …
+  step :done ->
+    rich_text "All set."
+```
+
+Desugars to:
+
+```
+@machine onboard
+  initial :welcome
+  state :welcome
+    on enter -> [content_of :welcome]
+    transition :__auto_1  from :welcome  to :collect
+  state :collect
+    on enter -> [content_of :collect]
+    transition :__auto_2  from :collect  to :done
+  state :done
+    on enter -> [content_of :done]
+```
+
+Auto-transitions are synthesized at parse time with internal event names (`:__auto_n`) and fire immediately after the source step's `on enter` body completes. Apps **cannot** intercept auto-transitions; they are intended for deterministic linear sequences (onboarding, wizards, boot flows).
+
+As soon as the `@flow` body contains a single explicit `transition` or `state` declaration, auto-transition is disabled for that flow — the flow is treated as full `@machine` equivalence (per §8) and every transition must be declared explicitly.
+
+### 9.4 Navigation Topology
 
 The root flow (named in `@app entry:`) expresses the app's navigation topology. States with `flow:` references compose it hierarchically. The OS infers navigation affordances from the structure:
 

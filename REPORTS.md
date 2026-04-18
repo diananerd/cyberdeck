@@ -228,6 +228,29 @@ User directive: "sigue iterando, no te detengas, esto es ad infinitum" — plus 
 
 - 2026-04-18 · layer 1 edit · `02-deck-app §8.5` rewritten to (a) clearly distinguish the three hook kinds (state-scoped enter/leave, transition-scoped before/after, machine-scoped `@machine.before`/`@machine.after`), (b) document the full execution order across all seven hook points, (c) specify the `:__init` pseudo-transition rule for initial-state entry (only `state.on enter` and `@machine.after` fire; not before-hooks, because no event was sent), (d) specify termination semantics and error-rollback behavior. Why: without this explicit order, implementations drift and tests hide the drift behind presence-checks (as the current impl proves).
 
+### Concept #5 — Parser coverage gap for @machine / @flow (layer 4 discovery)
+
+- 2026-04-18 · layer 4 bug discovered (flagged for future session) · `components/deck_runtime/src/deck_parser.c` `parse_machine_decl` (line 1180) + `parse_state_decl` (line 1138) + `parse_flow_decl` (line 1005) accept only a **toy subset** of the spec `@machine` / `@flow` grammar:
+  - **`parse_state_decl`**: body may contain only `on enter:` / `on leave:` / `transition :x` sub-blocks. Does NOT support state payloads `state :foo (field: Type)` (§02 §8.3) or state composition `state :foo flow: Other` / `state :foo machine: Other` (§02 §8.3, used by annex-a line 81, §09 §6 line 373-375).
+  - **`parse_machine_decl`**: `@machine` body may contain only `state` entries. Does NOT accept the top-level `initial :state_name` declaration (§02 §8.2 — currently inferred from first state, but explicit `initial` would fail to parse), does NOT accept top-level `transition :name from :x to :y` declarations (§02 §8.4 — transitions can only be declared inside a state body today).
+  - **`parse_flow_decl`**: `@flow` body may contain only `step :name:` entries. Does NOT accept `state`, `transition`, `initial`, or `on StreamName var ->` stream handlers (§02 §10, §09 §6 line 441-446 uses it). All annexes that use `@flow` with rich structure (annex-a launcher, annex-b taskman, annex-c settings, annex-d files, annex-xx bluesky) **would fail to load on the current runtime**.
+  - **Severity**: catastrophic. The spec'd app model is fundamentally unparseable. The current conformance passes because `apps/conformance/app_flow.deck` and `apps/conformance/app_machine.deck` use only the toy subset.
+  - **Why tests miss this**: the conformance harness uses minimal fixture apps that exercise only the parser's supported shape. Real apps (the annex examples) would not load. Classic A→B: "toy @flow parses → real @flow parses" (false).
+
+  Layer 4 fix (future multi-session scope):
+  1. Extend `parse_state_decl` to accept optional payload `(field: Type, ...)` after state name and optional `flow: Name` / `machine: Name` trailer.
+  2. Extend `parse_machine_decl` to accept top-level `initial :name` and top-level `transition :name ...` inside the body.
+  3. Extend `parse_flow_decl` to accept the same grammar as `@machine` plus `step` as sugar that desugars to `state` + `content =`. Keep the auto-transition chain behavior for the case where only sequential steps are declared (document this as a `@flow`-specific convenience in §02 §9 once it's in; currently undocumented).
+  4. `parse_transition_stmt` must support `when:`, `before:`, `after:`, `to history`, `from *` with `_` payload match, multiple `from`/`to` variants (§02 §8.4).
+
+  Layer 5 fix: add conformance tests that load each annex (a/b/c/d/xx) and verify parse → load succeeds without error.
+
+- 2026-04-18 · layer 4 bug discovered (smaller) · `apps/hello.deck` uses `@app requires: \n deck_level: 1` — nested `requires:` inside `@app`. But `02-deck-app §3` lists `@app` fields as `name/id/version/edition/entry/icon/tags/author/license/orientation` only. `@requires` is a **separate top-level annotation** per §4A. Either the parser accepts this non-spec form silently (bug), or `hello.deck` shouldn't parse. If it loads today (hello test PASSes), the parser is accepting undocumented syntax. Audit the `parse_app_decl` function before Layer 4 edits touch this area.
+
+- 2026-04-18 · layer 1 edit · `02-deck-app §9` needs a §9.4 to document the `@flow`-only auto-transition convenience (step[i] → step[i+1] when only sequential steps are declared, no explicit transitions). Current runtime implements it; spec doesn't describe it. Deferred: added to §9 later this session or next.
+
+- 2026-04-18 · session #2 close · committed concepts #2, #3, #4 as separate docs commits. Concept #5 (@flow / @machine parser coverage) documented; code fix is layer-4 future work spanning multiple sessions and requiring hardware validation. Also surfaced: `@app requires:` nested form may be silent-accepted by parser (layer-4 audit needed).
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.
