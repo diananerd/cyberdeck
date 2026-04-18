@@ -6,8 +6,81 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every method of the `fs` capability (03-deck-os §4.2 /
+-- 05-deck-os-api §4). Old version only exercised `exists` — a one-method
+-- test claiming to certify a ten-method capability. Classic A→B.
+--
+-- This deeper version uses sandboxed paths (relative — mapped to
+-- /sdcard/{app.id}/ per §4 of 05-deck-os-api). On boards that lack SD
+-- card mount, Result returns :err :io and the test FAILs cleanly.
 @on launch:
-  let ok_self    = fs.exists("/conformance/os_fs.deck")
-  let ok_missing = not fs.exists("/nope/ghost.deck")
-  let ok = ok_self && ok_missing
+  let probe     = "probe.txt"
+  let probe2    = "renamed.txt"
+  let subdir    = "nested"
+  let subfile   = "nested/child.txt"
+
+  -- Clean slate (ignore result — setup, not assertion).
+  let _ = fs.delete(probe)
+  let _ = fs.delete(probe2)
+  let _ = fs.delete(subfile)
+  let _ = fs.delete(subdir)
+
+  -- Writes.
+  let ok_write  = fs.write(probe, "hello deck") == :ok unit
+  let ok_exists = fs.exists(probe)
+  let ok_missing= not fs.exists("/nope/ghost.deck")
+
+  -- Read (str + bytes).
+  let ok_read   = fs.read(probe) == :ok "hello deck"
+  let ok_rbytes = match fs.read_bytes(probe)
+                    | :ok bs -> bs == [0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x20,
+                                        0x64, 0x65, 0x63, 0x6B]
+                    | :err _ -> false
+
+  -- Append.
+  let ok_append = fs.append(probe, "!") == :ok unit
+              && fs.read(probe) == :ok "hello deck!"
+
+  -- write_bytes round-trip.
+  let ok_wbytes = fs.write_bytes(probe, [0xDE, 0xAD, 0xBE, 0xEF]) == :ok unit
+              && fs.read_bytes(probe) == :ok [0xDE, 0xAD, 0xBE, 0xEF]
+
+  -- mkdir + write into subdir + list.
+  let ok_mkdir  = fs.mkdir(subdir) == :ok unit && fs.exists(subdir)
+  let ok_wsub   = fs.write(subfile, "inside") == :ok unit
+  let ok_list   = match fs.list(subdir)
+                    | :ok entries -> has_entry(entries, "child.txt", false)
+                    | :err _       -> false
+
+  -- move (rename) the root probe.
+  let ok_move   = fs.move(probe, probe2) == :ok unit
+              && not fs.exists(probe)
+              && fs.exists(probe2)
+
+  -- delete everything and verify.
+  let ok_del1   = fs.delete(probe2) == :ok unit && not fs.exists(probe2)
+  let ok_del2   = fs.delete(subfile) == :ok unit && not fs.exists(subfile)
+  let ok_del3   = fs.delete(subdir) == :ok unit && not fs.exists(subdir)
+
+  -- Error paths: reading nonexistent yields :err :not_found; deleting
+  -- already-missing yields :err :not_found.
+  let ok_enf    = match fs.read("truly_missing.txt")
+                    | :err :not_found -> true
+                    | _                -> false
+  let ok_denf   = match fs.delete("truly_missing.txt")
+                    | :err :not_found -> true
+                    | _                -> false
+
+  let ok = ok_write && ok_exists && ok_missing
+        && ok_read && ok_rbytes && ok_append && ok_wbytes
+        && ok_mkdir && ok_wsub && ok_list && ok_move
+        && ok_del1 && ok_del2 && ok_del3
+        && ok_enf && ok_denf
+
   log.info(if ok then "DECK_CONF_OK:os.fs" else "DECK_CONF_FAIL:os.fs")
+
+fn has_entry (entries: [FsEntry], name: str, is_dir: bool) -> bool =
+  match entries
+    | []     -> false
+    | h :: _ when h.name == name and h.is_dir == is_dir -> true
+    | _ :: r -> has_entry(r, name, is_dir)
