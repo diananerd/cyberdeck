@@ -655,6 +655,16 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         set_err(c, DECK_RT_STACK_OVERFLOW, n->line, n->col, "stack depth > %u", DECK_INTERP_STACK_MAX);
         c->depth--; return NULL;
     }
+    /* DL2 F21.3 — tail-position management.
+     *
+     * Save the inherited tail flag and restore on exit. Sub-expressions
+     * that are NOT in tail position (operands, args, conditions,
+     * scrutinees) reset the flag locally before recursing; subs that
+     * ARE in tail position (then/else of if, last item of do, body of
+     * let, arm body of match) re-assert `saved_tail` before recursing.
+     * The trampoline itself fires inside run_call when c->tail_pos is
+     * true at a fn-value call site. */
+    bool saved_tail = c->tail_pos;
     deck_value_t *r = NULL;
 
     switch (n->kind) {
@@ -673,9 +683,13 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             break;
         }
 
-        case AST_BINOP: r = run_binop(c, env, n); break;
+        case AST_BINOP:
+            c->tail_pos = false;
+            r = run_binop(c, env, n);
+            break;
 
         case AST_UNARY: {
+            c->tail_pos = false;
             deck_value_t *x = deck_interp_run(c, env, n->as.unary.expr);
             if (!x) break;
             if (n->as.unary.op == UNARY_NEG) {
@@ -689,9 +703,13 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             break;
         }
 
-        case AST_CALL: r = run_call(c, env, n); break;
+        case AST_CALL:
+            /* run_call inspects c->tail_pos to decide trampoline vs invoke. */
+            r = run_call(c, env, n);
+            break;
 
         case AST_DOT: {
+            c->tail_pos = false;
             char full[96];
             if (build_cap_name(n, full, sizeof(full))) {
                 const builtin_t *b = find_builtin(full);
@@ -702,28 +720,38 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         }
 
         case AST_IF: {
+            c->tail_pos = false;
             deck_value_t *cond = deck_interp_run(c, env, n->as.if_.cond);
             if (!cond) break;
             bool t = deck_is_truthy(cond);
             deck_release(cond);
+            c->tail_pos = saved_tail;     /* then/else inherit */
             r = deck_interp_run(c, env, t ? n->as.if_.then_ : n->as.if_.else_);
             break;
         }
 
         case AST_LET: {
+            c->tail_pos = false;
             deck_value_t *v = deck_interp_run(c, env, n->as.let.value);
             if (!v) break;
             deck_env_bind(c->arena, env, n->as.let.name, v);
             deck_release(v);
-            r = n->as.let.body ? deck_interp_run(c, env, n->as.let.body)
-                                : deck_retain(deck_unit());
+            if (n->as.let.body) {
+                c->tail_pos = saved_tail;  /* body inherits */
+                r = deck_interp_run(c, env, n->as.let.body);
+            } else {
+                r = deck_retain(deck_unit());
+            }
             break;
         }
 
         case AST_DO: {
             deck_value_t *last = deck_retain(deck_unit());
+            uint32_t last_i = n->as.do_.exprs.len;
             for (uint32_t i = 0; i < n->as.do_.exprs.len; i++) {
                 deck_release(last);
+                /* Only the LAST item is in tail position. */
+                c->tail_pos = (i + 1 == last_i) ? saved_tail : false;
                 last = deck_interp_run(c, env, n->as.do_.exprs.items[i]);
                 if (!last) { r = NULL; goto do_done; }
             }
@@ -772,13 +800,17 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             break;
     }
 
+    c->tail_pos = saved_tail;
     c->depth--;
     return r;
 }
 
 static deck_value_t *run_match(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)
 {
+    bool tail = c->tail_pos;
+    c->tail_pos = false;
     deck_value_t *scrut = deck_interp_run(c, env, n->as.match.scrut);
+    c->tail_pos = tail;
     if (!scrut) return NULL;
     deck_value_t *out = NULL;
     for (uint32_t i = 0; i < n->as.match.n_arms; i++) {
@@ -788,12 +820,15 @@ static deck_value_t *run_match(deck_interp_ctx_t *c, deck_env_t *env, const ast_
             continue;
         }
         if (n->as.match.arms[i].guard) {
+            c->tail_pos = false;
             deck_value_t *g = deck_interp_run(c, arm_env, n->as.match.arms[i].guard);
+            c->tail_pos = tail;
             if (!g) { deck_env_release(arm_env); deck_release(scrut); return NULL; }
             bool gt = deck_is_truthy(g);
             deck_release(g);
             if (!gt) { deck_env_release(arm_env); continue; }
         }
+        c->tail_pos = tail;     /* arm body inherits */
         out = deck_interp_run(c, arm_env, n->as.match.arms[i].body);
         deck_env_release(arm_env);
         goto done;
@@ -929,6 +964,19 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
  * arg evaluation fails, partially-bound entries are reachable via the
  * arena env until the arena resets (no extra heap leak vs the existing
  * env semantics). */
+/* Clear bindings of an env without releasing it. Used by the trampoline
+ * to re-use the call env for self-recursive tail calls. */
+static void env_unbind_all(deck_env_t *e)
+{
+    if (!e) return;
+    for (uint32_t i = 0; i < e->count; i++) {
+        deck_release(e->bindings[i].val);
+        e->bindings[i].val  = NULL;
+        e->bindings[i].name = NULL;
+    }
+    e->count = 0;
+}
+
 static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
                                     deck_value_t *fnv,
                                     const ast_node_t *call_site)
@@ -946,26 +994,142 @@ static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
                 (unsigned)argc, (unsigned)fnv->as.fn.n_params);
         return NULL;
     }
-    deck_env_t *call_env = deck_env_new(c->arena, fnv->as.fn.closure);
+    deck_value_t *current = deck_retain(fnv);
+    deck_env_t   *call_env = deck_env_new(c->arena, current->as.fn.closure);
     if (!call_env) {
+        deck_release(current);
         set_err(c, DECK_RT_NO_MEMORY, call_site->line, call_site->col,
                 "fn call: env alloc failed");
         return NULL;
     }
+    /* Initial arg bindings — args come from the *caller* env. */
+    bool save_tail = c->tail_pos;
+    c->tail_pos = false;
     for (uint32_t i = 0; i < argc; i++) {
         deck_value_t *v = deck_interp_run(c, env, call_site->as.call.args.items[i]);
-        if (!v) { deck_env_release(call_env); return NULL; }
-        deck_env_bind(c->arena, call_env, fnv->as.fn.params[i], v);
+        if (!v) {
+            c->tail_pos = save_tail;
+            deck_env_release(call_env);
+            deck_release(current);
+            return NULL;
+        }
+        deck_env_bind(c->arena, call_env, current->as.fn.params[i], v);
         deck_release(v);
     }
-    deck_value_t *result = deck_interp_run(c, call_env, fnv->as.fn.body);
+    c->tail_pos = save_tail;
+
+    /* Trampoline loop. Body runs with tail_pos = true; if a tail call is
+     * trapped into c->pending_tc, we rebind args (re-using the env on a
+     * self-recursive call, swapping it for a mutual call) and re-enter
+     * without growing the C stack. */
+    deck_value_t *result = NULL;
+    for (;;) {
+        bool prev = c->tail_pos;
+        c->tail_pos = true;
+        c->pending_tc.active = false;
+        result = deck_interp_run(c, call_env, current->as.fn.body);
+        c->tail_pos = prev;
+
+        if (!c->pending_tc.active) break;
+
+        /* A tail call was trapped — `result` is a placeholder unit. */
+        deck_value_t *next_fn = c->pending_tc.fn;       /* ownership: pending */
+        uint32_t      next_argc = c->pending_tc.argc;
+        if (result) deck_release(result);
+        result = NULL;
+        c->pending_tc.active = false;
+
+        if (next_fn->type != DECK_T_FN) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, c->pending_tc.line, c->pending_tc.col,
+                    "tail-call target is not a function");
+            for (uint32_t i = 0; i < next_argc; i++) deck_release(c->pending_tc.args[i]);
+            deck_release(next_fn);
+            break;
+        }
+        if (next_argc != next_fn->as.fn.n_params) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, c->pending_tc.line, c->pending_tc.col,
+                    "fn '%s': arity mismatch (got %u, want %u)",
+                    next_fn->as.fn.name ? next_fn->as.fn.name : "<anon>",
+                    (unsigned)next_argc, (unsigned)next_fn->as.fn.n_params);
+            for (uint32_t i = 0; i < next_argc; i++) deck_release(c->pending_tc.args[i]);
+            deck_release(next_fn);
+            break;
+        }
+
+        if (next_fn == current) {
+            /* Self-recursive tail call: keep env + fn; rebind args. */
+            env_unbind_all(call_env);
+            deck_release(next_fn);          /* duplicate retain from pending */
+        } else {
+            /* Mutual tail call: swap env to the new fn's closure. */
+            deck_env_release(call_env);
+            call_env = deck_env_new(c->arena, next_fn->as.fn.closure);
+            deck_release(current);
+            current = next_fn;              /* transfer pending retain */
+            if (!call_env) {
+                for (uint32_t i = 0; i < next_argc; i++) deck_release(c->pending_tc.args[i]);
+                set_err(c, DECK_RT_NO_MEMORY, c->pending_tc.line, c->pending_tc.col,
+                        "tail-call env alloc failed");
+                break;
+            }
+        }
+        for (uint32_t i = 0; i < next_argc; i++) {
+            deck_env_bind(c->arena, call_env, current->as.fn.params[i],
+                          c->pending_tc.args[i]);
+            deck_release(c->pending_tc.args[i]);
+        }
+    }
+
     deck_env_release(call_env);
+    deck_release(current);
     return result;
+}
+
+/* DL2 F21.3 — trap a fn-value call into c->pending_tc instead of
+ * recursing on the C stack. Caller must check c->pending_tc.active and
+ * the returned placeholder is unit. */
+static deck_value_t *trap_tail_call(deck_interp_ctx_t *c, deck_env_t *env,
+                                    deck_value_t *fnv,
+                                    const ast_node_t *call_site)
+{
+    uint32_t argc = call_site->as.call.args.len;
+    if (argc > DECK_INTERP_MAX_TC_ARGS) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                "tail call: too many args (max %u)",
+                (unsigned)DECK_INTERP_MAX_TC_ARGS);
+        return NULL;
+    }
+    bool save_tail = c->tail_pos;
+    c->tail_pos = false;        /* args are not in tail position */
+    deck_value_t *evaluated[DECK_INTERP_MAX_TC_ARGS] = {0};
+    for (uint32_t i = 0; i < argc; i++) {
+        evaluated[i] = deck_interp_run(c, env, call_site->as.call.args.items[i]);
+        if (!evaluated[i]) {
+            for (uint32_t k = 0; k < i; k++) deck_release(evaluated[k]);
+            c->tail_pos = save_tail;
+            return NULL;
+        }
+    }
+    c->tail_pos = save_tail;
+
+    c->pending_tc.fn   = deck_retain(fnv);
+    c->pending_tc.argc = argc;
+    c->pending_tc.line = call_site->line;
+    c->pending_tc.col  = call_site->col;
+    for (uint32_t i = 0; i < argc; i++) c->pending_tc.args[i] = evaluated[i];
+    c->pending_tc.active = true;
+    return deck_retain(deck_unit());   /* placeholder; trampoline discards it */
 }
 
 static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)
 {
     const ast_node_t *fn = n->as.call.fn;
+    bool tail = c->tail_pos;
+    /* Args + callee evaluation are never in tail position. We restore the
+     * incoming flag before any potential tail-call dispatch so the trap
+     * decision sees the right value. */
+    c->tail_pos = false;
+
     /* Bare ident: prefer user-defined fn binding in env over builtins.
      * (Builtins are namespaced via dot for capabilities; bare builtins are
      * the type conversions, which would never collide with a user fn name
@@ -973,6 +1137,8 @@ static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
     if (fn && fn->kind == AST_IDENT) {
         deck_value_t *bound = deck_env_lookup(env, fn->as.s);
         if (bound && bound->type == DECK_T_FN) {
+            c->tail_pos = tail;
+            if (tail) return trap_tail_call(c, env, bound, n);
             return invoke_user_fn(c, env, bound, n);
         }
         const builtin_t *b = find_bare_builtin(fn->as.s);
@@ -1029,7 +1195,10 @@ static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             deck_release(callee);
             return NULL;
         }
-        deck_value_t *r = invoke_user_fn(c, env, callee, n);
+        c->tail_pos = tail;
+        deck_value_t *r;
+        if (tail) r = trap_tail_call(c, env, callee, n);
+        else      r = invoke_user_fn(c, env, callee, n);
         deck_release(callee);
         return r;
     }

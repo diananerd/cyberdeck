@@ -35,7 +35,7 @@ static row_t ROWS[] = {
     { "language.lex",  "lexer (36)",            deck_lexer_run_selftest,  false },
     { "language.ast",  "parser (51)",           deck_parser_run_selftest, false },
     { "loader",        "stages 0-9 (18)",       deck_loader_run_selftest, false },
-    { "language.eval", "interp + machine (42)", deck_interp_run_selftest, false },
+    { "language.eval", "interp + machine (45)", deck_interp_run_selftest, false },
 };
 
 #define N_ROWS (sizeof(ROWS) / sizeof(ROWS[0]))
@@ -123,6 +123,9 @@ static deck_test_t DECK_TESTS[] = {
     { "lang.lambda.closure",      "/conformance/lang_lambda_closure.deck",      "DECK_CONF_OK:lang.lambda.closure",      DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "lang.lambda.higher_order", "/conformance/lang_lambda_higher_order.deck", "DECK_CONF_OK:lang.lambda.higher_order", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "lang.lambda.inline",       "/conformance/lang_lambda_inline.deck",       "DECK_CONF_OK:lang.lambda.inline",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
+    /* DL2 F21.3 — tail-call optimization (deep self + mutual recursion). */
+    { "lang.tco.deep", "/conformance/lang_tco_deep.deck", "DECK_CONF_OK:lang.tco.deep", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,

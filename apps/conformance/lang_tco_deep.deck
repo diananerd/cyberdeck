@@ -1,0 +1,24 @@
+@app
+  name: "Conf lang.tco.deep"
+  id: "conf.lang.tco.deep"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn count_down (n) =
+  if n <= 0 then 0 else count_down(n - 1)
+
+fn sum_to (n, acc) =
+  if n == 0 then acc else sum_to(n - 1, acc + n)
+
+fn is_even (n) = if n == 0 then true else is_odd(n - 1)
+fn is_odd  (n) = if n == 0 then false else is_even(n - 1)
+
+@on launch:
+  let r1 = count_down(2000) == 0
+  let r2 = sum_to(100, 0) == 5050
+  let r3 = is_even(2000)
+  let r4 = is_odd(1999)
+  let ok = r1 && r2 && r3 && r4
+  log.info(if ok then "DECK_CONF_OK:lang.tco.deep" else "DECK_CONF_FAIL:lang.tco.deep")

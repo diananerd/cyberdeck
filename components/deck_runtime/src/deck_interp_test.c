@@ -238,6 +238,43 @@ static bool t_lambda_higher_order(const char *name)
     return true;
 }
 
+/* ---- DL2 F21.3: tail-call optimization ---- */
+static bool t_tco_self_deep(const char *name)
+{
+    /* Without TCO this self-tail-recursion would blow the C stack well
+     * before n=2000; with the trampoline the loop is flat. */
+    const char *src = APP_HDR_DL1
+        "fn count_down (n) = if n <= 0 then 0 else count_down(n - 1)\n"
+        "@on launch:\n"
+        "  log.info(str(count_down(2000)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "deep self tail recursion");
+    return true;
+}
+static bool t_tco_self_acc(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "fn sum_to (n, acc) = if n == 0 then acc else sum_to(n - 1, acc + n)\n"
+        "@on launch:\n"
+        "  log.info(str(sum_to(1000, 0)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "tail accumulator");
+    return true;
+}
+static bool t_tco_mutual(const char *name)
+{
+    /* Mutual tail recursion via the trampoline: is_even/is_odd swap
+     * frames per iteration without growing the C stack. */
+    const char *src = APP_HDR_DL1
+        "fn is_even (n) = if n == 0 then true else is_odd(n - 1)\n"
+        "fn is_odd  (n) = if n == 0 then false else is_even(n - 1)\n"
+        "@on launch:\n"
+        "  log.info(if is_even(1500) then \"yes\" else \"no\")\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "mutual TCO");
+    return true;
+}
+
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
 
@@ -284,6 +321,9 @@ static const case_t CASES[] = {
     { "lambda_closure",      t_lambda_closure },
     { "lambda_inline_call",  t_lambda_inline_call },
     { "lambda_higher_order", t_lambda_higher_order },
+    { "tco_self_deep",       t_tco_self_deep },
+    { "tco_self_acc",        t_tco_self_acc },
+    { "tco_mutual",          t_tco_mutual },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

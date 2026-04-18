@@ -20,19 +20,39 @@
 extern "C" {
 #endif
 
-#define DECK_INTERP_STACK_MAX  512
-#define DECK_INTERP_ERR_MSG    160
+#define DECK_INTERP_STACK_MAX     512
+#define DECK_INTERP_ERR_MSG       160
+#define DECK_INTERP_MAX_TC_ARGS   16
 
 typedef struct deck_env deck_env_t;
 
+/* DL2 F21.3 — pending tail call.
+ *
+ * When a fn call is in tail position (relative to the enclosing fn), the
+ * interpreter does not invoke the callee recursively on the C stack —
+ * instead it stashes the resolved fn value plus evaluated args here, and
+ * returns a placeholder. The enclosing invoke_user_fn loop picks the
+ * pending entry up, rebinds args (re-using the env for self-recursion,
+ * swapping it for mutual-recursion), and re-runs the body. */
 typedef struct {
-    deck_arena_t *arena;
-    deck_env_t   *global;
-    uint32_t      depth;
-    deck_err_t    err;
-    uint32_t      err_line;
-    uint32_t      err_col;
-    char          err_msg[DECK_INTERP_ERR_MSG];
+    bool          active;
+    deck_value_t *fn;                                  /* retained */
+    deck_value_t *args[DECK_INTERP_MAX_TC_ARGS];       /* retained */
+    uint32_t      argc;
+    uint32_t      line;
+    uint32_t      col;
+} deck_pending_tc_t;
+
+typedef struct {
+    deck_arena_t      *arena;
+    deck_env_t        *global;
+    uint32_t           depth;
+    deck_err_t         err;
+    uint32_t           err_line;
+    uint32_t           err_col;
+    char               err_msg[DECK_INTERP_ERR_MSG];
+    bool               tail_pos;     /* DL2 F21.3: current AST node is in tail position */
+    deck_pending_tc_t  pending_tc;
 } deck_interp_ctx_t;
 
 /* Initialize interpreter context. global env starts empty. */
