@@ -6,10 +6,72 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: the `time` surface (03-deck-os §3 @builtin time). Old
+-- version exercised ONLY `now()` monotonicity — 2 assertions for a
+-- ~12-method API. Classic A→B.
+--
+-- Two-call monotonicity is testable here; NTP sync is not (requires
+-- WiFi + DL2). Duration arithmetic is pure, so it runs on any level.
 @on launch:
-  let t1      = time.now()
-  let t2      = time.now()
-  let ok_mono = t2 >= t1
-  let ok_pos  = t1 > 0
+  -- now() basic sanity.
+  let t1       = time.now()
+  let t2       = time.now()
+  let ok_mono  = t2 >= t1
+  let ok_pos   = t1 > 0
+
+  -- Duration arithmetic.
+  let d_short  = 5s
+  let d_long   = 2m
+  let ok_add   = time.after(time.add(t1, d_short), t1)
+  let ok_sub   = time.before(time.sub(t1, d_short), t1)
+
+  -- since / until: delta reflects elapsed / upcoming.
+  let _pause   = time.now()
+  let elapsed  = time.since(t1)
+  let ok_since = elapsed >= 0
+  let future   = time.add(t1, d_long)
+  let ok_until = time.until(future) > 0
+
+  -- before / after are total ordering on Timestamps.
+  let ok_ord   = time.before(t1, future)
+              && time.after(future, t1)
+              && not time.before(future, t1)
+              && not time.after(t1, future)
+
+  -- ISO-8601 round-trip.
+  let iso_str  = time.to_iso(t1)
+  let ok_iso   = match time.from_iso(iso_str)
+                   | :some parsed ->
+                       let delta = time.since(parsed)
+                       math.abs_int(delta) < 2   -- parsed within 2s of t1
+                   | :none -> false
+
+  -- Custom format round-trip.
+  let fmt      = "%Y-%m-%dT%H:%M:%SZ"
+  let custom   = time.format(t1, fmt)
+  let ok_fmt   = match time.parse(custom, fmt)
+                   | :some parsed ->
+                       let delta = time.since(parsed)
+                       math.abs_int(delta) < 2
+                   | :none -> false
+
+  -- Invalid parse returns :none.
+  let ok_bad   = time.from_iso("not-a-timestamp") == :none
+              && time.parse("garbage", fmt)        == :none
+
+  -- Date decomposition returns an expected shape.
+  let parts    = time.date_parts(t1)
+  let ok_parts = match parts.year
+                   | :some y -> y >= 2024 && y <= 2200
+                   | :none   -> false
+
+  -- epoch() returns the zero timestamp (UNIX 1970-01-01).
+  let ep       = time.epoch()
+  let ok_ep    = ep >= 0 && time.before(ep, t1)
+
   let ok = ok_mono && ok_pos
+        && ok_add && ok_sub && ok_since && ok_until && ok_ord
+        && ok_iso && ok_fmt && ok_bad
+        && ok_parts && ok_ep
+
   log.info(if ok then "DECK_CONF_OK:os.time" else "DECK_CONF_FAIL:os.time")
