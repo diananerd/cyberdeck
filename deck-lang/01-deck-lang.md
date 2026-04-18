@@ -11,7 +11,7 @@ Deck is a domain-specific, interpreted, purely functional language for embedded 
 - One way to express each concept — no syntactic alternatives
 - Pure by default; effects are explicit and named
 - No null, no exceptions, no mutation, no inheritance, no classes
-- `match` is the only branching construct — exhaustive, multi-arm, with guards. No `if/then/else`, no switch, no ternary.
+- `match` is the only semantic branching construct — exhaustive, multi-arm, with guards. No switch, no ternary. An `if cond then a else b` expression is **accepted as sugar** for `match cond | true -> a | false -> b` (see §7.11); it desugars at parse time and carries no additional semantics.
 - The interpreter controls everything; the developer describes intentions
 - Every type error surfaces at load time with an actionable message
 
@@ -124,11 +124,12 @@ Used in `@config range:` and pattern guards. Not a collection type.
 ```
 let  fn  match  when  is  as  and  or  not  with
 from  to  on  every  optional  true  false  unit  do
-for
+for  if  then  else
 ```
 
 `when` and `for` are valid both as pattern-match guards (§8) and as content-body constructs (§7.6).
 `for` is only a keyword; it is not an expression in the general sense — it is restricted to content bodies and `do` blocks.
+`if` / `then` / `else` form the sugar expression documented in §7.10 — the parser desugars them to a two-arm `match` on a bool.
 
 ---
 
@@ -607,6 +608,24 @@ fn process (input: str) -> Result Data ProcessError =
   |>? validate
   |>? transform
 ```
+
+### 7.10 If / Then / Else (sugar over `match`)
+
+```
+if cond then a else b
+```
+
+Desugars at parse time to:
+
+```
+match cond
+  | true  -> a
+  | false -> b
+```
+
+`cond` must be `bool`; a non-bool condition is a load-time type error. Both branches must produce the same type, enforced by the same check `match` uses. There is no multi-arm `else if` grammar — writing `if c1 then a else if c2 then b else c` nests as `if c1 then a else (if c2 then b else c)` and desugars to nested two-arm matches. For three-or-more branches, prefer `match` directly.
+
+`if/then/else` is sugar only — it adds no new semantics, effects, or control flow. It exists because `log.info(if ok then "OK" else "FAIL")` and similar one-line conditional expressions read more naturally than the two-line match form. For anything non-trivial — pattern matching on atom variants, destructuring records, multi-arm dispatch — use `match` directly.
 
 ---
 
