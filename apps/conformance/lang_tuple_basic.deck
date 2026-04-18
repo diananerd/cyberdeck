@@ -6,19 +6,53 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: tuple literal + field access (`.N`) + destructuring in
+-- `let` and `match` (§8 + §11.4). Old version covered field access only.
+
 fn pair (a, b) = (a, b)
 fn triple () = (1, "two", :three)
+fn swap (t) = match t | (a, b) -> (b, a)
 
 @on launch:
+  -- Construction.
   let p = pair(10, 20)
   let t = triple()
-  let r1 = p.0 == 10
-  let r2 = p.1 == 20
-  let r3 = t.0 == 1
-  let r4 = t.1 == "two"
-  let r5 = t.2 == :three
-  let mixed = (true, [1, 2], 3.14)
-  let r6 = mixed.0
-  let r7 = list.len(mixed.1) == 2
-  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7
+
+  -- Field access by index.
+  let ok_p0  = p.0 == 10
+  let ok_p1  = p.1 == 20
+  let ok_t0  = t.0 == 1
+  let ok_t1  = t.1 == "two"
+  let ok_t2  = t.2 == :three
+
+  -- Heterogeneous content.
+  let mixed = (true, [1, 2], 3.14, "ok")
+  let ok_het = mixed.0
+           and list.len(mixed.1) == 2
+           and mixed.2 == 3.14
+           and mixed.3 == "ok"
+
+  -- Destructuring in let.
+  let (x, y) = pair(7, 8)
+  let ok_lett = x == 7 and y == 8
+
+  -- Destructuring in match.
+  let swapped = swap((100, 200))
+  let ok_swap = swapped.0 == 200 and swapped.1 == 100
+
+  -- Equality is structural.
+  let ok_eq = (1, 2) == (1, 2)
+           and (1, 2) != (2, 1)
+           and (1, "a") != (1, "b")
+
+  -- Nested tuples.
+  let nested = ((1, 2), (3, 4))
+  let ok_nest = nested.0.0 == 1
+            and nested.0.1 == 2
+            and nested.1.0 == 3
+            and nested.1.1 == 4
+
+  let ok = ok_p0 and ok_p1 and ok_t0 and ok_t1 and ok_t2
+        and ok_het and ok_lett and ok_swap and ok_eq and ok_nest
+
   log.info(if ok then "DECK_CONF_OK:lang.tuple.basic" else "DECK_CONF_FAIL:lang.tuple.basic")

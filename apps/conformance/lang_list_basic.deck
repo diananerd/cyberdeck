@@ -6,20 +6,58 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: list literal + core list stdlib (§11.2). Old version
+-- used match arms without `|` and atom `none` without `:` (both non-
+-- spec). This uses canonical forms.
 @on launch:
-  let xs = [10, 20, 30, 40, 50]
+  let xs    = [10, 20, 30, 40, 50]
   let empty = []
+  let one   = [42]
   let mixed = [1, "two", :three, true]
-  let ok1 = list.len(xs) == 5
-  let ok2 = list.len(empty) == 0
-  let ok3 = list.len(mixed) == 4
-  let h = match list.head(xs)
-    none => -1
-    _    => 999
-  let ok4 = h == 999
-  let oob = match list.get(xs, 99)
-    none => :missing
-    _    => :found
-  let ok5 = oob == :missing
-  let ok = ok1 && ok2 && ok3 && ok4 && ok5
+
+  -- Length.
+  let ok_len = list.len(xs)    == 5
+            and list.len(empty) == 0
+            and list.len(one)   == 1
+            and list.len(mixed) == 4
+
+  -- Head / tail.
+  let ok_head = match list.head(xs)
+                  | :some h -> h == 10
+                  | :none   -> false
+  let ok_hemp = list.head(empty) == :none
+
+  -- Get by index.
+  let ok_get0 = match list.get(xs, 0)
+                  | :some v -> v == 10
+                  | :none   -> false
+  let ok_getN = match list.get(xs, 4)
+                  | :some v -> v == 50
+                  | :none   -> false
+  let ok_oob  = list.get(xs, 99) == :none
+  let ok_neg  = list.get(xs, -1) == :none
+
+  -- Contains (equality-based).
+  let ok_has  = list.contains(xs, 30)
+            and not list.contains(xs, 99)
+
+  -- Map / filter / reduce (§11.2).
+  let doubled = list.map(xs, (n) -> n * 2)
+  let ok_map  = doubled == [20, 40, 60, 80, 100]
+
+  let evens   = list.filter(xs, (n) -> n % 20 == 0)
+  let ok_filt = evens == [20, 40]
+
+  let sum     = list.reduce(xs, 0, (acc, n) -> acc + n)
+  let ok_red  = sum == 150
+
+  -- Concat (++).
+  let ok_cat  = [1, 2] ++ [3, 4] == [1, 2, 3, 4]
+            and [] ++ [1] == [1]
+            and [1] ++ [] == [1]
+
+  let ok = ok_len and ok_head and ok_hemp
+        and ok_get0 and ok_getN and ok_oob and ok_neg
+        and ok_has and ok_map and ok_filt and ok_red and ok_cat
+
   log.info(if ok then "DECK_CONF_OK:lang.list.basic" else "DECK_CONF_FAIL:lang.list.basic")

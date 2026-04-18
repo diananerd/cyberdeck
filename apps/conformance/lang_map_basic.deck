@@ -6,28 +6,57 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: map literal + map stdlib (§11.3). Old version used
+-- match arms without `|` and bare `none` without `:` (non-spec). Old
+-- also only covered 3 ops. This covers len/get/put/delete/has/keys/
+-- values/merge + both key shapes (str and atom) + immutability.
 @on launch:
+  -- Atom-keyed map (common for semantic keys).
   let m = {:name: "diana", :age: 30, :role: :admin}
-  let r1 = map.len(m) == 3
-  let name = match map.get(m, :name)
-    none => "?"
-    _    => "diana"
-  let r2 = name == "diana"
-  let mising = match map.get(m, :missing)
-    none => :nope
-    _    => :found
-  let r3 = mising == :nope
-  let m2 = map.put(m, :role, :user)
-  let role2 = match map.get(m2, :role)
-    none => :nope
-    _    => :user
-  let r4 = role2 == :user
-  let role_orig = match map.get(m, :role)
-    none => :nope
-    _    => :admin
-  let r5 = role_orig == :admin
-  let r6 = list.len(map.keys(m)) == 3
-  let empty = {}
-  let r7 = map.len(empty) == 0
-  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7
+
+  -- len.
+  let ok_len  = map.len(m) == 3
+             and map.len({}) == 0
+
+  -- get :some / :none.
+  let ok_hit  = match map.get(m, :name)
+                  | :some v -> v == "diana"
+                  | :none   -> false
+  let ok_miss = map.get(m, :missing) == :none
+
+  -- has.
+  let ok_has  = map.has(m, :age)
+             and not map.has(m, :missing)
+
+  -- put returns a NEW map; original is unchanged (immutability).
+  let m2      = map.put(m, :role, :user)
+  let ok_put  = map.get(m2, :role) == :some :user
+  let ok_orig = map.get(m, :role)  == :some :admin   -- m unchanged
+
+  -- delete.
+  let m3      = map.delete(m, :age)
+  let ok_del  = map.len(m3) == 2 and not map.has(m3, :age)
+
+  -- keys / values.
+  let ok_keys = list.len(map.keys(m)) == 3
+  let ok_vals = list.len(map.values(m)) == 3
+
+  -- Field access via dot (spec §11.3 / §4.2 record-style).
+  let ok_dot  = m.name == "diana" and m.age == 30
+
+  -- Str-keyed map.
+  let s_map   = {"k1": 100, "k2": 200}
+  let ok_str  = map.get(s_map, "k1") == :some 100
+             and map.get(s_map, "k2") == :some 200
+
+  -- Merge two maps (right wins on conflicts).
+  let merged  = map.merge({:a: 1, :b: 2}, {:b: 20, :c: 30})
+  let ok_mrg  = map.get(merged, :a) == :some 1
+             and map.get(merged, :b) == :some 20
+             and map.get(merged, :c) == :some 30
+
+  let ok = ok_len and ok_hit and ok_miss
+        and ok_has and ok_put and ok_orig and ok_del
+        and ok_keys and ok_vals and ok_dot and ok_str and ok_mrg
+
   log.info(if ok then "DECK_CONF_OK:lang.map.basic" else "DECK_CONF_FAIL:lang.map.basic")
