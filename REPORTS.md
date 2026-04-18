@@ -280,6 +280,8 @@ User directive: "sigue iterando, no te detengas, esto es ad infinitum" — plus 
 
 Between sessions, re-read `REPORTS.md` top-to-bottom. The User framing at the top is the standing brief. The iteration journal tracks every edit with rationale.
 
+- 2026-04-18 · layer 1 edit · `02-deck-app §12.2` gained a concrete example showing `loading` in a `:fetching` step and `error reason:` in a `:failed` step, plus an explicit note that `loading` has zero fields and `error` has only `reason:` — all presentation (colour, icon, tone, dismissal) is bridge decision. Why: the minimal spec text invited implementers to add bridge-hint fields over time; a clear example pins the intent down. Keeps drift at bay.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.

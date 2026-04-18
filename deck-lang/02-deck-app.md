@@ -975,6 +975,23 @@ error reason: str_expr      -- something went wrong; the app declares WHY so the
 
 The rename from `message:` to `reason:` is deliberate: the app is not authoring a "message to display" (that would be a presentation concern); it is declaring the **reason** the error exists. A voice bridge may speak it; a screen bridge may dim-wrap it; a logger bridge may pipe it to telemetry. All three consume the same semantic reason.
 
+Example — a fetch flow with a loading view during the request and an error view on failure:
+
+```
+step :fetching ->
+  loading
+
+step :loaded s ->
+  s.title
+  rich_text s.body
+
+step :failed e ->
+  error reason: e.why
+  trigger "Try again" -> Fetch.send(:retry)
+```
+
+Neither `loading` nor `error` carries any presentation field. `loading` has no fields at all — the bridge picks the affordance (animated cursor on this device, spoken "One moment…" on a voice device, a single underscore on a terminal). `error` has the single semantic `reason:` and nothing else; colour, icon, tone, dismissal timing are all bridge decisions.
+
 ---
 
 ### 12.3 Content
