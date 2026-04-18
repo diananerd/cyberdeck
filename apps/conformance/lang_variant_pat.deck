@@ -1,0 +1,32 @@
+@app
+  name: "Conf lang.variant.pat"
+  id: "conf.lang.variant.pat"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn safe_div (a, b) =
+  if b == 0 then err("div0") else ok(a / b)
+
+@on launch:
+  let r1 = match some(42)
+    some(x) => x
+    none    => -1
+    _       => -2
+  let r2 = match none
+    some(x) => x
+    none    => 99
+    _       => -1
+  let r3 = match safe_div(10, 2)
+    ok(v)  => v
+    err(e) => -1
+    _      => 0
+  let r4 = match safe_div(10, 0)
+    ok(v)  => v
+    err(e) => 999
+    _      => 0
+  let xs = list.map([1, 2, 3], n -> some(n * n))
+  let r5 = list.len(xs) == 3
+  let ok_all = r1 == 42 && r2 == 99 && r3 == 5 && r4 == 999 && r5
+  log.info(if ok_all then "DECK_CONF_OK:lang.variant.pat" else "DECK_CONF_FAIL:lang.variant.pat")

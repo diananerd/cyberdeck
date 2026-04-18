@@ -53,6 +53,7 @@ typedef enum {
     AST_PAT_LIT,
     AST_PAT_WILD,
     AST_PAT_IDENT,
+    AST_PAT_VARIANT,    /* DL2 F22 — `some(x)`, `ok(v)`, `err(e)` */
 
     /* statements */
     AST_SEND,
@@ -132,6 +133,11 @@ struct ast_node {
 
         ast_node_t         *pat_lit;                 /* AST_PAT_LIT -> inner literal */
         const char         *pat_ident;               /* AST_PAT_IDENT */
+        struct {
+            const char *ctor;
+            ast_node_t **subs;
+            uint32_t     n_subs;
+        } pat_variant;                               /* AST_PAT_VARIANT — ctor(sub1, sub2, ...) */
 
         struct { const char *event; }                send;
         struct { const char *target; }               transition;

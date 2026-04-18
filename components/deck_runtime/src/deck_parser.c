@@ -499,6 +499,38 @@ ast_node_t *deck_parser_parse_expr(deck_parser_t *p)
 
 static ast_node_t *parse_pattern(deck_parser_t *p)
 {
+    /* DL2 F22 — variant patterns `some(x)`, `ok(v)`, etc. detected by
+     * IDENT-or-KW-some followed by `(`. Treat TOK_KW_SOME as an ident
+     * for this purpose. */
+    bool ident_like = (p->cur.type == TOK_IDENT || p->cur.type == TOK_KW_SOME);
+    if (ident_like && peek_next_tok(p) == TOK_LPAREN) {
+        const char *ctor = p->cur.text;
+        if (p->cur.type == TOK_KW_SOME) ctor = deck_intern_cstr("some");
+        uint32_t ln = p->cur.line, co = p->cur.col;
+        advance(p); advance(p);   /* ident, ( */
+        ast_node_t *subs[8];
+        uint32_t n_subs = 0;
+        if (!at(p, TOK_RPAREN)) {
+            for (;;) {
+                if (n_subs >= 8) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR, "variant pattern: too many subs (max 8)");
+                    return NULL;
+                }
+                ast_node_t *s = parse_pattern(p);
+                if (!s) return NULL;
+                subs[n_subs++] = s;
+                if (!at(p, TOK_COMMA)) break;
+                advance(p);
+            }
+        }
+        if (!expect(p, TOK_RPAREN, "expected ')' in variant pattern")) return NULL;
+        ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+        if (!n) return NULL;
+        n->as.pat_variant.ctor   = ctor;
+        n->as.pat_variant.subs   = deck_arena_memdup(p->arena, subs, n_subs * sizeof(ast_node_t *));
+        n->as.pat_variant.n_subs = n_subs;
+        return n;
+    }
     switch (p->cur.type) {
         case TOK_IDENT: {
             /* "_" wildcard or bind ident */

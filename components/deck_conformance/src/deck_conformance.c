@@ -145,6 +145,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F22 — stdlib (list.map/filter/reduce + Result + type inspection). */
     { "lang.stdlib.basic","/conformance/lang_stdlib_basic.deck","DECK_CONF_OK:lang.stdlib.basic",DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F22 — variant patterns some(x)/ok(v)/err(e). */
+    { "lang.variant.pat", "/conformance/lang_variant_pat.deck", "DECK_CONF_OK:lang.variant.pat", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },
