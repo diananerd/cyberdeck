@@ -29,6 +29,8 @@
 #include "drivers/deck_sdi_touch.h"
 
 #include "deck_runtime.h"
+#include "deck_dvc.h"
+#include "deck_bridge_ui.h"
 #include "deck_conformance.h"
 #include "deck_shell.h"
 
@@ -62,6 +64,14 @@ static void run_one(const char *name, deck_sdi_err_t (*fn)(void))
     }
 }
 
+static void run_dvc_selftest(void)
+{
+    deck_err_t r = deck_dvc_selftest();
+    if (r != DECK_RT_OK) {
+        ESP_LOGE(TAG, "dvc selftest FAILED: %s", deck_err_name(r));
+    }
+}
+
 static void run_sdi_selftests(void)
 {
     ESP_LOGI(TAG, "--- SDI selftests ---");
@@ -76,9 +86,10 @@ static void run_sdi_selftests(void)
     run_one("http",      deck_sdi_http_selftest);
     run_one("battery",   deck_sdi_battery_selftest);
     run_one("security",  deck_sdi_security_selftest);
-    run_one("bridge_ui", deck_sdi_bridge_ui_selftest);
     run_one("display",   deck_sdi_display_selftest);
     run_one("touch",     deck_sdi_touch_selftest);
+    run_one("bridge_ui", deck_bridge_ui_selftest);
+    run_dvc_selftest();
     ESP_LOGI(TAG, "--- SDI selftests done ---");
 
     (void)deck_conformance_run();
@@ -119,9 +130,15 @@ void app_main(void)
     (void)deck_sdi_http_register_esp32();
     (void)deck_sdi_battery_register_esp32();
     (void)deck_sdi_security_register_esp32();
-    (void)deck_sdi_bridge_ui_register_skeleton();
     (void)deck_sdi_display_register_esp32();
     (void)deck_sdi_touch_register_esp32();
+    /* bridge.ui must register AFTER display + touch because its LVGL
+     * init pulls those drivers up. */
+    (void)deck_bridge_ui_register_lvgl();
+    /* Statusbar + navbar mount on the active screen. F27 wires real
+     * back/home callbacks into the activity stack; for now they log only. */
+    (void)deck_bridge_ui_statusbar_init();
+    (void)deck_bridge_ui_navbar_init(NULL, NULL);
     deck_sdi_log_registered();
 
     /* Runtime init — heap hard-limit for DL1 is 64 KB (spec 16 §4.4). */

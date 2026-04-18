@@ -90,6 +90,15 @@ deck_sdi_err_t deck_sdi_display_register_esp32(void)
     return deck_sdi_register(&driver);
 }
 
+/* Reference-platform escape hatch for deck_bridge_ui — surfaces the
+ * underlying esp_lcd panel so the LVGL flush callback can issue
+ * draw_bitmap calls. NOT part of the SDI vtable — opaque to portable
+ * consumers. Returns NULL if init() hasn't been called. */
+esp_lcd_panel_handle_t deck_sdi_display_panel_handle(void)
+{
+    return s_panel;
+}
+
 /* ---------- display.panel wrappers ---------- */
 
 static const deck_sdi_display_vtable_t *disp_vt(void **ctx_out)

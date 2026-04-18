@@ -14,6 +14,7 @@ idf_component_register(
          "src/deck_interp.c"
          "src/deck_interp_test.c"
          "src/deck_runtime.c"
+         "src/deck_dvc.c"
     INCLUDE_DIRS "include"
     REQUIRES log deck_sdi esp_hw_support
 )

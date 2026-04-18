@@ -2,6 +2,85 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.8.5] — 2026-04-17 — F26 Bridge UI DVC + LVGL
+
+LVGL 8.4 entra al proyecto. Aterriza la cadena completa runtime → DVC →
+LVGL widgets, statusbar/navbar visibles, activity stack con lifecycle,
+y rotación de display.
+
+### Added
+
+**F26.1 DVC wire format + encoder.** `deck_dvc.h` define el catálogo de
+nodos (DVC_EMPTY..DVC_CUSTOM = 0..33), tipos de attr (BOOL/I64/F64/STR/
+ATOM/LIST_STR), envelope `magic=0xDC0E version=1`. `deck_dvc.c` implementa
+encoder little-endian + decoder + `tree_equal` + selftest round-trip
+(227 bytes, 4 nodes, 8 attrs). Todo sobre arena bump-allocator.
+
+**F26.2 deck_bridge_ui component + LVGL.** Nuevo componente registra
+`bridge.ui` v1.0.0 reemplazando el skeleton F25.7. Pull de
+`lvgl/lvgl ~8.4.0` como managed dep. LVGL task pinned a Core 1 (8KB
+stack), tick timer cada 5ms vía esp_timer, draw buffers 75KB×2 en PSRAM,
+ui_lock/unlock recursive mutex. Display flush vía
+`esp_lcd_panel_draw_bitmap`, touch indev vía `deck_sdi_touch_read`.
+Reference-platform escape hatch `deck_sdi_display_panel_handle()` para
+exponer el `esp_lcd_panel_handle_t` al bridge.
+
+**F26.3 widgets básicos.** Decoder LVGL para GROUP (bordered card),
+COLUMN/ROW (flex containers), LABEL/DATA_ROW, TRIGGER/NAVIGATE
+(button con variant primary/outline), SPACER, DIVIDER. Click handler
+loguea `intent_id` (F28 lo conecta a `deck_intent_fire`).
+
+**F26.4 input widgets.** TEXT/PASSWORD (lv_textarea con password mode,
+placeholder, value, READY+DEFOCUSED → intent), TOGGLE/SWITCH (lv_switch),
+SLIDER (lv_slider con min/max/value, RELEASED → intent), CHOICE
+(lv_dropdown con :options, VALUE_CHANGED → intent), PROGRESS (lv_bar).
+
+**F26.5 overlays.** TOAST (auto-dismiss timer), LOADING (full-screen
+backdrop con cursor `_` blink 500ms), CONFIRM (modal dialog 380px
+con title-dim + message-primary + CANCEL/OK row, ok_intent fires en
+click). Render sobre `lv_layer_top()`. API pública vía
+`deck_bridge_ui_overlay_*` + dispatch automático cuando `push_snapshot`
+recibe DVC_TOAST/LOADING/CONFIRM.
+
+**F26.6 statusbar service.** Dock-top 36px, refresh timer 2s. Muestra
+"CYBERDECK" (title) + time HH:MM (vía `deck_sdi_time_wall_*`) + WiFi
+status (DECK_SDI_WIFI_CONNECTED → RSSI, CONNECTING → "WIFI:CONN",
+otherwise "WIFI:--") + battery pct.
+
+**F26.7 navbar service.** Dock-bottom 48px con botones outline "< BACK"
++ "HOME". `deck_bridge_ui_navbar_init(back_cb, home_cb)` recibe punteros
+de callback (F27 los reemplazará por `activity_pop` /
+`activity_pop_to_home`).
+
+**F26.8 activity stack.** Push/pop/pop_to_home con max 4 niveles.
+Slot 0 reservado para launcher (nunca pop). Overflow evicta slot[1]
+(nunca el top, nunca launcher). Lifecycle: push hace `prev.on_pause →
+new.on_create → lv_scr_load(new) → new.on_resume`; pop hace
+`top.on_pause → lv_scr_load(prev) → prev.on_resume → top.on_destroy`
+(load before destroy evita dangling `act_scr`). API:
+`deck_bridge_ui_activity_push/pop/pop_to_home/current/depth/set_state`.
+
+**F26.9 rotación + recreate_all.** `deck_bridge_ui_set_rotation(0/90/180/270)`
+llama `lv_disp_set_rotation` + dispara `recreate_all` que destruye y
+recrea cada activity en el stack para que rebuilden su layout.
+`deck_bridge_ui_get_rotation` para leer estado actual.
+
+### Changed
+
+- Driver registry sigue en 12 entries; `bridge.ui` bump 0.1.0 → 1.0.0
+- Bin size 1.30 → 1.33 MB (LVGL + widgets + activity stack)
+- Skeleton `deck_sdi_bridge_ui_register_skeleton` ya no se llama desde
+  main; queda available para platforms sin LVGL (otra implementación
+  del SDI puede usarlo como base)
+
+### Stats hardware
+
+- 12/12 SDI selftests PASS + DVC round-trip selftest PASS
+- LVGL inicializa en ~1.4s tras boot
+- Pantalla muestra: statusbar (CYBERDECK + time + WIFI + BAT),
+  card central con LABEL "Hello from Deck DL2", navbar (BACK + HOME)
+- Bin 1.33 MB / 1.5 MB budget (87% used)
+
 ## [0.8.0] — 2026-04-17 — F25 SDI DL2 drivers
 
 Aterrizan los siete drivers SDI nuevos del nivel DL2: WiFi, HTTP, batería,
