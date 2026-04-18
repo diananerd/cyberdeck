@@ -1,0 +1,25 @@
+@app
+  name: "Conf lang.list.basic"
+  id: "conf.lang.list.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let xs = [10, 20, 30, 40, 50]
+  let empty = []
+  let mixed = [1, "two", :three, true]
+  let ok1 = list.len(xs) == 5
+  let ok2 = list.len(empty) == 0
+  let ok3 = list.len(mixed) == 4
+  let h = match list.head(xs)
+    none => -1
+    _    => 999
+  let ok4 = h == 999
+  let oob = match list.get(xs, 99)
+    none => :missing
+    _    => :found
+  let ok5 = oob == :missing
+  let ok = ok1 && ok2 && ok3 && ok4 && ok5
+  log.info(if ok then "DECK_CONF_OK:lang.list.basic" else "DECK_CONF_FAIL:lang.list.basic")

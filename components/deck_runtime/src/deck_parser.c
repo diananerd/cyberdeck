@@ -156,6 +156,24 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             n = parse_expr_prec(p, 0);
             if (!expect(p, TOK_RPAREN, "expected ')'")) return NULL;
             break;
+        case TOK_LBRACKET: {
+            /* DL2 F21.4: list literal `[e1, e2, ...]` (also empty `[]`). */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            advance(p);
+            n = ast_new(p->arena, AST_LIT_LIST, ln, co); if (!n) return NULL;
+            ast_list_init(&n->as.list.items);
+            if (!at(p, TOK_RBRACKET)) {
+                for (;;) {
+                    ast_node_t *item = parse_expr_prec(p, 0);
+                    if (!item) return NULL;
+                    ast_list_push(p->arena, &n->as.list.items, item);
+                    if (!at(p, TOK_COMMA)) break;
+                    advance(p);
+                }
+            }
+            if (!expect(p, TOK_RBRACKET, "expected ']' to close list")) return NULL;
+            break;
+        }
         case TOK_MINUS: {
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
@@ -276,6 +294,7 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
         }
         case TOK_INT: case TOK_FLOAT: case TOK_STRING:
         case TOK_KW_TRUE: case TOK_KW_FALSE: case TOK_KW_UNIT:
+        case TOK_KW_NONE:
         case TOK_ATOM: {
             ast_node_t *wrap = mknode(p, AST_PAT_LIT); if (!wrap) return NULL;
             wrap->as.pat_lit = parse_primary(p);

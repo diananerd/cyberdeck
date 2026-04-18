@@ -296,6 +296,36 @@ static deck_value_t *b_text_contains(deck_value_t **args, uint32_t n, deck_inter
     return deck_retain(deck_false());
 }
 
+/* ---- list.* ---- */
+static deck_value_t *b_list_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.len expects list"); return NULL;
+    }
+    return deck_new_int((int64_t)args[0]->as.list.len);
+}
+static deck_value_t *b_list_head(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.head expects list"); return NULL;
+    }
+    if (args[0]->as.list.len == 0) return deck_new_none();
+    return deck_new_some(args[0]->as.list.items[0]);
+}
+static deck_value_t *b_list_get(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.get(list, int)"); return NULL;
+    }
+    int64_t i = args[1]->as.i;
+    if (i < 0 || i >= (int64_t)args[0]->as.list.len) return deck_new_none();
+    return deck_new_some(args[0]->as.list.items[(uint32_t)i]);
+}
+
 /* ---- bytes.* ---- */
 static deck_value_t *b_bytes_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -545,6 +575,11 @@ static const builtin_t BUILTINS[] = {
     { "text.ends_with",         b_text_ends_with,    2, 2 },
     { "text.contains",          b_text_contains,     2, 2 },
 
+    /* list (DL2 F21.4) */
+    { "list.len",               b_list_len,          1, 1 },
+    { "list.head",              b_list_head,         1, 1 },
+    { "list.get",               b_list_get,          2, 2 },
+
     /* bytes */
     { "bytes.len",              b_bytes_len,         1, 1 },
 
@@ -675,6 +710,25 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         case AST_LIT_ATOM:   r = deck_new_atom(n->as.s); break;
         case AST_LIT_UNIT:   r = deck_retain(deck_unit()); break;
         case AST_LIT_NONE:   r = deck_new_none(); break;
+
+        case AST_LIT_LIST: {
+            /* DL2 F21.4: build a deck list value from the literal nodes. */
+            uint32_t len = n->as.list.items.len;
+            r = deck_new_list(len);
+            if (!r) { set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "list alloc"); break; }
+            c->tail_pos = false;
+            for (uint32_t i = 0; i < len; i++) {
+                deck_value_t *item = deck_interp_run(c, env, n->as.list.items.items[i]);
+                if (!item) { deck_release(r); r = NULL; break; }
+                if (deck_list_push(r, item) != DECK_RT_OK) {
+                    deck_release(item); deck_release(r); r = NULL;
+                    set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "list push");
+                    break;
+                }
+                deck_release(item);
+            }
+            break;
+        }
 
         case AST_IDENT: {
             deck_value_t *v = deck_env_lookup(env, n->as.s);

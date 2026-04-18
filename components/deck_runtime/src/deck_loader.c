@@ -184,6 +184,7 @@ static const cap_entry_t DL1_CAPS[] = {
     { "nvs",    DL1_CAP_NVS    },
     { "fs",     DL1_CAP_FS     },
     { "os",     DL1_CAP_OS     },
+    { "list",   DL1_CAP_LIST   },
     { NULL, 0 },
 };
 
@@ -212,7 +213,7 @@ static void handle_dot_chain(deck_loader_t *l, const ast_node_t *dot)
          * clearly a capability-style chain (length ≥ 2). */
         if (dot->kind == AST_DOT) {
             set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, dot->line, dot->col,
-                    "unknown capability '%s' (DL1 allows: math, text, bytes, log, time, system, nvs, fs, os)",
+                    "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list)",
                     root->as.s ? root->as.s : "?");
         }
     }
@@ -275,6 +276,9 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
             break;
         case AST_FN_DEF:
             walk_expr(l, n->as.fndef.body);
+            break;
+        case AST_LIT_LIST:
+            walk_list(l, &n->as.list.items);
             break;
         default: break;
     }

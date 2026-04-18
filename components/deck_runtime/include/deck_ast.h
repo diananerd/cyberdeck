@@ -33,6 +33,7 @@ typedef enum {
     AST_LIT_ATOM,
     AST_LIT_UNIT,
     AST_LIT_NONE,
+    AST_LIT_LIST,    /* DL2 F21.4 — [e1, e2, ...] */
 
     /* expressions */
     AST_IDENT,
@@ -118,6 +119,7 @@ struct ast_node {
         struct { ast_node_t *cond; ast_node_t *then_; ast_node_t *else_; } if_;
         struct { const char *name; ast_node_t *value; ast_node_t *body; }  let;
         struct { ast_list_t exprs; }                             do_;
+        struct { ast_list_t items; }                             list;  /* DL2 F21.4 list literal */
         struct { ast_node_t *scrut; ast_arm_t *arms; uint32_t n_arms; } match;
 
         ast_node_t         *pat_lit;                 /* AST_PAT_LIT -> inner literal */

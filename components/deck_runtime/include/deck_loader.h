@@ -41,6 +41,7 @@ typedef enum {
     DL1_CAP_NVS       = 1u << 6,
     DL1_CAP_FS        = 1u << 7,
     DL1_CAP_OS        = 1u << 8,   /* os.resume/suspend/terminate */
+    DL1_CAP_LIST      = 1u << 9,   /* DL2 F21.4 — list.len/head/get */
 } deck_dl1_cap_t;
 
 typedef struct {

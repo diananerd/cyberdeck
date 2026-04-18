@@ -45,6 +45,7 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_LIT_ATOM:    return "atom";
         case AST_LIT_UNIT:    return "unit";
         case AST_LIT_NONE:    return "none";
+        case AST_LIT_LIST:    return "list";
         case AST_IDENT:       return "ident";
         case AST_BINOP:       return "binop";
         case AST_UNARY:       return "unary";
@@ -169,6 +170,7 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
         case AST_LIT_ATOM:   sp_printf(p, " :%s", n->as.s ? n->as.s : ""); break;
         case AST_LIT_UNIT:
         case AST_LIT_NONE:   break;
+        case AST_LIT_LIST:   print_list(p, &n->as.list.items); break;
         case AST_IDENT:      sp_printf(p, " %s", n->as.s ? n->as.s : ""); break;
         case AST_BINOP:
             sp_printf(p, " %s", ast_binop_name(n->as.binop.op));
