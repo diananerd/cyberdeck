@@ -361,6 +361,36 @@ The same pattern applied to language-level tests, using spec-canonical syntax th
 
 **Next sessions**: flash + monitor the deepened conformance suite; expect many FAILs. Each FAIL log message pinpoints a specific layer-4 gap. The order of addressing should be (a) the parser coverage gap first — without it, annex apps don't load at all; (b) then bridge.ui replacement; (c) then per-capability gaps surfaced by individual os_* FAILs. REPORTS entries above tell you where each bug lives.
 
+### Continuation — second deepening burst (lang_* remaining)
+
+Added fixtures to the deepening table (cumulative):
+
+| Fixture | Before | After | Key spec alignment |
+|---|---|---|---|
+| lang_lambda_anon | 3 probes | ~7 | `fn` + arrow forms + typed + do-block + first-class in map/list |
+| lang_lambda_inline | 3 probes | ~8 | IIFE + curry-chain + HOFs (map/filter/reduce) |
+| lang_fn_block | 2 fns | 5 fns | block body with multi-let + nested match + guards (§5.1+§6.1) |
+| lang_fn_typed | 2 fns | 10 fns | every scalar + `int?` + `[int]` + `(int, int)` + `Result int str` return types |
+| lang_variant_pat | `some()`/`err()` ctor-fn | `:some x` / `:err e` variant atoms + named-field variants + nested variants |
+| lang_where | 3 probes | 5 probes incl. match/do-block/expr-level where |
+| lang_stdlib_basic | `ok()` ctor-fn + list.reduce reversed args | `:ok v` + list.reduce(xs, init, fn) canonical + and_then/unwrap_or/type_of/is_int |
+| lang_type_record | `{:__type: :User, …}` ad-hoc | `TypeName { field: value }` (§4.1) + nested records + pattern matching with guards + structural equality |
+| lang_with_update | `:atom:` keys in update | `{ field: value }` fields (§4.3) + immutability + chain + empty-identity |
+| lang_tco_deep | depth 2000 single-run | 10000 + list-walk cons pattern + mutual at 3000 |
+| lang_metadata | `@use log`/`@use.optional crypto`/`@permissions net: required`/`@errors` domainless | all canonical §4/§5/§7 forms |
+| lang_requires_caps | `deck_os: 1` / `capabilities: [list]` | `deck_os: ">= 1"` / `capabilities: { cap: "version" }` (§4A.1) |
+| lang_utility | `time.now_us` + `os.sleep_ms` (non-spec) | `time.now()` + `time.since()` returning Duration (§3) + Duration comparisons |
+
+**Total deepened fixtures across both bursts**: 31 of 80 conformance files. Every fixture now uses spec-canonical syntax and asserts behaviour beyond one happy path.
+
+**Layer-1 spec fixes driven by the deepening pass (this burst)**:
+  - `§03 @capability system.info` gained `deck_level()` (§16 referenced it).
+  - `§03 @capability nvs` gained get_float/bool/bytes + setters (§05 had them; §03 missed).
+  - `§01 §1` invariant line rewritten: `if/then/else` now formalized as sugar for two-arm match (new §7.10).
+  - `§01 §2.10` keywords list gained `if then else`.
+
+**Remaining layer-6 deepening** (future sessions): 49 fixtures not yet touched — primarily `edge_*` (30), `err_*` (~15), `app_*` (5), `sanity.deck`. `edge_*` and `err_*` are already edge/error-focused by design; they need review rather than wholesale rewrite. `app_*` (bridge_ui, flow, machine, machine_hooks, assets) all need layer-4 declarative content-body runtime before they can be made non-shallow.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.
