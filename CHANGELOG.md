@@ -2,6 +2,31 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.7.5] — 2026-04-17 — DL2 language complete (variant patterns)
+
+Cierra la calidad-de-vida más importante de F22: variant patterns para
+Optional y Result. El código DL2 ahora se ve real:
+
+```
+match list.head(xs)
+  some(x) => use(x)
+  none    => default
+
+match safe_div(a, b)
+  ok(v)  => v
+  err(e) => log.error(e)
+```
+
+### Added
+- AST_PAT_VARIANT — destructuring patterns para some/ok/err.
+- parse_pattern detecta IDENT-followed-by-`(` como variant.
+- match_pattern handler especifica:
+  - some(p): inner match contra Optional.inner.
+  - ok(p)/err(p): match contra tuple `(:tag, v)` con bind del v.
+
+### Stats hardware
+- 5/5 suites + 68/68 .deck + 13/13 negativos + 12/12 stress PASS.
+
 ## [0.7.0] — 2026-04-17 — DL2 language foundations
 
 Cierra **F21** del plan DL2 (`DEVELOPMENT-PLAN-DL2.md`): el lenguaje gana
