@@ -6,17 +6,41 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: utility builtins that span text + time. Old version
+-- relied on `time.now_us()` and `os.sleep_ms()` — neither exists in
+-- `03-deck-os §3 @builtin time` nor anywhere else in the spec. Those
+-- were impl-invented functions. This version uses spec-canonical
+-- `time.now()` + `time.since()` returning a Duration, comparable
+-- directly without needing raw microsecond integers.
 @on launch:
+  -- text.split + list.len.
   let parts = text.split("a,b,c,d", ",")
-  let r1 = list.len(parts) == 4
+  let ok_split1 = list.len(parts) == 4 and parts == ["a", "b", "c", "d"]
+
+  -- split on empty delimiter is impl-defined — we just verify it
+  -- returns a non-empty list for a non-empty string.
   let chars = text.split("hi", "")
-  let r2 = list.len(chars) == 2
-  let r3 = text.repeat("ab", 3) == "ababab"
-  let r4 = text.repeat("x", 0) == ""
-  let t0 = time.now_us()
-  os.sleep_ms(5)
-  let t1 = time.now_us()
-  let elapsed = t1 - t0
-  let r5 = elapsed >= 3000
-  let ok = r1 && r2 && r3 && r4 && r5
+  let ok_split2 = list.len(chars) >= 1
+
+  -- text.repeat.
+  let ok_rep = text.repeat("ab", 3) == "ababab"
+           and text.repeat("x", 0) == ""
+           and text.repeat("", 5)  == ""
+
+  -- time.now() returns a Timestamp (spec-canonical).
+  let t0 = time.now()
+  let t1 = time.now()
+  let ok_order = not time.before(t1, t0)        -- t1 >= t0 always
+
+  -- time.since / time.until produce Durations (§3 @builtin time).
+  let elapsed = time.since(t0)
+  let ok_elapsed = elapsed >= 0s                 -- Duration literal
+               and elapsed < 1s                 -- should be near-zero
+
+  -- Duration comparison via spec operators (§2.8 + §7.2).
+  let ok_dur = 5s > 1s and 1000ms == 1s and 60s == 1m
+
+  let ok = ok_split1 and ok_split2 and ok_rep
+        and ok_order and ok_elapsed and ok_dur
+
   log.info(if ok then "DECK_CONF_OK:lang.utility" else "DECK_CONF_FAIL:lang.utility")

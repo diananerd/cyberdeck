@@ -6,19 +6,48 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `§6.4` tail-call optimization. The spec says "Tail
+-- calls are optimized via trampolining. Non-tail recursion is limited
+-- to a stack depth configured by the OS (default: 512)." This test
+-- pushes well past 512 for every recursion shape that is tail-
+-- callable.
+
+-- Direct tail recursion (no intermediate op on the result).
 fn count_down (n) =
   if n <= 0 then 0 else count_down(n - 1)
 
+-- Accumulator-style tail recursion.
 fn sum_to (n, acc) =
   if n == 0 then acc else sum_to(n - 1, acc + n)
 
-fn is_even (n) = if n == 0 then true else is_odd(n - 1)
+-- Mutual tail recursion — each call IS the tail expression.
+fn is_even (n) = if n == 0 then true  else is_odd(n - 1)
 fn is_odd  (n) = if n == 0 then false else is_even(n - 1)
 
+-- List-walk tail recursion with accumulator.
+fn length_acc (xs, acc) =
+  match xs
+    | []      -> acc
+    | _ :: r  -> length_acc(r, acc + 1)
+
 @on launch:
-  let r1 = count_down(2000) == 0
-  let r2 = sum_to(100, 0) == 5050
-  let r3 = is_even(2000)
-  let r4 = is_odd(1999)
-  let ok = r1 && r2 && r3 && r4
+  -- 2000 depth — well past the 512 default non-tail limit.
+  let ok_cd  = count_down(2000) == 0
+           and count_down(10000) == 0
+
+  -- n(n+1)/2: 100*101/2 = 5050, 1000*1001/2 = 500500.
+  let ok_st  = sum_to(100, 0) == 5050
+           and sum_to(1000, 0) == 500500
+           and sum_to(2000, 0) == 2001000
+
+  -- Mutual recursion, deep alternation.
+  let ok_mu  = is_even(2000) and is_odd(1999)
+           and is_even(3000) and (not is_odd(3000))
+
+  -- List walk: a 1000-element list.
+  let big    = list.map(0..1000, n -> n)
+  let ok_len = length_acc(big, 0) == 1000
+
+  let ok = ok_cd and ok_st and ok_mu and ok_len
+
   log.info(if ok then "DECK_CONF_OK:lang.tco.deep" else "DECK_CONF_FAIL:lang.tco.deep")

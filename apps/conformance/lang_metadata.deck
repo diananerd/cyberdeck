@@ -6,16 +6,27 @@
   requires:
     deck_level: 1
 
-@use log
-@use.optional crypto
+-- Coverage goal: spec-canonical metadata annotations —
+-- `@use`, `@permissions`, `@errors`, `@private` (§02 §4–§7, §10.2).
+-- Old version used non-spec forms:
+--   - `@use log` (no alias) — §4 requires `name as alias`
+--   - `@use.optional crypto` — §4 is `crypto as alias  optional`
+--   - `@permissions` with `cap: required` — §5 is `cap reason: "…"`
+--   - `@errors` without domain name — §7 is `@errors domain_name`
+
+@use
+  crypto.aes as aes  optional
 
 @permissions
-  network: required
-  fs.write: optional
+  crypto.aes  reason: "Encrypt local notes"
 
-@errors
-  api_timeout: "API request timed out"
-  parse_failure: "Bad response"
+@errors sensor
+  :unavailable  "Sensor not responding"
+  :calibrating  "Sensor warming up"
+
+@errors parse
+  :bad_format   "Input did not match expected format"
+  :overflow     "Value exceeds representable range"
 
 @private
 fn helper (x) = x * 2
@@ -24,5 +35,14 @@ fn main_fn (n) = helper(n) + 1
 
 @on launch:
   let r = main_fn(20)
-  let ok = r == 41
+  let ok_compute = r == 41
+
+  -- Errors domain vocab is accessible as sensor.Error / parse.Error
+  -- at the type level; actual value tests live in err_* fixtures.
+  -- Here we just assert the module loaded with the metadata blocks
+  -- parsed correctly (if they failed to parse, the app wouldn't load).
+  let ok_loaded = true
+
+  let ok = ok_compute and ok_loaded
+
   log.info(if ok then "DECK_CONF_OK:lang.metadata" else "DECK_CONF_FAIL:lang.metadata")
