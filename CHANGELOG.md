@@ -2,6 +2,48 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.9.5] — 2026-04-17 — F29 Apps DL2
+
+Cuatro apps system-bundled corren desde el launcher: COUNTER, TASKMAN,
+NET HELLO + SETTINGS (de F27). Implementadas como activities LVGL en
+C — F30+ traerá .deck source apps cargadas desde SPIFFS.
+
+### Added
+
+**F29.1 launcher mejorado.** Grid de 8 cards: 4 activas (SETTINGS,
+COUNTER, TASKMAN, NET HELLO) + 4 stubs dim (BOOKS, NOTES, FILES, WIFI).
+Border + text en `primary` para activos, `primary_dim` para stubs.
+Card click → `deck_shell_intent_navigate` con app_id. Layout via flex
+row-wrap, 16px gaps.
+
+**F29.2 task manager (app_id=1).** Activity con header "ACTIVE: N/4
+HEAP: K KB" + lista del top activity (depth=1 simplificación) + row
+[REFRESH][KILL TOP]. Refresh actualiza counts + memoria. Kill abre
+`overlay_confirm` modal (callback no-op por ahora — F30 wires pop).
+
+**F29.3 net_hello (app_id=7).** Activity con [CONNECT][FETCH] +
+status_label + body_label. CONNECT lee NVS `cyberdeck/wifi_ssid` +
+`wifi_psk`, llama `deck_sdi_wifi_connect(15s timeout)`. FETCH llama
+`deck_sdi_http_get("https://httpbin.org/get")` con buffer 1KB.
+Muestra HTTP status + truncated flag + primeros 200 bytes.
+
+**F29.4 counter (app_id=4).** Activity con state interno (int32 count)
++ value_label + [DEC][INC] buttons. State persiste mientras la
+activity está viva; on_destroy free state. Ejemplo de patrón
+"local state + UI button" para .deck apps post-DL2.
+
+**deck_shell_apps_register.** Registra los 3 demo apps en el intent
+registry. Llamado por dl2_boot junto con settings_register.
+
+### Stats hardware
+
+- 4 demo apps + settings + launcher = 12 navegables vía intent
+- Bin 1.36 MB
+- Tap COUNTER → push counter → tap INC repetidamente → display incrementa
+- Tap TASKMAN → muestra "ACTIVE: 1/4 HEAP: NNN KB" + TOP info
+- Tap NET HELLO → CONNECT (requiere NVS pre-set) + FETCH httpbin
+- Tap HOME desde cualquier app → vuelve al launcher
+
 ## [0.9.1] — 2026-04-17 — F28 App model DL2 (parse-only)
 
 Extiende el parser para aceptar la sintaxis app-model DL2 completa.
