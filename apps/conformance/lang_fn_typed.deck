@@ -6,14 +6,71 @@
   requires:
     deck_level: 1
 
-fn celsius_to_f (c: float) -> float = c * 1.8 + 32.0
-fn clamp (x: int, lo: int, hi: int) -> int =
-  if x < lo then lo else if x > hi then hi else x
+-- Coverage goal: fn with full type annotations on parameters and
+-- return (§6.1). At DL2 type annotations are spec'd as documentation
+-- and runtime assertions (§3); at DL1 they are accepted but not
+-- enforced. Old version had 2 typed fns; this covers every primitive
+-- type and optionals.
+
+-- Every scalar type.
+fn from_int    (n: int)       -> int     = n + 1
+fn from_float  (x: float)     -> float   = x * 2.0
+fn from_bool   (b: bool)      -> bool    = not b
+fn from_str    (s: str)       -> int     = text.length(s)
+fn from_atom   (a: atom)      -> bool    = a == :ok
+
+-- Mixed signature.
+fn format_user (name: str, age: int) -> str =
+  "{name} ({age})"
+
+-- Unit return.
+fn no_ret (x: int) -> unit =
+  do
+    log.info("saw {x}")
+
+-- Optional (nullable).
+fn safe_div (a: float, b: float) -> float? =
+  if b == 0.0 then :none else :some (a / b)
+
+-- List + tuple types.
+fn sum_list (xs: [int]) -> int =
+  list.reduce(xs, 0, (acc, n) -> acc + n)
+
+fn make_point (x: int, y: int) -> (int, int) = (x, y)
+
+-- Composed return.
+fn parse_port (s: str) -> Result int str =
+  match int(s)
+    | :some n when n >= 0 and n <= 65535 -> :ok n
+    | :some _                             -> :err "out of range"
+    | :none                               -> :err "not a number"
 
 @on launch:
-  let f = celsius_to_f(100.0)
-  let c1 = clamp(50, 0, 100)
-  let c2 = clamp(-5, 0, 100)
-  let c3 = clamp(200, 0, 100)
-  let ok = f > 211.9 && f < 212.1 && c1 == 50 && c2 == 0 && c3 == 100
+  let ok_int   = from_int(41) == 42
+  let ok_flt   = from_float(2.5) == 5.0
+  let ok_bool  = from_bool(true) == false and from_bool(false) == true
+  let ok_str   = from_str("hello") == 5
+  let ok_atom  = from_atom(:ok) and not from_atom(:err)
+
+  let ok_mix   = format_user("Ana", 30) == "Ana (30)"
+
+  let ok_div   = safe_div(10.0, 2.0) == :some 5.0
+             and safe_div(10.0, 0.0) == :none
+
+  let ok_sum   = sum_list([1, 2, 3, 4, 5]) == 15
+  let pt       = make_point(3, 4)
+  let ok_pt    = pt.0 == 3 and pt.1 == 4
+
+  let ok_port1 = parse_port("8080") == :ok 8080
+  let ok_port2 = match parse_port("99999")
+                   | :err "out of range" -> true
+                   | _                    -> false
+  let ok_port3 = match parse_port("nope")
+                   | :err "not a number" -> true
+                   | _                    -> false
+
+  let ok = ok_int and ok_flt and ok_bool and ok_str and ok_atom
+        and ok_mix and ok_div and ok_sum and ok_pt
+        and ok_port1 and ok_port2 and ok_port3
+
   log.info(if ok then "DECK_CONF_OK:lang.fn.typed" else "DECK_CONF_FAIL:lang.fn.typed")

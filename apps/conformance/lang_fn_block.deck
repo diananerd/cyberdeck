@@ -6,16 +6,67 @@
   requires:
     deck_level: 1
 
-fn bmi (w, h) =
-  let h2 = h * h
-  w / h2
+-- Coverage goal: fn body as indented block with multiple `let`
+-- bindings; the final expression is the return value (§5.1, §6.1).
+-- Old version had 2 functions with minimal coverage.
 
-fn area_of_triangle (b, h) =
-  let half = b / 2
-  half * h
+-- Single binding in block.
+fn square_plus_one (n) =
+  let sq = n * n
+  sq + 1
+
+-- Multiple bindings, final expression uses all of them.
+fn bmi (w: float, h: float) -> float =
+  let h2     = h * h
+  let result = w / h2
+  result
+
+-- Block with intermediate computations.
+fn surface_area (r: float, h: float) -> float =
+  let pi         = math.pi
+  let side_area  = 2.0 * pi * r * h
+  let cap_area   = pi * r * r
+  side_area + 2.0 * cap_area
+
+-- Block with nested match.
+fn classify (n: int) -> str =
+  let abs_n = if n < 0 then -n else n
+  match abs_n
+    | 0                    -> "zero"
+    | k when k < 10        -> "small"
+    | k when k < 100       -> "medium"
+    | _                    -> "large"
+
+-- Block body using let for cached sub-expression.
+fn mid3 (a: int, b: int, c: int) -> int =
+  let biggest  = if a > b then (if a > c then a else c)
+                 else (if b > c then b else c)
+  let smallest = if a < b then (if a < c then a else c)
+                 else (if b < c then b else c)
+  a + b + c - biggest - smallest
 
 @on launch:
-  let bm = bmi(80, 2)
-  let ar = area_of_triangle(10, 4)
-  let ok = bm == 20 && ar == 20
+  let ok_sq  = square_plus_one(5) == 26
+           and square_plus_one(0) == 1
+           and square_plus_one(-3) == 10
+
+  let bm     = bmi(80.0, 2.0)
+  let ok_bmi = bm > 19.99 and bm < 20.01
+
+  let sa     = surface_area(1.0, 2.0)
+  -- 2πr·h + 2·πr² = 2π + 2π = 4π ≈ 12.566
+  let ok_sa  = sa > 12.56 and sa < 12.58
+
+  let ok_cls = classify(0) == "zero"
+           and classify(5) == "small"
+           and classify(-7) == "small"
+           and classify(50) == "medium"
+           and classify(500) == "large"
+
+  let ok_mid = mid3(1, 2, 3) == 2
+           and mid3(10, 2, 6) == 6
+           and mid3(7, 7, 7) == 7
+
+  let ok = ok_sq and ok_bmi and ok_sa and ok_cls and ok_mid
+
   log.info(if ok then "DECK_CONF_OK:lang.fn.block" else "DECK_CONF_FAIL:lang.fn.block")
