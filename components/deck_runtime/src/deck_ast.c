@@ -49,6 +49,7 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_LIT_TUPLE:   return "tuple";
         case AST_TUPLE_GET:   return "tuple_get";
         case AST_LIT_MAP:     return "map";
+        case AST_WITH:        return "with";
         case AST_IDENT:       return "ident";
         case AST_BINOP:       return "binop";
         case AST_UNARY:       return "unary";

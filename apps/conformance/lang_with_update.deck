@@ -1,0 +1,26 @@
+@app
+  name: "Conf lang.with.update"
+  id: "conf.lang.with.update"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@type User
+  name: str
+  age: int
+
+@on launch:
+  let u = {:name: "diana", :age: 30, :role: :admin}
+  let u2 = u with {:name: "ada"}
+  let r1 = u2.name == "ada"
+  let r2 = u2.age == 30
+  let r3 = u2.role == :admin
+  let r4 = u.name == "diana"
+  let u3 = u with {:age: 31, :role: :user, :extra: 99}
+  let r5 = u3.age == 31
+  let r6 = u3.role == :user
+  let r7 = u3.extra == 99
+  let r8 = u3.name == "diana"
+  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8
+  log.info(if ok then "DECK_CONF_OK:lang.with.update" else "DECK_CONF_FAIL:lang.with.update")

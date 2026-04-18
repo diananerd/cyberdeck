@@ -303,6 +303,11 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
             walk_list(l, &n->as.map_lit.keys);
             walk_list(l, &n->as.map_lit.vals);
             break;
+        case AST_WITH:
+            walk_expr(l, n->as.with_.base);
+            walk_list(l, &n->as.with_.keys);
+            walk_list(l, &n->as.with_.vals);
+            break;
         default: break;
     }
 }

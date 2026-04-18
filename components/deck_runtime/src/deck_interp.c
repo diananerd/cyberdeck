@@ -1163,6 +1163,38 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             break;
         }
 
+        case AST_WITH: {
+            /* DL2 F22.2 — clone base map and apply field updates. */
+            c->tail_pos = false;
+            deck_value_t *base = deck_interp_run(c, env, n->as.with_.base);
+            if (!base) break;
+            if (base->type != DECK_T_MAP) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                        "`with` requires map/record (got %s)",
+                        deck_type_name(base->type));
+                deck_release(base);
+                break;
+            }
+            deck_value_t *out = deck_new_map(base->as.map.cap > 0 ? base->as.map.cap : 4);
+            if (!out) { deck_release(base); break; }
+            for (uint32_t i = 0; i < base->as.map.len; i++) {
+                if (base->as.map.entries[i].used)
+                    deck_map_put(out, base->as.map.entries[i].key, base->as.map.entries[i].val);
+            }
+            deck_release(base);
+            uint32_t nu = n->as.with_.keys.len;
+            for (uint32_t i = 0; i < nu; i++) {
+                deck_value_t *k = deck_interp_run(c, env, n->as.with_.keys.items[i]);
+                if (!k) { deck_release(out); out = NULL; break; }
+                deck_value_t *v = deck_interp_run(c, env, n->as.with_.vals.items[i]);
+                if (!v) { deck_release(k); deck_release(out); out = NULL; break; }
+                deck_map_put(out, k, v);
+                deck_release(k); deck_release(v);
+            }
+            r = out;
+            break;
+        }
+
         case AST_LIT_MAP: {
             /* DL2 F21.6: build a map from {k: v} entries. */
             uint32_t entries = n->as.map_lit.keys.len;

@@ -463,6 +463,33 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
             head = c;
             continue;
         }
+        if (at(p, TOK_KW_WITH)) {
+            /* DL2 F22.2 — `expr with { field: val, ... }` returns a
+             * new record/map with the given fields updated. */
+            advance(p); /* with */
+            if (!expect(p, TOK_LBRACE, "expected '{' after `with`")) return NULL;
+            ast_node_t *w = mknode(p, AST_WITH); if (!w) return NULL;
+            w->as.with_.base = head;
+            ast_list_init(&w->as.with_.keys);
+            ast_list_init(&w->as.with_.vals);
+            if (!at(p, TOK_RBRACE)) {
+                for (;;) {
+                    ast_node_t *k = parse_expr_prec(p, 0);
+                    if (!k) return NULL;
+                    if (!expect(p, TOK_COLON, "expected ':' in with update")) return NULL;
+                    ast_node_t *v = parse_expr_prec(p, 0);
+                    if (!v) return NULL;
+                    ast_list_push(p->arena, &w->as.with_.keys, k);
+                    ast_list_push(p->arena, &w->as.with_.vals, v);
+                    if (!at(p, TOK_COMMA)) break;
+                    advance(p);
+                    if (at(p, TOK_RBRACE)) break;
+                }
+            }
+            if (!expect(p, TOK_RBRACE, "expected '}' to close with update")) return NULL;
+            head = w;
+            continue;
+        }
         break;
     }
     return head;

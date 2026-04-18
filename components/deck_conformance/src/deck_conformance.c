@@ -157,6 +157,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F22.2 — @type records + map field access via dot. */
     { "lang.type.record", "/conformance/lang_type_record.deck", "DECK_CONF_OK:lang.type.record", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F22.2 — `with` record update. */
+    { "lang.with.update", "/conformance/lang_with_update.deck", "DECK_CONF_OK:lang.with.update", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* DL2 F22.9 + F23.4 + F23.6 + F23.7 — @private, @use.optional,
      * @permissions, @errors metadata blocks. */
     { "lang.metadata",    "/conformance/lang_metadata.deck",    "DECK_CONF_OK:lang.metadata",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },

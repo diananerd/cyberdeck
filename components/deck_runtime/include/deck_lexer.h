@@ -45,6 +45,7 @@ typedef enum {
     TOK_KW_WHERE, TOK_KW_IS, TOK_KW_STATE, TOK_KW_ON, TOK_KW_ENTER,
     TOK_KW_LEAVE, TOK_KW_SEND, TOK_KW_USE, TOK_KW_TRANSITION,
     TOK_KW_FN,
+    TOK_KW_WITH,    /* DL2 F22.2 — record update: expr with { ... } */
 
     /* Operators */
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH, TOK_PERCENT, TOK_POW,
