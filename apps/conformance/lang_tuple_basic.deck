@@ -1,0 +1,24 @@
+@app
+  name: "Conf lang.tuple.basic"
+  id: "conf.lang.tuple.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn pair (a, b) = (a, b)
+fn triple () = (1, "two", :three)
+
+@on launch:
+  let p = pair(10, 20)
+  let t = triple()
+  let r1 = p.0 == 10
+  let r2 = p.1 == 20
+  let r3 = t.0 == 1
+  let r4 = t.1 == "two"
+  let r5 = t.2 == :three
+  let mixed = (true, [1, 2], 3.14)
+  let r6 = mixed.0
+  let r7 = list.len(mixed.1) == 2
+  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7
+  log.info(if ok then "DECK_CONF_OK:lang.tuple.basic" else "DECK_CONF_FAIL:lang.tuple.basic")

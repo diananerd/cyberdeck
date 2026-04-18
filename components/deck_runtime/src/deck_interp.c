@@ -730,6 +730,54 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             break;
         }
 
+        case AST_LIT_TUPLE: {
+            /* DL2 F21.5: build a deck tuple value. Items evaluated left
+             * to right (non-tail). */
+            uint32_t arity = n->as.tuple_lit.items.len;
+            if (arity == 0) {
+                r = deck_retain(deck_unit());
+                break;
+            }
+            c->tail_pos = false;
+            deck_value_t *items[16] = {0};
+            if (arity > 16) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                        "tuple arity > 16 not supported");
+                break;
+            }
+            bool ok = true;
+            for (uint32_t i = 0; i < arity; i++) {
+                items[i] = deck_interp_run(c, env, n->as.tuple_lit.items.items[i]);
+                if (!items[i]) { ok = false; break; }
+            }
+            if (ok) r = deck_new_tuple(items, arity);
+            for (uint32_t i = 0; i < arity; i++) if (items[i]) deck_release(items[i]);
+            break;
+        }
+
+        case AST_TUPLE_GET: {
+            c->tail_pos = false;
+            deck_value_t *t = deck_interp_run(c, env, n->as.tuple_get.obj);
+            if (!t) break;
+            if (t->type != DECK_T_TUPLE) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                        "tuple-field access requires tuple (got %s)",
+                        deck_type_name(t->type));
+                deck_release(t);
+                break;
+            }
+            if (n->as.tuple_get.idx >= t->as.tuple.arity) {
+                set_err(c, DECK_RT_OUT_OF_RANGE, n->line, n->col,
+                        "tuple index %u out of range (arity=%u)",
+                        (unsigned)n->as.tuple_get.idx, (unsigned)t->as.tuple.arity);
+                deck_release(t);
+                break;
+            }
+            r = deck_retain(t->as.tuple.items[n->as.tuple_get.idx]);
+            deck_release(t);
+            break;
+        }
+
         case AST_IDENT: {
             deck_value_t *v = deck_env_lookup(env, n->as.s);
             if (v) { r = deck_retain(v); break; }

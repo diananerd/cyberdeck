@@ -151,11 +151,33 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             }
             n = mknode(p, AST_IDENT); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
-        case TOK_LPAREN:
+        case TOK_LPAREN: {
+            /* DL2 F21.5: `(e)` is paren-grouping; `(e1, e2, ...)` is a
+             * tuple literal. We parse the first expression then peek for
+             * a comma to decide. Single-element tuples aren't supported
+             * (would need `(e,)` syntax and fight the grouping case). */
+            uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
-            n = parse_expr_prec(p, 0);
-            if (!expect(p, TOK_RPAREN, "expected ')'")) return NULL;
+            ast_node_t *first = parse_expr_prec(p, 0);
+            if (!first) return NULL;
+            if (at(p, TOK_COMMA)) {
+                n = ast_new(p->arena, AST_LIT_TUPLE, ln, co); if (!n) return NULL;
+                ast_list_init(&n->as.tuple_lit.items);
+                ast_list_push(p->arena, &n->as.tuple_lit.items, first);
+                while (at(p, TOK_COMMA)) {
+                    advance(p);
+                    if (at(p, TOK_RPAREN)) break;     /* trailing comma allowed */
+                    ast_node_t *item = parse_expr_prec(p, 0);
+                    if (!item) return NULL;
+                    ast_list_push(p->arena, &n->as.tuple_lit.items, item);
+                }
+                if (!expect(p, TOK_RPAREN, "expected ')' to close tuple")) return NULL;
+            } else {
+                n = first;
+                if (!expect(p, TOK_RPAREN, "expected ')'")) return NULL;
+            }
             break;
+        }
         case TOK_LBRACKET: {
             /* DL2 F21.4: list literal `[e1, e2, ...]` (also empty `[]`). */
             uint32_t ln = p->cur.line, co = p->cur.col;
@@ -219,7 +241,20 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
     for (;;) {
         if (at(p, TOK_DOT)) {
             advance(p);
-            if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name after '.'"); return NULL; }
+            /* DL2 F21.5: `.0`, `.1`, ... is tuple-field access. */
+            if (at(p, TOK_INT)) {
+                if (p->cur.as.i < 0) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR, "tuple index must be non-negative");
+                    return NULL;
+                }
+                ast_node_t *n = mknode(p, AST_TUPLE_GET); if (!n) return NULL;
+                n->as.tuple_get.obj = head;
+                n->as.tuple_get.idx = (uint32_t)p->cur.as.i;
+                advance(p);
+                head = n;
+                continue;
+            }
+            if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name or index after '.'"); return NULL; }
             ast_node_t *n = mknode(p, AST_DOT); if (!n) return NULL;
             n->as.dot.obj   = head;
             n->as.dot.field = p->cur.text;

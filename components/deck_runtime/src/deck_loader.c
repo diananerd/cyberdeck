@@ -280,6 +280,12 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
         case AST_LIT_LIST:
             walk_list(l, &n->as.list.items);
             break;
+        case AST_LIT_TUPLE:
+            walk_list(l, &n->as.tuple_lit.items);
+            break;
+        case AST_TUPLE_GET:
+            walk_expr(l, n->as.tuple_get.obj);
+            break;
         default: break;
     }
 }

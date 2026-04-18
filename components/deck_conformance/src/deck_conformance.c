@@ -128,7 +128,10 @@ static deck_test_t DECK_TESTS[] = {
     { "lang.tco.deep", "/conformance/lang_tco_deep.deck", "DECK_CONF_OK:lang.tco.deep", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
     /* DL2 F21.4 — list literals + list.len/head/get. */
-    { "lang.list.basic", "/conformance/lang_list_basic.deck", "DECK_CONF_OK:lang.list.basic", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.list.basic",  "/conformance/lang_list_basic.deck",  "DECK_CONF_OK:lang.list.basic",  DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
+    /* DL2 F21.5 — tuple literals + .N field access. */
+    { "lang.tuple.basic", "/conformance/lang_tuple_basic.deck", "DECK_CONF_OK:lang.tuple.basic", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
