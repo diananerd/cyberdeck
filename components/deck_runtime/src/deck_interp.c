@@ -636,6 +636,87 @@ static deck_value_t *b_fs_list(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return deck_new_str(s_buf, (uint32_t)lc.len);
 }
 
+/* ---- text.split / text.repeat (DL2) ---- */
+static deck_value_t *b_text_split(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.split(str, sep_str)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(4);
+    if (!out) return NULL;
+    const char *src = args[0]->as.s.ptr;
+    uint32_t    src_len = args[0]->as.s.len;
+    const char *sep = args[1]->as.s.ptr;
+    uint32_t    sep_len = args[1]->as.s.len;
+    if (sep_len == 0) {
+        /* Split into individual characters. */
+        for (uint32_t i = 0; i < src_len; i++) {
+            deck_value_t *ch = deck_new_str(src + i, 1);
+            if (!ch) { deck_release(out); return NULL; }
+            deck_list_push(out, ch);
+            deck_release(ch);
+        }
+        return out;
+    }
+    uint32_t start = 0;
+    for (uint32_t i = 0; i + sep_len <= src_len; ) {
+        if (memcmp(src + i, sep, sep_len) == 0) {
+            deck_value_t *frag = deck_new_str(src + start, i - start);
+            deck_list_push(out, frag); deck_release(frag);
+            i += sep_len;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    deck_value_t *last = deck_new_str(src + start, src_len - start);
+    deck_list_push(out, last); deck_release(last);
+    return out;
+}
+static deck_value_t *b_text_repeat(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.repeat(str, int)"); return NULL;
+    }
+    int64_t k = args[1]->as.i;
+    if (k <= 0) return deck_new_str("", 0);
+    uint32_t single = args[0]->as.s.len;
+    uint64_t total = (uint64_t)single * (uint64_t)k;
+    if (total > 1024) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.repeat: result > 1024 bytes");
+        return NULL;
+    }
+    char buf[1024];
+    uint32_t off = 0;
+    for (int64_t i = 0; i < k; i++) {
+        memcpy(buf + off, args[0]->as.s.ptr, single);
+        off += single;
+    }
+    return deck_new_str(buf, off);
+}
+
+/* ---- os.sleep_ms (DL2) ---- */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+static deck_value_t *b_os_sleep_ms(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "os.sleep_ms(int)"); return NULL;
+    }
+    int64_t ms = args[0]->as.i;
+    if (ms < 0) ms = 0;
+    if (ms > 60000) ms = 60000;   /* clamp 1 minute max — apps shouldn't block longer */
+    vTaskDelay(pdMS_TO_TICKS((uint32_t)ms));
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_time_now_us(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{ (void)a; (void)n; (void)c; return deck_new_int(deck_sdi_time_monotonic_us()); }
+
 /* ---- os.* lifecycle ---- */
 static deck_value_t *b_os_resume(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -717,6 +798,7 @@ static const builtin_t BUILTINS[] = {
 
     /* time */
     { "time.now",               b_time_now,          0, 0 },
+    { "time.now_us",            b_time_now_us,       0, 0 },
     { "time.duration",          b_time_duration,     2, 2 },
     { "time.to_iso",            b_time_to_iso,       1, 1 },
 
@@ -732,6 +814,8 @@ static const builtin_t BUILTINS[] = {
     { "text.starts_with",       b_text_starts_with,  2, 2 },
     { "text.ends_with",         b_text_ends_with,    2, 2 },
     { "text.contains",          b_text_contains,     2, 2 },
+    { "text.split",             b_text_split,        2, 2 },
+    { "text.repeat",            b_text_repeat,       2, 2 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },
@@ -774,6 +858,7 @@ static const builtin_t BUILTINS[] = {
     { "os.resume",              b_os_resume,         0, 0 },
     { "os.suspend",             b_os_suspend,        0, 0 },
     { "os.terminate",           b_os_terminate,      0, 0 },
+    { "os.sleep_ms",            b_os_sleep_ms,       1, 1 },
 
     { NULL, NULL, 0, 0 },
 };

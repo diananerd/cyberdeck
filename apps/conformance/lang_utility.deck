@@ -1,0 +1,22 @@
+@app
+  name: "Conf lang.utility"
+  id: "conf.lang.utility"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let parts = text.split("a,b,c,d", ",")
+  let r1 = list.len(parts) == 4
+  let chars = text.split("hi", "")
+  let r2 = list.len(chars) == 2
+  let r3 = text.repeat("ab", 3) == "ababab"
+  let r4 = text.repeat("x", 0) == ""
+  let t0 = time.now_us()
+  os.sleep_ms(5)
+  let t1 = time.now_us()
+  let elapsed = t1 - t0
+  let r5 = elapsed >= 3000
+  let ok = r1 && r2 && r3 && r4 && r5
+  log.info(if ok then "DECK_CONF_OK:lang.utility" else "DECK_CONF_FAIL:lang.utility")
