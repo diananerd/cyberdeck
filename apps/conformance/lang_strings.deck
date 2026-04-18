@@ -6,15 +6,67 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: language-level string handling per §01 §2.5, §2.6,
+-- §2.7, §7.4. Focus on LITERALS and OPERATORS, not `text.*` builtins
+-- (those live in os_text.deck). Old version used `<>` for concat and
+-- `text.len` / `starts_with` — none of which are in the spec.
+--
+-- Spec: §7.4 concat uses `++`; §11.1 length is implicit via `text.length`
+-- (see os_text.deck for builtin coverage).
 @on launch:
+  -- Basic literal equality.
+  let ok_eq    = "hello" == "hello"
+              and ""      == ""
+
+  -- Concatenation with `++` (§7.4 — spec-canonical).
   let a        = "hello"
   let b        = "world"
-  let joined   = a <> " " <> b
-  let ok_len   = text.len(joined) == 11
-  let ok_up    = text.upper("abc") == "ABC"
-  let ok_low   = text.lower("XYZ") == "xyz"
-  let ok_sw    = text.starts_with(joined, "hello")
-  let ok_ew    = text.ends_with(joined, "world")
-  let ok_ct    = text.contains(joined, "lo wo")
-  let ok = ok_len && ok_up && ok_low && ok_sw && ok_ew && ok_ct
+  let joined   = a ++ " " ++ b
+  let ok_concat = joined == "hello world"
+
+  -- Empty string identity.
+  let ok_empty = "" ++ "x" == "x"
+              and "x" ++ "" == "x"
+              and "" ++ "" == ""
+
+  -- String interpolation (§2.6).
+  let n        = 42
+  let ok_interp = "n is {n}" == "n is 42"
+               and "{1 + 2} {true}" == "3 true"
+               and "x={str(3.14)}" == "x=3.14"
+
+  -- Nested interpolation (interpolated exprs can concat more literals).
+  let name     = "Deck"
+  let ok_nest  = "Hello, {"dear " ++ name}!" == "Hello, dear Deck!"
+
+  -- Escape sequences (§2.5 — standard set).
+  let ok_esc   = "\n" != ""
+              and text.length("\t") == 1
+              and "quote:\"" == "quote:" ++ "\""
+              and "backslash:\\" == "backslash:" ++ "\\"
+
+  -- Multi-line string (§2.7 — preserves newlines).
+  let multi    = """
+one
+two
+three
+"""
+  let ok_multi = text.contains(multi, "one")
+              and text.contains(multi, "two")
+              and text.contains(multi, "three")
+              and text.contains(multi, "\n")
+
+  -- UTF-8 input is allowed in literals (§2.1 Encoding).
+  let emoji    = "café ☕"
+  let ok_utf8  = text.length(emoji) > 0
+              and text.contains(emoji, "café")
+
+  -- Comparison is lexicographic (per §7.2).
+  let ok_ord   = "apple" < "banana"
+              and "A" < "a"   -- ASCII ordering
+
+  let ok = ok_eq and ok_concat and ok_empty
+        and ok_interp and ok_nest
+        and ok_esc and ok_multi and ok_utf8 and ok_ord
+
   log.info(if ok then "DECK_CONF_OK:lang.strings" else "DECK_CONF_FAIL:lang.strings")

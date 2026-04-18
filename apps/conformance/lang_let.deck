@@ -6,12 +6,55 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §5.1` let bindings — scope, shadowing,
+-- immutability, type annotations, destructuring. Old version tested
+-- only basic let + shadowing.
 @on launch:
-  let x = 10
-  let y = 20
-  let z = x + y
-  let ok_sum = z == 30
-  let x = 99
-  let ok_shadow = x == 99 && y == 20
-  let ok = ok_sum && ok_shadow
+  -- Basic binding.
+  let x      = 10
+  let ok_x   = x == 10
+
+  -- Sequential bindings can reference prior names.
+  let y      = 20
+  let z      = x + y
+  let ok_seq = z == 30
+
+  -- Optional type annotation.
+  let n: int = 42
+  let ok_ann = n == 42
+
+  -- Shadowing: a later `let x = ...` shadows the prior binding from
+  -- that point on; the outer scope is unaffected.
+  let x      = 99
+  let ok_sh1 = x == 99 and y == 20 and z == 30   -- z still uses old x
+
+  -- Values are immutable — no rebinding semantics, only shadowing.
+  -- (We can't test in-place mutation because it doesn't exist.)
+
+  -- Let in do block: binding scopes to remainder of the do block.
+  let do_sum = do
+                 let a = 1
+                 let b = 2
+                 a + b
+  let ok_do  = do_sum == 3
+
+  -- Destructuring tuple.
+  let (p, q) = (7, 8)
+  let ok_dtup = p == 7 and q == 8
+
+  -- Destructuring record via @type (skipped — requires @type decl).
+
+  -- Bindings can hold any value: lambdas, atoms, lists, maps.
+  let f      = (x: int) -> x * 2
+  let ok_fn  = f(5) == 10
+
+  let lst    = [1, 2, 3]
+  let ok_lst = list.len(lst) == 3
+
+  let m      = {"k": "v"}
+  let ok_m   = m.k == "v"
+
+  let ok = ok_x and ok_seq and ok_ann and ok_sh1
+        and ok_do and ok_dtup and ok_fn and ok_lst and ok_m
+
   log.info(if ok then "DECK_CONF_OK:lang.let" else "DECK_CONF_FAIL:lang.let")
