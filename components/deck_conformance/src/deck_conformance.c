@@ -151,6 +151,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 utility builtins — text.split/repeat, time.now_us, os.sleep_ms. */
     { "lang.utility",     "/conformance/lang_utility.deck",     "DECK_CONF_OK:lang.utility",     DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F21.11 — where bindings (inline + comma-separated). */
+    { "lang.where",       "/conformance/lang_where.deck",       "DECK_CONF_OK:lang.where",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },

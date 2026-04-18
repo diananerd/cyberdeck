@@ -468,6 +468,87 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
     return head;
 }
 
+/* DL2 F21.11 — `where` bindings.
+ *
+ * Postfix on an expression: introduces local bindings into its scope.
+ * Two forms:
+ *   expr where x = v                  (single inline)
+ *   expr where x = v, y = w           (inline list, comma-sep)
+ *   expr where\n  x = v\n  y = w      (indented block)
+ *
+ * Implemented as nested AST_LET wrappers — outermost binding is the
+ * first declared. Only fires at the top of a min_prec=0 expression so
+ * `where` inside a binop sub-expression doesn't accidentally bind. */
+static ast_node_t *wrap_where_bindings(deck_parser_t *p, ast_node_t *body,
+                                       const char **names, ast_node_t **vals,
+                                       uint32_t n)
+{
+    for (int i = (int)n - 1; i >= 0; i--) {
+        ast_node_t *let = ast_new(p->arena, AST_LET, p->cur.line, p->cur.col);
+        if (!let) return NULL;
+        let->as.let.name  = names[i];
+        let->as.let.value = vals[i];
+        let->as.let.body  = body;
+        body = let;
+    }
+    return body;
+}
+
+static ast_node_t *parse_where_postfix(deck_parser_t *p, ast_node_t *body)
+{
+    advance(p);   /* consume `where` */
+    const char *names[16];
+    ast_node_t *vals[16];
+    uint32_t   n = 0;
+
+    if (at(p, TOK_NEWLINE)) {
+        /* Indented block form. */
+        while (at(p, TOK_NEWLINE)) advance(p);
+        if (!expect(p, TOK_INDENT, "expected indented `where` bindings")) return NULL;
+        while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+            if (n >= 16) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "too many `where` bindings (max 16)");
+                return NULL;
+            }
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in `where` binding");
+                return NULL;
+            }
+            names[n] = p->cur.text;
+            advance(p);
+            if (!expect(p, TOK_ASSIGN, "expected '=' in `where` binding")) return NULL;
+            /* Use min_prec=1 so a nested `where` inside the value won't
+             * eat the surrounding context. */
+            vals[n] = parse_expr_prec(p, 1);
+            if (!vals[n]) return NULL;
+            n++;
+            while (at(p, TOK_NEWLINE)) advance(p);
+        }
+        if (!expect(p, TOK_DEDENT, "expected dedent closing `where` block")) return NULL;
+    } else {
+        /* Inline single or comma-separated. */
+        for (;;) {
+            if (n >= 16) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "too many `where` bindings (max 16)");
+                return NULL;
+            }
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in `where` binding");
+                return NULL;
+            }
+            names[n] = p->cur.text;
+            advance(p);
+            if (!expect(p, TOK_ASSIGN, "expected '=' in `where` binding")) return NULL;
+            vals[n] = parse_expr_prec(p, 1);
+            if (!vals[n]) return NULL;
+            n++;
+            if (!at(p, TOK_COMMA)) break;
+            advance(p);
+        }
+    }
+    return wrap_where_bindings(p, body, names, vals, n);
+}
+
 static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec)
 {
     ast_node_t *lhs = parse_primary(p);
@@ -483,6 +564,10 @@ static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec)
         ast_node_t *n = ast_new(p->arena, AST_BINOP, ln, co); if (!n) return NULL;
         n->as.binop.op = info.op; n->as.binop.lhs = lhs; n->as.binop.rhs = rhs;
         lhs = n;
+    }
+    if (min_prec == 0 && at(p, TOK_KW_WHERE)) {
+        lhs = parse_where_postfix(p, lhs);
+        if (!lhs) return NULL;
     }
     return lhs;
 }

@@ -1,0 +1,21 @@
+@app
+  name: "Conf lang.where"
+  id: "conf.lang.where"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn bmi (w, h) =
+  w / h2 where h2 = h * h
+
+fn area (b, h) =
+  half_b * h where half_b = b / 2, h_safe = h
+
+@on launch:
+  let r1 = bmi(80, 2) == 20
+  let r2 = area(10, 4) == 20
+  let r3 = (a + b) where a = 3, b = 4
+  let r4 = r3 == 7
+  let ok = r1 && r2 && r4
+  log.info(if ok then "DECK_CONF_OK:lang.where" else "DECK_CONF_FAIL:lang.where")
