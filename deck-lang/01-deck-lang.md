@@ -582,10 +582,10 @@ expr is TypeName           -- true if expr is a record of that @type
 
 ```
 match state
-  | :loading -> spinner
-  | _        -> column ...
+  | :loading -> loading
+  | _        -> unit
 when App is :authenticated
-  button "Logout" -> auth.logout()
+  trigger "Logout" -> auth.logout()
 ```
 
 `is` never fails at runtime — it always produces `true` or `false`. It does not bind variables; for binding, use `match`.

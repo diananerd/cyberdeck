@@ -251,7 +251,8 @@ Bundled apps that are **not** runnable at DL1:
 | `@errors` | §7 |
 | `@machine.before / after` transition hooks | §8.5 |
 | `@flow` and `@flow.step` sugar | §9 |
-| `@on` lifecycle hooks (launch, resume, pause, suspend, terminate, low_memory, network_change) | §11 |
+| `@on` lifecycle hooks (`launch`, `resume`, `suspend`, `terminate`, `back`, `open_url`, `crash_report`) | §11 |
+| `@on` OS events (`os.*` catalog in `03-deck-os §5`) subscribed via the OS-event form of `@on` | §11 |
 | `@migration` | §15 |
 | `@test` inline tests | §16 |
 | `@assets` bundle | §19 |
