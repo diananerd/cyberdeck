@@ -6,8 +6,40 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: @on lifecycle hooks (02-deck-app §11: launch, resume,
+-- suspend, terminate, back, open_url). Old version called `os.resume()`,
+-- `os.suspend()`, `os.terminate()` as if they were functions — they are
+-- NOT. They are events the OS pushes to `@on` handlers. The old test
+-- emitted its sentinel unconditionally, so it certified nothing. Pure
+-- A→B: "three lines ran without a load error → lifecycle works".
+--
+-- A lifecycle test that runs from a single @on launch invocation is
+-- inherently limited: the runtime is about to suspend/terminate this
+-- app to observe those hooks, but the observation happens post-launch.
+-- We can only verify here that:
+--   1. @on launch fires (we're in it).
+--   2. @on resume, @on suspend, @on terminate parse and load without
+--      error — the compile-time existence of the hooks is sufficient.
+--   3. The non-function nature of lifecycle events is respected — we do
+--      NOT call them as functions; they're declared as handlers.
+--
+-- Cross-session coverage (resume/suspend/terminate actually firing)
+-- belongs in an integration test driven from the C harness, not an
+-- in-app @on launch. That harness can: launch → send suspend → assert
+-- @on suspend log → resume → assert @on resume log → terminate.
 @on launch:
-  let r1 = os.resume()
-  let r2 = os.suspend()
-  let r3 = os.terminate()
+  log.info("os.lifecycle: launch")
   log.info("DECK_CONF_OK:os.lifecycle")
+
+@on resume:
+  log.info("os.lifecycle: resume")
+
+@on suspend:
+  log.info("os.lifecycle: suspend")
+
+@on terminate:
+  log.info("os.lifecycle: terminate")
+
+@on back:
+  log.info("os.lifecycle: back")
+  :handled
