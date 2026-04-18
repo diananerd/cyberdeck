@@ -17,6 +17,7 @@ static const char *const s_tok_names[TOK_COUNT] = {
     [TOK_INT]          = "INT",
     [TOK_FLOAT]        = "FLOAT",
     [TOK_STRING]       = "STRING",
+    [TOK_STRING_INTERP]= "STRING_INTERP",
     [TOK_ATOM]         = "ATOM",
     [TOK_IDENT]        = "IDENT",
     [TOK_DECORATOR]    = "DECORATOR",
@@ -272,9 +273,11 @@ static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
     uint32_t line = lx->line, col = lx->col;
     advance(lx); /* opening " */
 
-    /* Scratch buffer — we process escapes into it. 1 KB is plenty for DL1. */
-    char scratch[1024];
-    uint32_t k = 0;
+    /* Two scratch buffers: cooked (escapes processed) for plain strings,
+     * raw for interpolated strings (parser splits by ${...}). */
+    char cooked[1024]; uint32_t k = 0;
+    char raw[1024];    uint32_t kr = 0;
+    bool has_interp = false;
 
     for (;;) {
         int c = peek(lx);
@@ -284,9 +287,30 @@ static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
             return true;
         }
         if (c == '"') { advance(lx); break; }
+        if (c == '$' && peek_at(lx, 1) == '{') {
+            /* DL2 F21.7 — interpolation `${...}`. Track brace depth so
+             * `${ {x: 1} }` works, then continue scanning the string. */
+            has_interp = true;
+            if (kr + 2 >= sizeof(raw)) { set_error(lx, "string too long"); return false; }
+            raw[kr++] = (char)advance(lx); /* $ */
+            raw[kr++] = (char)advance(lx); /* { */
+            int depth = 1;
+            while (depth > 0) {
+                int ic = peek(lx);
+                if (ic < 0 || ic == '\n') {
+                    set_error(lx, "unterminated interpolation in string");
+                    emit(out, TOK_ERROR, line, col);
+                    return true;
+                }
+                if (ic == '{') depth++;
+                else if (ic == '}') depth--;
+                if (kr + 1 >= sizeof(raw)) { set_error(lx, "string too long"); return false; }
+                raw[kr++] = (char)advance(lx);
+            }
+            continue;
+        }
         if (c == '\\') {
-            advance(lx);
-            int e = advance(lx);
+            int e = peek_at(lx, 1);
             char out_c;
             switch (e) {
                 case 'n':  out_c = '\n'; break;
@@ -300,17 +324,30 @@ static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
                     emit(out, TOK_ERROR, line, col);
                     return false;
             }
-            if (k + 1 >= sizeof(scratch)) { set_error(lx, "string too long"); return false; }
-            scratch[k++] = out_c;
+            advance(lx); advance(lx);
+            if (k + 1 >= sizeof(cooked)) { set_error(lx, "string too long"); return false; }
+            if (kr + 2 >= sizeof(raw)) { set_error(lx, "string too long"); return false; }
+            cooked[k++] = out_c;
+            raw[kr++] = '\\';
+            raw[kr++] = (char)e;
             continue;
         }
-        if (k + 1 >= sizeof(scratch)) { set_error(lx, "string too long"); return false; }
-        scratch[k++] = (char)advance(lx);
+        char ch = (char)advance(lx);
+        if (k + 1 >= sizeof(cooked)) { set_error(lx, "string too long"); return false; }
+        if (kr + 1 >= sizeof(raw))   { set_error(lx, "string too long"); return false; }
+        cooked[k++] = ch;
+        raw[kr++]   = ch;
     }
 
-    emit(out, TOK_STRING, line, col);
-    out->text     = deck_intern(scratch, k);
-    out->text_len = k;
+    if (has_interp) {
+        emit(out, TOK_STRING_INTERP, line, col);
+        out->text     = deck_intern(raw, kr);
+        out->text_len = kr;
+    } else {
+        emit(out, TOK_STRING, line, col);
+        out->text     = deck_intern(cooked, k);
+        out->text_len = k;
+    }
     return true;
 }
 

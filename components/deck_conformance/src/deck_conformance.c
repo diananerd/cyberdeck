@@ -136,6 +136,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F21.6 — map literals + map.get/put/keys/values/len. */
     { "lang.map.basic",   "/conformance/lang_map_basic.deck",   "DECK_CONF_OK:lang.map.basic",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F21.7 — string interpolation `"...${expr}..."`. */
+    { "lang.interp.basic","/conformance/lang_interp_basic.deck","DECK_CONF_OK:lang.interp.basic",DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },
@@ -602,7 +605,11 @@ static bool s_fuzz_random_inputs(char *d, size_t dz)
      *  - No crash (we got here at all).
      * We don't enforce "all rejected" because phase 2 may produce
      * valid-looking outputs. */
-    return other_cnt == 0 && heap_delta <= 4096;
+    /* Heap budget: bit-flip fuzz can produce sources that intern strings;
+     * interns accumulate across the 200 iters and are NOT a leak (they're
+     * one-time cost). DL2 string interpolation widens the surface for
+     * intern growth, so allow up to 16 KB drift. */
+    return other_cnt == 0 && heap_delta <= 16384;
 }
 
 /* Heap-pressure stress: shrink the deck_alloc hard limit below what the

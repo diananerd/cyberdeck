@@ -125,6 +125,116 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         case TOK_STRING:
             n = mknode(p, AST_LIT_STR); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
+        case TOK_STRING_INTERP: {
+            /* DL2 F21.7 — split the raw string text by ${...} and build
+             * a concat tree of string fragments + parsed expressions
+             * (auto-stringified via str()). Wraps the whole thing in a
+             * single concat AST so binop precedence sees an atom. */
+            const char *src = p->cur.text;
+            uint32_t    src_len = p->cur.text_len;
+            uint32_t    ln = p->cur.line, co = p->cur.col;
+            advance(p);
+
+            ast_node_t *acc = NULL;   /* accumulated concat result */
+            char        text_buf[512];
+            uint32_t    tk = 0;
+
+            #define APPEND_TEXT(node)                                       \
+                do { ast_node_t *_t = (node); if (!_t) return NULL;        \
+                     if (!acc) { acc = _t; }                                \
+                     else { ast_node_t *bn = ast_new(p->arena, AST_BINOP, ln, co); \
+                            if (!bn) return NULL;                           \
+                            bn->as.binop.op = BINOP_CONCAT;                 \
+                            bn->as.binop.lhs = acc;                         \
+                            bn->as.binop.rhs = _t;                          \
+                            acc = bn; }                                     \
+                } while(0)
+
+            #define FLUSH_TEXT()                                             \
+                do { if (tk > 0) {                                           \
+                       ast_node_t *sn = ast_new(p->arena, AST_LIT_STR, ln, co); \
+                       if (!sn) return NULL;                                 \
+                       sn->as.s = deck_intern(text_buf, tk);                 \
+                       APPEND_TEXT(sn);                                      \
+                       tk = 0;                                               \
+                   } } while(0)
+
+            for (uint32_t i = 0; i < src_len;) {
+                char c = src[i];
+                if (c == '\\' && i + 1 < src_len) {
+                    char esc;
+                    switch (src[i + 1]) {
+                        case 'n': esc = '\n'; break;
+                        case 't': esc = '\t'; break;
+                        case 'r': esc = '\r'; break;
+                        case '\\': esc = '\\'; break;
+                        case '"': esc = '"'; break;
+                        case '0': esc = '\0'; break;
+                        default: esc = src[i + 1]; break;
+                    }
+                    if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE_ERROR, "interp string too long"); return NULL; }
+                    text_buf[tk++] = esc;
+                    i += 2;
+                    continue;
+                }
+                if (c == '$' && i + 1 < src_len && src[i + 1] == '{') {
+                    FLUSH_TEXT();
+                    /* find matching `}` (skip the leading `${`) */
+                    uint32_t start = i + 2;
+                    int depth = 1;
+                    uint32_t j = start;
+                    while (j < src_len && depth > 0) {
+                        if (src[j] == '{') depth++;
+                        else if (src[j] == '}') depth--;
+                        if (depth > 0) j++;
+                    }
+                    if (depth != 0) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR, "unterminated interpolation");
+                        return NULL;
+                    }
+                    /* Recursively parse the inner expression source. */
+                    deck_parser_t inner;
+                    deck_parser_init(&inner, p->arena, src + start, j - start);
+                    ast_node_t *expr = deck_parser_parse_expr(&inner);
+                    if (!expr || deck_parser_err_code(&inner) != DECK_LOAD_OK) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                                deck_parser_err_msg(&inner) ?
+                                deck_parser_err_msg(&inner) :
+                                "bad expression in interpolation");
+                        return NULL;
+                    }
+                    /* Wrap in str(...) so non-string values stringify. */
+                    ast_node_t *callee = ast_new(p->arena, AST_IDENT, ln, co);
+                    if (!callee) return NULL;
+                    callee->as.s = deck_intern_cstr("str");
+                    ast_node_t *call = ast_new(p->arena, AST_CALL, ln, co);
+                    if (!call) return NULL;
+                    call->as.call.fn = callee;
+                    ast_list_init(&call->as.call.args);
+                    ast_list_push(p->arena, &call->as.call.args, expr);
+                    APPEND_TEXT(call);
+                    i = j + 1;   /* past the `}` */
+                    continue;
+                }
+                if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE_ERROR, "interp string too long"); return NULL; }
+                text_buf[tk++] = c;
+                i++;
+            }
+            FLUSH_TEXT();
+
+            #undef APPEND_TEXT
+            #undef FLUSH_TEXT
+
+            if (!acc) {
+                /* Empty interpolated string e.g. `""` (shouldn't reach here
+                 * since plain "" emits TOK_STRING). Build empty literal. */
+                acc = ast_new(p->arena, AST_LIT_STR, ln, co);
+                if (!acc) return NULL;
+                acc->as.s = deck_intern("", 0);
+            }
+            n = acc;
+            break;
+        }
         case TOK_ATOM:
             n = mknode(p, AST_LIT_ATOM); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;

@@ -33,6 +33,7 @@ typedef enum {
     TOK_INT,
     TOK_FLOAT,
     TOK_STRING,
+    TOK_STRING_INTERP, /* DL2 F21.7 — string with ${...} placeholders, raw source */
     TOK_ATOM,
     TOK_IDENT,
     TOK_DECORATOR,    /* @ident — e.g. @app, @machine */

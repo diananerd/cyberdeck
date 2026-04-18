@@ -1,0 +1,21 @@
+@app
+  name: "Conf lang.interp.basic"
+  id: "conf.lang.interp.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let name = "diana"
+  let n = 42
+  let s1 = "hello ${name}"
+  let s2 = "n = ${n}"
+  let s3 = "${n} + ${n} = ${n + n}"
+  let s4 = "no interp here"
+  let r1 = s1 == "hello diana"
+  let r2 = s2 == "n = 42"
+  let r3 = s3 == "42 + 42 = 84"
+  let r4 = s4 == "no interp here"
+  let ok = r1 && r2 && r3 && r4
+  log.info(if ok then "DECK_CONF_OK:lang.interp.basic" else "DECK_CONF_FAIL:lang.interp.basic")
