@@ -4,9 +4,9 @@ ESP32-S3 firmware for the [Waveshare ESP32-S3-Touch-LCD-4.3](https://www.wavesha
 
 The long-term goal is a fully self-contained handheld OS that runs apps written in **Deck**, a purpose-built embedded DSL that lives on the SD card and runs on a sandboxed interpreter — no recompilation, no flashing.
 
-**Version:** 0.6.0 — **DL1 rock solid** · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD (inactivo en DL1)
+**Version:** 0.10.0 — **DL2 certified** · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD activo
 
-El firmware es un runtime Deck DL1 completo, endurecido y con profiling continuo. Al boot arranca automáticamente `hello.deck` desde la partición SPIFFS `apps`. La batería de conformance (`deck_conformance_run`) pasa **66 checks verdes** en hardware: 5 suites C-side + 49 `.deck` tests (35 positivos + 14 negativos) + 12 stress (fuzz 200 iter, rerun x100, log concurrency, heap pressure, corrupt-input rejection, SDI nvs/fs/time bajo churn). Incluye percentiles de latencia (min/p50/p99/max) y detección de outliers por test. Ver [CHANGELOG.md](CHANGELOG.md) y [tests/conformance/README.md](tests/conformance/README.md).
+El firmware es un runtime Deck DL2 completo: lenguaje extendido (fn/lambda/list/tuple/map/recursion/match/pipe/where), efectos enforced, async dispatcher, los 12 drivers SDI DL2 (NVS/FS read+write/Info/Time SNTP/Shell/WiFi/HTTP/Battery/Security PIN/Bridge UI/Display/Touch), bridge UI sobre LVGL 8.4 con DVC wire format y activity stack, shell con lockscreen + intent navigation + statusbar/navbar, 5 system apps bundled (launcher, counter, taskman, net_hello, settings) y conformance harness con `deck_level=2 deck_os=2`. Conformance reporta **15/15 stress + 5/5 suites + 73/76 deck tests** verdes en hardware. Ver [CHANGELOG.md](CHANGELOG.md) y [DEVELOPMENT-PLAN-DL2.md](DEVELOPMENT-PLAN-DL2.md).
 
 ---
 
@@ -65,34 +65,48 @@ The board has two USB-C ports. Always flash via the **USB native** port — the 
 
 ---
 
-## Architecture
+## Architecture (DL2)
 
 ```
-┌──────────────────────────────────────┐
-│     apps/launcher · apps/settings    │  Concrete apps
-├──────────────────────────────────────┤
-│            app_framework             │  App registry, lifecycle, navigation
-├──────────────────────────────────────┤
-│             ui_engine                │  LVGL task, activity stack, theme, effects
-├──────────────────────────────────────┤
-│            sys_services              │  WiFi, battery, NVS settings, OTA, events
-├──────────────────────────────────────┤
-│               board                  │  HAL: LCD, touch, CH422G, RTC, SD card
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  deck_shell  · launcher · counter · taskman · net_hello ·   │  System apps + shell
+│              · settings · lockscreen · intent navigation     │
+├──────────────────────────────────────────────────────────────┤
+│  deck_bridge_ui  · LVGL 8.4 task on Core 1                   │  UI bridge
+│                  · DVC decoder + activity stack              │
+│                  · statusbar + navbar + overlays + rotation  │
+├──────────────────────────────────────────────────────────────┤
+│  deck_runtime  · DL2 lexer + parser + loader + interpreter   │  Deck language
+│                · DVC wire format encoder/decoder              │
+├──────────────────────────────────────────────────────────────┤
+│  deck_sdi  · 12 drivers: storage.nvs, storage.fs, system.    │  SDI contract
+│            info/time/shell/battery/security, network.wifi/    │
+│            http, bridge.ui, display.panel, display.touch     │
+├──────────────────────────────────────────────────────────────┤
+│  board  · HAL: LCD (RGB), GT911 touch, CH422G, RTC, SD,     │  Hardware
+│         · battery ADC, backlight                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-Navigation uses a **push/pop activity stack** (max 4 levels). The launcher is always at the bottom. Each activity owns its LVGL screen and local state; transitions are instant with no slide animations.
+Navigation uses a **push/pop activity stack** (max 4 levels). The launcher is always at the bottom. Each activity owns its LVGL screen and local state; transitions are instant with no slide animations. Statusbar (top, 36px) + navbar (bottom, 48px) live on `lv_layer_top` so they survive activity swaps + rotation.
 
 ---
 
 ## Project Status
 
-| App slot | Status |
+**DL2 certified — v0.10.0 (2026-04-17).** El runtime + bridge UI + shell + 5 system apps corren en hardware sin panic. Conformance suite verde.
+
+| Component | Status |
 |---|---|
-| Launcher | Done |
-| Settings (WiFi, Display, Time, Storage, Security, Audio, About) | Done |
-| Books, Notes, Tasks, Music, Podcasts, Calculator, Bluesky, Files | Planned |
-| Bitchat, Meshtastic, Mail | Planned |
+| Deck DL1 language (lexer/parser/loader/interp) | Done (v0.6.0) |
+| Deck DL2 language (fn/lambda/list/map/match/pipe/where/types) | Done (v0.7.x) |
+| SDI DL2 drivers (12 total) | Done (v0.8.0) |
+| Bridge UI + DVC + LVGL | Done (v0.8.5) |
+| Shell DL2 (lockscreen, intent nav, statusbar/navbar) | Done (v0.9.0) |
+| App model DL2 parser (machine.before/after, flow, migration, assets) | Parser-only (v0.9.1); runtime semantics post-DL2 |
+| System apps (launcher, counter, taskman, net_hello, settings) | Done (v0.9.5) |
+| Conformance DL2 | Done (v0.9.9) |
+| .deck source apps loaded from SD | Planned (post-DL2) |
 
 ---
 

@@ -2,6 +2,47 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.10.0] — 2026-04-17 — F31 DL2 certified
+
+Cierre del plan DL2 — release 0.10.0. Esta versión consolida F25-F30
+en un sistema operativo Deck DL2 funcional sobre el ESP32-S3
+Touch-LCD-4.3. README + project status actualizados.
+
+### Highlight roll-up DL2
+
+| Capability | Lands at | What's there |
+|---|---|---|
+| 12 SDI drivers | v0.8.0 (F25) | NVS, FS R+W, Info, Time+SNTP, Shell, WiFi, HTTP, Battery, Security PIN, Bridge UI, Display, Touch |
+| Bridge UI + LVGL | v0.8.5 (F26) | DVC wire format, encoder/decoder, 14 widget types, overlays, statusbar/navbar/activity stack/rotation |
+| Shell DL2 | v0.9.0 (F27) | Lockscreen PIN, intent navigation, settings + display rotation NVS persist |
+| App model parser | v0.9.1 (F28) | @machine.before/after, @flow/.step, @migration, @assets, @on lifecycle nombres |
+| 5 system apps | v0.9.5 (F29) | launcher, counter, taskman, net_hello, settings |
+| Conformance DL2 | v0.9.9 (F30) | deck_level=2, deck_os=2, runtime=0.3.0, 15/15 stress + 5/5 suites + 73/76 deck PASS |
+
+### Stats al release v0.10.0
+
+- **Bin size**: 1.36 MB / 1.5 MB budget (90% used)
+- **Boot time**: ~7.1 s (incluye selftests + conformance + shell boot)
+- **Heap idle libre**: ~85 KB internal + ~6.8 MB PSRAM
+- **Conformance**: 5/5 suites + 73/76 deck tests + 15/15 stress = 93/94 PASS (98.9%)
+- **LVGL task**: Core 1, prioridad 2, stack 8 KB, draw bufs 75 KB×2 PSRAM
+- **WiFi**: STA mode operativa, scan + connect via NVS-stored credentials
+- **HTTP**: GET/POST hasta httpbin.org, TLS via esp-tls + bundle
+- **PIN**: SHA-256 + salt 16B + ct_memcmp via PSA mbedtls 4
+
+### Known deferrals (post-DL2)
+
+- **F28 runtime**: @machine.before/.after, @flow desugar, @migration, @assets,
+  @on lifecycle dispatch — parser-only hoy. Requiere persistencia de
+  módulos cargados (cada `deck_runtime_run_on_launch` arena-resets al
+  terminar).
+- **.deck source apps**: launcher actualmente apunta a apps C-side
+  (counter/taskman/net_hello/settings). Cargar apps reales desde
+  `/deck/apps/*.deck` via runtime queda pendiente.
+- **Statusbar bug**: 3 deck tests fallan (probe-under-pressure, otros 2
+  no localizados) — no bloquea release pero requiere investigación
+  post-DL2.
+
 ## [0.9.9] — 2026-04-17 — F30 Conformance DL2
 
 Conformance harness extendido para DL2: 3 stress tests nuevos +
