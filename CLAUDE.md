@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Start-of-session required reading
+
+Before any corrective or implementation work, **read `REPORTS.md` at repo root top to bottom**. It holds:
+- The user's standing framing for this project (tests-pass-but-reality-breaks; combinatorial audit policy).
+- The **authority cascade** (numbered specs → annexes → root docs → core code → code over core → apps/tests). Always correct in strict top-down order.
+- Session-by-session iteration journal, append-only.
+
+Design invariant this project enforces end-to-end: **Deck apps declare semantic intent, never layout.** Apps use the primitives in `02-deck-app §12` (`list`, `group`, `form`, `loading`, `error`, `media`, `rich_text`, `status`, `markdown`, and intents `toggle/range/choice/multiselect/text/password/pin/date/search/navigate/trigger/confirm/create/share`). The bridge infers layout, widgets, colors, spacing, gestures from the app's semantic tree plus the device context. The same `.deck` runs on an LVGL ESP32, an e-ink tablet, or a voice assistant, and each bridge makes distinct presentation decisions. Apps never write `column`, `row`, `card`, `grid`, `status_bar`, `nav_bar`, `data_row`, `action_row`, `font:`, `style:`, `variant:`, or imperative builders like `bridge.ui.label(...)`. If you see a doc or code suggesting otherwise, that's the bug — escalate via `REPORTS.md`.
+
 ## Project Overview
 
 CyberDeck — ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-LCD-4.3 board. A modular, OS-like UI application built with ESP-IDF (v6.0.0), LVGL 8.4.0, and FreeRTOS. 800x480 RGB LCD, GT911 touch, CH422G I/O expander, PCF85063A RTC, SD card, PSRAM, 8MB flash.
