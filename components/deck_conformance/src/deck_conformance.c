@@ -161,6 +161,9 @@ static deck_test_t DECK_TESTS[] = {
      * @permissions, @errors metadata blocks. */
     { "lang.metadata",    "/conformance/lang_metadata.deck",    "DECK_CONF_OK:lang.metadata",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F23.5 — @requires.capabilities list. */
+    { "lang.requires.caps","/conformance/lang_requires_caps.deck","DECK_CONF_OK:lang.requires.caps",DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },
@@ -197,6 +200,10 @@ static deck_test_t DECK_TESTS[] = {
 
     /* DL2 F23 — fn declares !alias but no matching @use. */
     { "errors.effect_undeclared", "/conformance/err_effect_undeclared.deck", NULL,
+      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, {0}, 0 },
+
+    /* DL2 F23.5 — @requires.capabilities lists an unknown cap. */
+    { "errors.required_cap_unknown", "/conformance/err_required_cap_unknown.deck", NULL,
       DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, {0}, 0 },
 };
 

@@ -440,6 +440,56 @@ static void stage5_exhaustiveness(deck_loader_t *l)
  * Stage 6 — compat check
  * ================================================================ */
 
+/* DL2 F23.5 — capabilities the runtime *advertises* (currently built-in
+ * + DL2 names that the spec promises and apps can declare-require even
+ * if the dispatch isn't wired yet). Apps that USE an unimplemented cap
+ * still error at the dot-chain CALL check; @requires.capabilities is a
+ * coarse declaration. */
+static bool cap_advertised(const char *name)
+{
+    if (!name) return false;
+    if (lookup_cap(name)) return true;
+    static const char *DL2_PROMISED[] = {
+        "http","wifi","crypto","ui","battery","security","tasks","display",
+        "locale","notify","screen","api","cache","store",NULL
+    };
+    for (const char **e = DL2_PROMISED; *e; e++)
+        if (strcmp(*e, name) == 0) return true;
+    return false;
+}
+
+static void check_required_capabilities(deck_loader_t *l, const ast_node_t *app)
+{
+    const ast_app_field_t *req = find_field(app, "requires");
+    if (!req || !req->value || req->value->kind != AST_APP) return;
+    const ast_app_field_t *caps = find_field(req->value, "capabilities");
+    if (!caps || !caps->value) return;
+    const ast_node_t *list = caps->value;
+    if (list->kind != AST_LIT_LIST) {
+        set_err(l, DECK_LOAD_TYPE_ERROR, 6, list->line, list->col,
+                "@app.requires.capabilities must be a list literal");
+        return;
+    }
+    for (uint32_t i = 0; i < list->as.list.items.len; i++) {
+        const ast_node_t *it = list->as.list.items.items[i];
+        const char *name = NULL;
+        if      (it && it->kind == AST_LIT_ATOM) name = it->as.s;
+        else if (it && it->kind == AST_IDENT)    name = it->as.s;
+        if (!name) {
+            set_err(l, DECK_LOAD_TYPE_ERROR, 6, it ? it->line : 0, it ? it->col : 0,
+                    "capability list must contain atoms or idents");
+            return;
+        }
+        if (!cap_advertised(name)) {
+            set_err(l, DECK_LOAD_CAPABILITY_MISSING, 6,
+                    it->line, it->col,
+                    "@requires.capabilities lists '%s' which is not advertised",
+                    name);
+            return;
+        }
+    }
+}
+
 static void stage6_compat(deck_loader_t *l)
 {
     int runtime_level = deck_sdi_info_deck_level();
@@ -477,6 +527,10 @@ static void stage6_compat(deck_loader_t *l)
     /* Cross-check: DL1-declared app must not use DL2+ capabilities. */
     /* All DL1 caps are DL1-or-higher, so this is a no-op at DL1 today.
      * Wiring left here for when DL2 caps are added (http, wifi, etc.). */
+
+    /* DL2 F23.5 — verify @requires.capabilities list against runtime. */
+    const ast_node_t *app = find_app(l->module);
+    if (app) check_required_capabilities(l, app);
 }
 
 /* ================================================================

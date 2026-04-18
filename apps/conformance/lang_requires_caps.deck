@@ -1,0 +1,14 @@
+@app
+  name: "Conf lang.requires.caps"
+  id: "conf.lang.requires.caps"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+    deck_os: 1
+    capabilities: [log, math, time, http]
+
+@on launch:
+  let r = math.abs(-7) + 1
+  let ok = r == 8
+  log.info(if ok then "DECK_CONF_OK:lang.requires.caps" else "DECK_CONF_FAIL:lang.requires.caps")
