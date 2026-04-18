@@ -892,6 +892,12 @@ Four complementary storage primitives — choose based on data size, durability 
   free_heap    ()  -> int
   uptime       ()  -> Duration
   cpu_freq_mhz ()  -> int
+  deck_level   ()  -> int   -- 1 (DL1 Core), 2 (DL2 Standard), or 3 (DL3 Full).
+                            -- Apps compare against `@requires.deck_level`
+                            -- (02-deck-app §4A); loader stage 6 rejects
+                            -- with E_LEVEL_BELOW_REQUIRED if this value is
+                            -- less than the app's declared minimum. See
+                            -- 16-deck-levels §5 + §10.
   versions     ()  -> Versions
   -- Returns the complete version envelope of the running system.
   -- Apps use it for telemetry, conditional feature use, "about" screens.

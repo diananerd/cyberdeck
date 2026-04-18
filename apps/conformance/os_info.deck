@@ -6,12 +6,43 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every read-only accessor on `system.info` (03-deck-os
+-- §4.6). Old version covered deck_level + free_heap + device_id (3 of
+-- 11). A→B as usual.
 @on launch:
-  let lvl   = system.info.deck_level()
-  let heap  = system.info.free_heap()
-  let dev   = system.info.device_id()
-  let ok_lvl  = lvl >= 1
-  let ok_heap = heap > 0
-  let ok_dev  = text.len(dev) > 0
-  let ok = ok_lvl && ok_heap && ok_dev
+  -- Conformance level: must be >= the level this app declared.
+  let ok_level  = system.info.deck_level() >= 1
+
+  -- Heap: positive (the app itself is consuming some; free must remain).
+  let ok_heap   = system.info.free_heap() > 0
+
+  -- Identifiers: present, non-empty, stable shape.
+  let ok_devid  = text.length(system.info.device_id())    > 0
+  let ok_model  = text.length(system.info.device_model()) > 0
+  let ok_osname = text.length(system.info.os_name())      > 0
+  let ok_osver  = text.length(system.info.os_version())   > 0
+
+  -- App identity: echoes the @app block above.
+  let ok_aid    = system.info.app_id()      == "conf.os.info"
+  let ok_avers  = system.info.app_version() == "1.0.0"
+
+  -- Uptime: positive Duration.
+  let ok_up     = system.info.uptime() > 0s
+
+  -- CPU freq: typical range 80–520 MHz on ESP32 family; sanity check.
+  let freq      = system.info.cpu_freq_mhz()
+  let ok_freq   = freq >= 40 && freq <= 2000
+
+  -- Versions record: structural presence.
+  let v         = system.info.versions()
+  let ok_ver    = v.edition_current >= 2025
+              && v.deck_os          >= 1
+              && text.length(v.runtime) > 0
+              && v.sdi_major        >= 1
+              && v.app_id           == "conf.os.info"
+
+  let ok = ok_level && ok_heap
+        && ok_devid && ok_model && ok_osname && ok_osver
+        && ok_aid && ok_avers && ok_up && ok_freq && ok_ver
+
   log.info(if ok then "DECK_CONF_OK:os.info" else "DECK_CONF_FAIL:os.info")
