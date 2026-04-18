@@ -54,6 +54,12 @@ Defined once, only in `app.deck`.
   version:     str     -- semver: "MAJOR.MINOR.PATCH"
   edition:     int     -- Deck language edition (calendar year, e.g. 2026); MANDATORY
   entry:       Name    -- root @machine or @flow that is the app entry point
+  icon:        str?    -- short textual or asset reference identifying the app; bridge resolves.
+  -- `icon:` is a string; if it matches an entry in `@assets as :icon` it is resolved to that asset
+  -- path (typically a PNG), otherwise it is used verbatim (e.g. a 2–3 char glyph the bridge may
+  -- render in a bitmap font). The bridge picks final rendering per device — never coordinates or
+  -- pixel sizes from the app.
+  tags:        [str]?  -- optional discovery tags for launcher search and registry indexing.
   author:      str?
   license:     atom?   -- :mit | :apache2 | :gpl3 | :proprietary
   orientation: atom?   -- :portrait | :landscape | :any (default)
@@ -710,19 +716,19 @@ Called only when the OS would otherwise suspend the app (i.e., the flow has no h
 :handled                           -- app consumed the event; OS does nothing
 :unhandled                         -- delegate to OS; app is suspended
 :confirm                           -- OS shows a native confirm dialog (not the app — avoids
-  message: str_expr                   orphaned dialogs). confirm/cancel carry the atom to return
+  prompt:  str_expr                   orphaned dialogs). confirm/cancel carry the atom to return
   confirm: label -> :handled | :unhandled
   cancel:  label -> :handled | :unhandled
 ```
 
-Example — guard against leaving unsaved work:
+The `prompt:` field is semantically parallel to `confirm`'s `prompt:` in content bodies (§12.4): the **question posed to the user**. Example — guard against leaving unsaved work:
 
 ```
 @on back
   match unsaved_changes()
     | true  ->
         :confirm
-          message: "Discard changes?"
+          prompt:  "Discard changes?"
           confirm: "Leave"   -> :unhandled
           cancel:  "Stay"    -> :handled
     | false -> :unhandled
@@ -987,8 +993,15 @@ markdown content_expr
   on link  ->    expr        -- presence makes links tappable; event.url, event.text
   on image ->    expr        -- presence makes images tappable; event.url, event.alt
 
-  scroll_to:     str?        -- semantic navigation: a heading id; reactive
-  accessibility: str?        -- accessible region label
+  focus:         str?        -- semantic: the id of the heading the user should be focused on;
+                             -- reactive — the bridge brings it into view when the value changes.
+                             -- (Renamed from `scroll_to:` — the app is not requesting a scroll
+                             --  action, it is declaring the point of user attention; a non-scroll
+                             --  bridge like a voice reader reads that heading aloud instead.)
+  describe:      str?        -- accessible description of the region (renamed from `accessibility:`
+                             -- for consistency: the app *describes* the semantic of the region;
+                             -- the bridge decides how to surface that description — ARIA label,
+                             -- spoken preamble, Braille annotation, etc.)
 ```
 
 ```
@@ -1001,11 +1014,14 @@ markdown_editor
                                     --   event.selection: MdRange, event.text: str
 
   placeholder:   str?               -- semantic content shown when empty
-  editor_state:  MdEditorState?     -- if set, the editor is externally controlled
-                                    --   via the markdown.editor_* capability
-                                    --   (03-deck-os §4.4); the bridge surfaces the
-                                    --   state but does not own it
-  accessibility: str?
+  controlled_by: MdEditorState?     -- if set, the editor is externally controlled:
+                                    --   the app owns the canonical editor state (via
+                                    --   the markdown.editor_* capability in 03-deck-os §4.4)
+                                    --   and the bridge mirrors it. (Renamed from
+                                    --   `editor_state:` — the field declares a *relationship*
+                                    --   ("this editor is controlled by X"), not a data name.)
+  describe:      str?               -- accessible description of the region (same semantic as
+                                    --   on `markdown`; renamed from `accessibility:`).
 ```
 
 Both nodes accept their content (`content_expr` / `value`) as raw `str` or pre-parsed `MdDocument`. The `markdown` node also accepts `MdPatch?` from `markdown.stream_parse` for incremental rendering of streamed content (AI chat responses, live document sync).

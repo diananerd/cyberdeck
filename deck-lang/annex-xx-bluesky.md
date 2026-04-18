@@ -1203,7 +1203,7 @@ fn load_notifs () -> unit !api =
                     match s.profile.is_following
                       | true  ->
                           confirm "Unfollow"
-                            message: "Unfollow @{s.profile.handle}?"
+                            prompt: "Unfollow @{s.profile.handle}?"
                             -> do_unfollow(s.profile)
                       | false ->
                           trigger "Follow" -> do_follow(s.profile)
