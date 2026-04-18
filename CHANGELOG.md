@@ -2,6 +2,19 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.7.6] — 2026-04-17 — DL2 utility builtins
+
+Conveniencias prácticas que vuelven el runtime usable para apps reales.
+
+### Added
+- text.split(s, sep) — devuelve list. Sep vacío → split por chars.
+- text.repeat(s, n) — replica s n veces. Cap 1024 bytes.
+- time.now_us() — alta precisión para benchmarks.
+- os.sleep_ms(n) — bloquea via vTaskDelay. Cap 60s.
+
+### Stats hardware
+- 5/5 suites + 69/69 .deck + 13/13 negativos + 12/12 stress PASS
+
 ## [0.7.5] — 2026-04-17 — DL2 language complete (variant patterns)
 
 Cierra la calidad-de-vida más importante de F22: variant patterns para
