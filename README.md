@@ -6,7 +6,7 @@ The long-term goal is a fully self-contained handheld OS that runs apps written 
 
 **Version:** 0.10.0 — **DL2 certified** · **Target:** ESP32-S3 · **Display:** 800×480 RGB LCD activo
 
-El firmware es un runtime Deck DL2 completo: lenguaje extendido (fn/lambda/list/tuple/map/recursion/match/pipe/where), efectos enforced, async dispatcher, los 12 drivers SDI DL2 (NVS/FS read+write/Info/Time SNTP/Shell/WiFi/HTTP/Battery/Security PIN/Bridge UI/Display/Touch), bridge UI sobre LVGL 8.4 con DVC wire format y activity stack, shell con lockscreen + intent navigation + statusbar/navbar, 5 system apps bundled (launcher, counter, taskman, net_hello, settings) y conformance harness con `deck_level=2 deck_os=2`. Conformance reporta **15/15 stress + 5/5 suites + 73/76 deck tests** verdes en hardware. Ver [CHANGELOG.md](CHANGELOG.md) y [DEVELOPMENT-PLAN-DL2.md](DEVELOPMENT-PLAN-DL2.md).
+El firmware es un runtime Deck DL2 completo: lenguaje extendido (fn/lambda/list/tuple/map/recursion/match/pipe/where), efectos enforced, async dispatcher, los 12 drivers SDI DL2 (NVS/FS read+write/Info/Time SNTP/Shell/WiFi/HTTP/Battery/Security PIN/Bridge UI/Display/Touch), bridge UI sobre LVGL 8.4 con DVC wire format y activity stack, shell con lockscreen + intent navigation + statusbar/navbar, 5 system apps bundled (launcher, counter, taskman, net_hello, settings) y conformance harness con `deck_level=2 deck_os=2`. Conformance reporta **96/96 verdes** en hardware (5/5 suites + 76/76 deck tests + 15/15 stress). Ver [CHANGELOG.md](CHANGELOG.md) y [DEVELOPMENT-PLAN-DL2.md](DEVELOPMENT-PLAN-DL2.md).
 
 ---
 

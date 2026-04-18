@@ -30,6 +30,22 @@ Touch-LCD-4.3. README + project status actualizados.
 - **HTTP**: GET/POST hasta httpbin.org, TLS via esp-tls + bundle
 - **PIN**: SHA-256 + salt 16B + ct_memcmp via PSA mbedtls 4
 
+### Conformance regressions arregladas en este release
+
+- **os.info**: comparaba `lvl == 1`, ahora reportamos 2. Cambiado a
+  `lvl >= 1`.
+- **err_level_high.deck**: requería level 2 que ahora pasa. Bumped a
+  `requires.deck_level: 3` para seguir validando el path
+  LEVEL_BELOW_REQUIRED.
+- **lang.tco.deep**: trampoline para mutual tail calls (`is_even` /
+  `is_odd`) hacía `deck_env_new` cada iteración. Con LVGL + WiFi en
+  internal RAM, el arena se exhauría sobre ~2000 niveles. Fix: rebind
+  el `parent` del env existente en lugar de allocar uno fresco
+  (`deck_interp.c` trampoline). Self-recursive ya reusaba env; mutual
+  ahora también.
+
+**Resultado: 76/76 deck tests + 5/5 suites + 15/15 stress = 96/96 PASS.**
+
 ### Known deferrals (post-DL2)
 
 - **F28 runtime**: @machine.before/.after, @flow desugar, @migration, @assets,
@@ -39,9 +55,6 @@ Touch-LCD-4.3. README + project status actualizados.
 - **.deck source apps**: launcher actualmente apunta a apps C-side
   (counter/taskman/net_hello/settings). Cargar apps reales desde
   `/deck/apps/*.deck` via runtime queda pendiente.
-- **Statusbar bug**: 3 deck tests fallan (probe-under-pressure, otros 2
-  no localizados) — no bloquea release pero requiere investigación
-  post-DL2.
 
 ## [0.9.9] — 2026-04-17 — F30 Conformance DL2
 
