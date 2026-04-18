@@ -6,14 +6,53 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §6.4` recursion — direct self-call + base
+-- case + depth behaviour. TCO-specific depth tests live in lang_tco_deep.
+-- This exercises semantic correctness at moderate depths, multiple
+-- shapes of recursion, and both `if`-sugar and `match` branch forms.
+
+-- Direct recursion (classic).
 fn fact (n) =
   if n <= 1 then 1 else n * fact(n - 1)
 
+-- Fibonacci (exponential branching; careful with n).
 fn fib (n) =
   if n < 2 then n else fib(n - 1) + fib(n - 2)
 
+-- Pattern-match recursion over a list: length.
+fn llen (xs) =
+  match xs
+    | []      -> 0
+    | _ :: r  -> 1 + llen(r)
+
+-- Pattern-match recursion over a list: sum.
+fn lsum (xs) =
+  match xs
+    | []      -> 0
+    | h :: r  -> h + lsum(r)
+
+-- Recursion with guards.
+fn count_positive (xs) =
+  match xs
+    | []                    -> 0
+    | h :: r when h > 0     -> 1 + count_positive(r)
+    | _ :: r                -> count_positive(r)
+
+-- Accumulator-style (tail-call shape; §6.4 says TCO is provided).
+fn fact_tail (n, acc) =
+  if n <= 1 then acc else fact_tail(n - 1, n * acc)
+
 @on launch:
-  let f5 = fact(5)
-  let f10 = fib(10)
-  let ok = f5 == 120 && f10 == 55
+  let ok_fact    = fact(0) == 1 and fact(1) == 1 and fact(5) == 120 and fact(8) == 40320
+  let ok_fib     = fib(0) == 0 and fib(1) == 1 and fib(10) == 55 and fib(15) == 610
+  let ok_llen    = llen([]) == 0 and llen([10]) == 1 and llen([1, 2, 3, 4]) == 4
+  let ok_lsum    = lsum([]) == 0 and lsum([1, 2, 3, 4, 5]) == 15
+  let ok_cntp    = count_positive([-1, 2, -3, 4, 5]) == 3
+                and count_positive([])                == 0
+                and count_positive([-1, -2, -3])     == 0
+  let ok_tail    = fact_tail(5, 1) == 120 and fact_tail(10, 1) == 3628800
+                and fact_tail(0, 1) == 1
+
+  let ok = ok_fact and ok_fib and ok_llen and ok_lsum and ok_cntp and ok_tail
+
   log.info(if ok then "DECK_CONF_OK:lang.fn.recursion" else "DECK_CONF_FAIL:lang.fn.recursion")

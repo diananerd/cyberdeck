@@ -6,15 +6,57 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §6.4` mutual recursion — "forward
+-- references within a file are resolved by the loader — declaration
+-- order is irrelevant". Old version used `!e3` (non-spec negation;
+-- §7.3 uses `not`) and tested only one pair.
+
+-- Classic mutually recursive pair.
 fn is_even (n) =
   if n == 0 then true else is_odd(n - 1)
 
 fn is_odd (n) =
   if n == 0 then false else is_even(n - 1)
 
+-- Three-way mutual recursion.
+fn mod3_0 (n) =
+  if n == 0 then true
+  else if n == 1 then false
+  else if n == 2 then false
+  else mod3_0(n - 3)
+
+fn mod3_1 (n) =
+  if n == 1 then true
+  else if n == 0 then false
+  else if n == 2 then false
+  else mod3_1(n - 3)
+
+fn mod3_2 (n) =
+  if n == 2 then true
+  else if n == 0 then false
+  else if n == 1 then false
+  else mod3_2(n - 3)
+
+-- Forward references: `use_b` is declared before `helper_b`.
+fn use_b (x) = helper_b(x) * 2
+fn helper_b (x) = x + 1
+
 @on launch:
-  let e4 = is_even(4)
-  let o7 = is_odd(7)
-  let e3 = is_even(3)
-  let ok = e4 && o7 && !e3
+  -- Even / odd over a range.
+  let ok_even = is_even(0) and is_even(4) and is_even(10)
+            and (not is_even(1)) and (not is_even(3))
+            and (not is_even(7))
+  let ok_odd  = is_odd(1) and is_odd(3) and is_odd(9)
+            and (not is_odd(0)) and (not is_odd(2))
+
+  -- Three-way mod.
+  let ok_mod0 = mod3_0(0) and mod3_0(3) and mod3_0(9) and (not mod3_0(1)) and (not mod3_0(5))
+  let ok_mod1 = mod3_1(1) and mod3_1(4) and mod3_1(7) and (not mod3_1(0))
+  let ok_mod2 = mod3_2(2) and mod3_2(5) and mod3_2(8) and (not mod3_2(3))
+
+  -- Forward reference.
+  let ok_fwd  = use_b(4) == 10     -- (4+1) * 2
+
+  let ok = ok_even and ok_odd and ok_mod0 and ok_mod1 and ok_mod2 and ok_fwd
+
   log.info(if ok then "DECK_CONF_OK:lang.fn.mutual" else "DECK_CONF_FAIL:lang.fn.mutual")
