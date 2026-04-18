@@ -6,9 +6,46 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: immediately-invoked lambda expressions — (f)(args).
+-- Old version had 3 cases; deepened to cover both lambda forms,
+-- multi-arg, currying-style (lambda returning lambda), and passing
+-- lambdas as arguments to stdlib HOFs (§11.2: map/filter/reduce).
 @on launch:
-  let r1 = (x -> x * x)(7)
-  let r2 = (fn (a, b) = a - b)(100, 42)
-  let r3 = ((y -> y + 1)(9))
-  let ok = r1 == 49 && r2 == 58 && r3 == 10
+  -- Single-arg arrow form, called inline.
+  let r1    = (x -> x * x)(7)
+  let ok_r1 = r1 == 49
+
+  -- Multi-arg `fn` form, called inline.
+  let r2    = (fn (a, b) = a - b)(100, 42)
+  let ok_r2 = r2 == 58
+
+  -- Doubly parenthesized.
+  let r3    = ((y -> y + 1)(9))
+  let ok_r3 = r3 == 10
+
+  -- Immediately invoked with a do-block body.
+  let r4 = (fn (n) =
+             do
+               let d = n * 2
+               d + 3)(5)
+  let ok_r4 = r4 == 13
+
+  -- Lambda returning a lambda; call in a chain.
+  let r5    = ((a -> b -> a + b)(10))(5)
+  let ok_r5 = r5 == 15
+
+  -- Inline lambda passed to list.map.
+  let r6    = list.map([1, 2, 3], (n) -> n * 10)
+  let ok_r6 = r6 == [10, 20, 30]
+
+  -- Inline lambda passed to list.filter.
+  let r7    = list.filter([1, 2, 3, 4, 5], (n) -> n > 2)
+  let ok_r7 = r7 == [3, 4, 5]
+
+  -- Inline lambda passed to list.reduce.
+  let r8    = list.reduce([1, 2, 3, 4], 0, (acc, n) -> acc + n)
+  let ok_r8 = r8 == 10
+
+  let ok = ok_r1 and ok_r2 and ok_r3 and ok_r4 and ok_r5 and ok_r6 and ok_r7 and ok_r8
+
   log.info(if ok then "DECK_CONF_OK:lang.lambda.inline" else "DECK_CONF_FAIL:lang.lambda.inline")

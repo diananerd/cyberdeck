@@ -6,10 +6,54 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: anonymous `fn (…) = body` form (§6.1 with name
+-- omitted; §6.5 lambda). Old version tested 2 cases. This covers
+-- both the `fn (…) = …` form and the `x -> …` arrow form plus
+-- annotations, multi-arity, single-expr vs do-block bodies, and
+-- storing lambdas in collections (first-class citizenship).
 @on launch:
-  let add = fn (a, b) = a + b
+  -- `fn` anonymous form.
+  let add   = fn (a, b) = a + b
+  let sub   = fn (a, b) = a - b
+  let id_f  = fn (x) = x
+  let ok_fn = add(7, 8) == 15
+          and sub(100, 42) == 58
+          and id_f(99) == 99
+
+  -- `x -> …` arrow form (shorthand for single-arg lambda).
+  let dbl   = x -> x * 2
+  let sq    = n -> n * n
+  let ok_ar = dbl(21) == 42 and sq(9) == 81
+
+  -- Multi-arg arrow form with parens.
+  let mul3  = (a, b, c) -> a * b * c
+  let ok_ma = mul3(2, 3, 5) == 30
+
+  -- Anon fn with type annotation on arguments.
+  let typed = fn (x: int, y: int) = x + y
+  let ok_ty = typed(10, 20) == 30
+
+  -- Body as do-block with let bindings.
   let max3 = fn (a, b, c) =
-    let m1 = if a > b then a else b
-    if m1 > c then m1 else c
-  let ok = add(7, 8) == 15 && max3(3, 9, 5) == 9 && max3(20, 5, 11) == 20
+    do
+      let m1 = if a > b then a else b
+      if m1 > c then m1 else c
+  let ok_do = max3(3, 9, 5) == 9
+          and max3(20, 5, 11) == 20
+          and max3(7, 7, 7) == 7
+
+  -- Stored in a map (first-class value).
+  let ops = {"inc": x -> x + 1, "dec": x -> x - 1}
+  let ok_map = match map.get(ops, "inc")
+                 | :some f -> f(10) == 11
+                 | :none   -> false
+
+  -- Stored in a list.
+  let fns = [x -> x * 2, x -> x + 10, x -> x - 1]
+  let ok_lst = match list.get(fns, 1)
+                 | :some f -> f(5) == 15
+                 | :none   -> false
+
+  let ok = ok_fn and ok_ar and ok_ma and ok_ty and ok_do and ok_map and ok_lst
+
   log.info(if ok then "DECK_CONF_OK:lang.lambda.anon" else "DECK_CONF_FAIL:lang.lambda.anon")
