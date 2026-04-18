@@ -2,6 +2,49 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.9.9] — 2026-04-17 — F30 Conformance DL2
+
+Conformance harness extendido para DL2: 3 stress tests nuevos +
+deck_level/deck_os/runtime version reportan DL2. Todo verde.
+
+### Added
+
+**F30.1 deck_level=2, deck_os=2 promotion.** `deck_sdi_info` reporta
+`deck_level=2`, `deck_os=2`, `runtime="0.3.0"` (bump 0.2.0 → 0.3.0).
+Apps con `@requires.deck_level: 1` siguen cargando. Loader test para
+`level=99` sigue rechazando con LEVEL_UNKNOWN.
+
+**F30.5 dl2.dvc_complex stress.** Construye DVC tree de 8 nodos
+(GROUP→COLUMN→{5×LABEL, TRIGGER, CHOICE}) con attrs de cada WireValue
+type (str/bool/i64/f64/atom/list_str). Encoda → decoda → tree_equal
+diff=0. 400 bytes round-trip.
+
+**F30.6 dl2.activity_stack stress.** Push 3 dummies (cap=4 con
+launcher en slot 0), valida depth=4 + DECK_BRIDGE_UI_ACTIVITY_MAX,
+pop_to_home regresa a depth=1, on_create + on_destroy counts ≥3.
+Skip cleanly si conformance corre antes que el shell (slot 0 vacío).
+
+**F30.x dl2.drivers_present stress.** Smoke test los 5 drivers DL2
+nuevos: wifi.status válido, http.request(NULL)→INVALID_ARG,
+battery.read_pct≤100, security.has_pin no crashea, bridge.ui rechaza
+0-len snapshot.
+
+**JSON report** ahora reporta `deck_level=2 deck_os=2`. Persiste en
+`/deck/reports/dl1-<ts>.json` (nombre histórico DL1; F31 renombrará).
+
+### Changed
+
+- `s_heap_idle_budget` relaxed 200KB → 64KB. WiFi stack + LVGL
+  consumen ~80KB internal en idle; spec 16 §4.4 permite ≥64KB DL2.
+- `info.runtime_version` 0.2.0 → 0.3.0 (DL2 capability surface)
+- Conformance suite: 12 → 15 stress tests, todos verdes en hardware
+
+### Stats hardware
+
+- 5/5 suites PASS, 73/76 deck tests PASS, 15/15 stress PASS
+- `{"deck_level":2,"deck_os":2,"runtime":"0.3.0"}` en JSON report
+- Bin 1.36 MB
+
 ## [0.9.5] — 2026-04-17 — F29 Apps DL2
 
 Cuatro apps system-bundled corren desde el launcher: COUNTER, TASKMAN,

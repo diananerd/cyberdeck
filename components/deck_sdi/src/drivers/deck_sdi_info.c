@@ -10,10 +10,11 @@
 
 static const char *TAG = "sdi.info";
 
-/* DL1 runtime claims. Bumped in lockstep with the component version. */
-#define DECK_RUNTIME_VERSION     "0.2.0"
-#define DECK_LEVEL               1
-#define DECK_OS_SURFACE          1
+/* Runtime claims. Bumped in lockstep with the component version.
+ * deck_level promotes to 2 once F25-F29 are all on the platform. */
+#define DECK_RUNTIME_VERSION     "0.3.0"
+#define DECK_LEVEL               2
+#define DECK_OS_SURFACE          2
 #define DECK_EDITION             2026
 
 /* MAC-derived device id, computed once on first access. */
