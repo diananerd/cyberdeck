@@ -3,15 +3,25 @@
 
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_sntp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include <time.h>
 #include <sys/time.h>
+#include <string.h>
 
 static const char *TAG = "sdi.time";
 
-static bool s_wall_set = false;
+static bool s_wall_set    = false;
+static bool s_sntp_active = false;
+
+static void sntp_synced_cb(struct timeval *tv)
+{
+    if (!tv) return;
+    s_wall_set = true;
+    ESP_LOGI(TAG, "SNTP sync: epoch=%lld", (long long)tv->tv_sec);
+}
 
 static int64_t time_monotonic_us(void *ctx)
 {
@@ -44,11 +54,37 @@ static bool time_wall_is_set(void *ctx)
     return s_wall_set;
 }
 
+static deck_sdi_err_t time_sntp_start_impl(void *ctx, const char *server)
+{
+    (void)ctx;
+    if (s_sntp_active) return DECK_SDI_OK;
+    if (!server || !*server) server = "pool.ntp.org";
+
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, server);
+    sntp_set_time_sync_notification_cb(sntp_synced_cb);
+    esp_sntp_init();
+    s_sntp_active = true;
+    ESP_LOGI(TAG, "SNTP started (server=%s)", server);
+    return DECK_SDI_OK;
+}
+
+static deck_sdi_err_t time_sntp_stop_impl(void *ctx)
+{
+    (void)ctx;
+    if (!s_sntp_active) return DECK_SDI_OK;
+    esp_sntp_stop();
+    s_sntp_active = false;
+    return DECK_SDI_OK;
+}
+
 static const deck_sdi_time_vtable_t s_vtable = {
     .monotonic_us      = time_monotonic_us,
     .wall_epoch_s      = time_wall_epoch_s,
     .set_wall_epoch_s  = time_set_wall_epoch_s,
     .wall_is_set       = time_wall_is_set,
+    .sntp_start        = time_sntp_start_impl,
+    .sntp_stop         = time_sntp_stop_impl,
 };
 
 deck_sdi_err_t deck_sdi_time_register(void)
@@ -81,6 +117,22 @@ deck_sdi_err_t deck_sdi_time_set_wall_epoch_s(int64_t e)
 { void *c; const deck_sdi_time_vtable_t *v = time_vt(&c); return v ? v->set_wall_epoch_s(c, e) : DECK_SDI_ERR_NOT_FOUND; }
 bool deck_sdi_time_wall_is_set(void)
 { void *c; const deck_sdi_time_vtable_t *v = time_vt(&c); return v ? v->wall_is_set(c) : false; }
+
+deck_sdi_err_t deck_sdi_time_sntp_start(const char *server)
+{
+    void *c; const deck_sdi_time_vtable_t *v = time_vt(&c);
+    if (!v) return DECK_SDI_ERR_NOT_FOUND;
+    if (!v->sntp_start) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return v->sntp_start(c, server);
+}
+
+deck_sdi_err_t deck_sdi_time_sntp_stop(void)
+{
+    void *c; const deck_sdi_time_vtable_t *v = time_vt(&c);
+    if (!v) return DECK_SDI_ERR_NOT_FOUND;
+    if (!v->sntp_stop) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return v->sntp_stop(c);
+}
 
 /* ---------- selftest ---------- */
 

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <unistd.h>
 
 static const char *TAG = "sdi.fs";
 
@@ -105,10 +106,79 @@ static deck_sdi_err_t fs_list_impl(void *ctx, const char *path,
     return DECK_SDI_OK;
 }
 
+static deck_sdi_err_t fs_write_impl(void *ctx, const char *path,
+                                     const void *buf, size_t bytes)
+{
+    (void)ctx;
+    if (!path || (!buf && bytes)) return DECK_SDI_ERR_INVALID_ARG;
+    char full[128];
+    if (to_vfs(path, full, sizeof(full)) >= sizeof(full))
+        return DECK_SDI_ERR_INVALID_ARG;
+    FILE *f = fopen(full, "wb");
+    if (!f) return errno == ENOENT ? DECK_SDI_ERR_NOT_FOUND : DECK_SDI_ERR_IO;
+    size_t n = bytes ? fwrite(buf, 1, bytes, f) : 0;
+    int err = ferror(f);
+    fclose(f);
+    if (err || n != bytes) return DECK_SDI_ERR_IO;
+    return DECK_SDI_OK;
+}
+
+static deck_sdi_err_t fs_create_impl(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path) return DECK_SDI_ERR_INVALID_ARG;
+    char full[128];
+    if (to_vfs(path, full, sizeof(full)) >= sizeof(full))
+        return DECK_SDI_ERR_INVALID_ARG;
+    struct stat st;
+    if (stat(full, &st) == 0) return DECK_SDI_ERR_ALREADY_EXISTS;
+    FILE *f = fopen(full, "wb");
+    if (!f) return DECK_SDI_ERR_IO;
+    fclose(f);
+    return DECK_SDI_OK;
+}
+
+static deck_sdi_err_t fs_remove_impl(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path) return DECK_SDI_ERR_INVALID_ARG;
+    char full[128];
+    if (to_vfs(path, full, sizeof(full)) >= sizeof(full))
+        return DECK_SDI_ERR_INVALID_ARG;
+    struct stat st;
+    if (stat(full, &st) != 0)
+        return errno == ENOENT ? DECK_SDI_ERR_NOT_FOUND : DECK_SDI_ERR_IO;
+    int rc = S_ISDIR(st.st_mode) ? rmdir(full) : unlink(full);
+    if (rc != 0) return DECK_SDI_ERR_IO;
+    return DECK_SDI_OK;
+}
+
+static deck_sdi_err_t fs_mkdir_impl(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path) return DECK_SDI_ERR_INVALID_ARG;
+    char full[128];
+    if (to_vfs(path, full, sizeof(full)) >= sizeof(full))
+        return DECK_SDI_ERR_INVALID_ARG;
+    if (mkdir(full, 0775) != 0) {
+        if (errno == EEXIST) return DECK_SDI_ERR_ALREADY_EXISTS;
+        if (errno == ENOENT) return DECK_SDI_ERR_NOT_FOUND;
+        /* SPIFFS is flat — no real directories. Treat as not_supported
+         * so callers can fall back to flat-name conventions. */
+        if (errno == ENOTSUP || errno == ENOSYS) return DECK_SDI_ERR_NOT_SUPPORTED;
+        return DECK_SDI_ERR_IO;
+    }
+    return DECK_SDI_OK;
+}
+
 static const deck_sdi_fs_vtable_t s_vtable = {
     .read   = fs_read_impl,
     .exists = fs_exists_impl,
     .list   = fs_list_impl,
+    .write  = fs_write_impl,
+    .create = fs_create_impl,
+    .remove = fs_remove_impl,
+    .mkdir  = fs_mkdir_impl,
 };
 
 deck_sdi_err_t deck_sdi_fs_register_spiffs(void)
@@ -158,6 +228,38 @@ deck_sdi_err_t deck_sdi_fs_list(const char *path,
     return vt->list(ctx, path, cb, user);
 }
 
+deck_sdi_err_t deck_sdi_fs_write(const char *path, const void *buf, size_t bytes)
+{
+    void *ctx; const deck_sdi_fs_vtable_t *vt = fs_vt(&ctx);
+    if (!vt) return DECK_SDI_ERR_NOT_FOUND;
+    if (!vt->write) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->write(ctx, path, buf, bytes);
+}
+
+deck_sdi_err_t deck_sdi_fs_create(const char *path)
+{
+    void *ctx; const deck_sdi_fs_vtable_t *vt = fs_vt(&ctx);
+    if (!vt) return DECK_SDI_ERR_NOT_FOUND;
+    if (!vt->create) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->create(ctx, path);
+}
+
+deck_sdi_err_t deck_sdi_fs_remove(const char *path)
+{
+    void *ctx; const deck_sdi_fs_vtable_t *vt = fs_vt(&ctx);
+    if (!vt) return DECK_SDI_ERR_NOT_FOUND;
+    if (!vt->remove) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->remove(ctx, path);
+}
+
+deck_sdi_err_t deck_sdi_fs_mkdir(const char *path)
+{
+    void *ctx; const deck_sdi_fs_vtable_t *vt = fs_vt(&ctx);
+    if (!vt) return DECK_SDI_ERR_NOT_FOUND;
+    if (!vt->mkdir) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->mkdir(ctx, path);
+}
+
 /* ---------- selftest ---------- */
 
 typedef struct { int count; } count_ctx_t;
@@ -187,7 +289,66 @@ deck_sdi_err_t deck_sdi_fs_selftest(void)
         return DECK_SDI_ERR_FAIL;
     }
 
-    ESP_LOGI(TAG, "selftest: PASS (list root: %d entries, missing path → not_found)",
-             cc.count);
+    /* DL2 round-trip: write → read → remove. SPIFFS is flat; mkdir may
+     * report NOT_SUPPORTED — which is acceptable for this driver. */
+    const char *scratch = "/__sdi_fs_test__.bin";
+    /* Best-effort cleanup from a previous aborted run. */
+    (void)deck_sdi_fs_remove(scratch);
+
+    const char payload[] = "deck-fs-roundtrip\n";
+    const size_t plen = sizeof(payload) - 1;
+
+    r = deck_sdi_fs_write(scratch, payload, plen);
+    if (r != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "write failed: %s", deck_sdi_strerror(r));
+        return r;
+    }
+
+    bool is_dir = true;
+    r = deck_sdi_fs_exists(scratch, &is_dir);
+    if (r != DECK_SDI_OK || is_dir) {
+        ESP_LOGE(TAG, "exists after write failed: r=%s dir=%d",
+                 deck_sdi_strerror(r), is_dir);
+        (void)deck_sdi_fs_remove(scratch);
+        return DECK_SDI_ERR_FAIL;
+    }
+
+    char buf[64] = {0};
+    size_t n = sizeof(buf);
+    r = deck_sdi_fs_read(scratch, buf, &n);
+    if (r != DECK_SDI_OK || n != plen || memcmp(buf, payload, plen) != 0) {
+        ESP_LOGE(TAG, "read mismatch: r=%s n=%u expected=%u",
+                 deck_sdi_strerror(r), (unsigned)n, (unsigned)plen);
+        (void)deck_sdi_fs_remove(scratch);
+        return DECK_SDI_ERR_FAIL;
+    }
+
+    /* create on existing path must return ALREADY_EXISTS. */
+    r = deck_sdi_fs_create(scratch);
+    if (r != DECK_SDI_ERR_ALREADY_EXISTS) {
+        ESP_LOGE(TAG, "create on existing path: expected ALREADY_EXISTS, got %s",
+                 deck_sdi_strerror(r));
+        (void)deck_sdi_fs_remove(scratch);
+        return DECK_SDI_ERR_FAIL;
+    }
+
+    r = deck_sdi_fs_remove(scratch);
+    if (r != DECK_SDI_OK) {
+        ESP_LOGE(TAG, "remove failed: %s", deck_sdi_strerror(r));
+        return r;
+    }
+    if (deck_sdi_fs_exists(scratch, NULL) != DECK_SDI_ERR_NOT_FOUND) {
+        ESP_LOGE(TAG, "scratch still exists after remove");
+        return DECK_SDI_ERR_FAIL;
+    }
+
+    /* mkdir probe: SPIFFS likely returns NOT_SUPPORTED, which is fine. */
+    deck_sdi_err_t mk = deck_sdi_fs_mkdir("/__sdi_fs_dir__");
+    bool mkdir_ok = (mk == DECK_SDI_OK);
+    if (mkdir_ok) (void)deck_sdi_fs_remove("/__sdi_fs_dir__");
+
+    ESP_LOGI(TAG,
+        "selftest: PASS (list=%d, RW round-trip OK, mkdir=%s)",
+        cc.count, mkdir_ok ? "ok" : deck_sdi_strerror(mk));
     return DECK_SDI_OK;
 }

@@ -20,6 +20,13 @@
 #include "drivers/deck_sdi_info.h"
 #include "drivers/deck_sdi_time.h"
 #include "drivers/deck_sdi_shell.h"
+#include "drivers/deck_sdi_wifi.h"
+#include "drivers/deck_sdi_http.h"
+#include "drivers/deck_sdi_battery.h"
+#include "drivers/deck_sdi_security.h"
+#include "drivers/deck_sdi_bridge_ui.h"
+#include "drivers/deck_sdi_display.h"
+#include "drivers/deck_sdi_touch.h"
 
 #include "deck_runtime.h"
 #include "deck_conformance.h"
@@ -58,11 +65,20 @@ static void run_one(const char *name, deck_sdi_err_t (*fn)(void))
 static void run_sdi_selftests(void)
 {
     ESP_LOGI(TAG, "--- SDI selftests ---");
-    run_one("nvs",   deck_sdi_nvs_selftest);
-    run_one("fs",    deck_sdi_fs_selftest);
-    run_one("info",  deck_sdi_info_selftest);
-    run_one("time",  deck_sdi_time_selftest);
-    run_one("shell", deck_sdi_shell_selftest);
+    run_one("nvs",       deck_sdi_nvs_selftest);
+    run_one("fs",        deck_sdi_fs_selftest);
+    run_one("info",      deck_sdi_info_selftest);
+    run_one("time",      deck_sdi_time_selftest);
+    run_one("shell",     deck_sdi_shell_selftest);
+    /* DL2 drivers — registered conditionally below; selftests no-op
+     * gracefully if the driver isn't registered yet. */
+    run_one("wifi",      deck_sdi_wifi_selftest);
+    run_one("http",      deck_sdi_http_selftest);
+    run_one("battery",   deck_sdi_battery_selftest);
+    run_one("security",  deck_sdi_security_selftest);
+    run_one("bridge_ui", deck_sdi_bridge_ui_selftest);
+    run_one("display",   deck_sdi_display_selftest);
+    run_one("touch",     deck_sdi_touch_selftest);
     ESP_LOGI(TAG, "--- SDI selftests done ---");
 
     (void)deck_conformance_run();
@@ -91,11 +107,21 @@ void app_main(void)
     log_device_id();
 
     deck_sdi_registry_init();
-    ESP_ERROR_CHECK(deck_sdi_nvs_register_esp32() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
-    ESP_ERROR_CHECK(deck_sdi_fs_register_spiffs() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
-    ESP_ERROR_CHECK(deck_sdi_info_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
-    ESP_ERROR_CHECK(deck_sdi_time_register()       == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
-    ESP_ERROR_CHECK(deck_sdi_shell_register_stub() == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    /* DL1 mandatory drivers. */
+    ESP_ERROR_CHECK(deck_sdi_nvs_register_esp32()   == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_fs_register_spiffs()   == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_info_register()        == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_time_register()        == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    ESP_ERROR_CHECK(deck_sdi_shell_register_stub()  == DECK_SDI_OK ? ESP_OK : ESP_FAIL);
+    /* DL2 drivers (F25). Registration is non-fatal individually so a
+     * missing dependency on a stripped build doesn't brick boot. */
+    (void)deck_sdi_wifi_register_esp32();
+    (void)deck_sdi_http_register_esp32();
+    (void)deck_sdi_battery_register_esp32();
+    (void)deck_sdi_security_register_esp32();
+    (void)deck_sdi_bridge_ui_register_skeleton();
+    (void)deck_sdi_display_register_esp32();
+    (void)deck_sdi_touch_register_esp32();
     deck_sdi_log_registered();
 
     /* Runtime init — heap hard-limit for DL1 is 64 KB (spec 16 §4.4). */

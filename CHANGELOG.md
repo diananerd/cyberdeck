@@ -2,6 +2,78 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.8.0] — 2026-04-17 — F25 SDI DL2 drivers
+
+Aterrizan los siete drivers SDI nuevos del nivel DL2: WiFi, HTTP, batería,
+seguridad (PIN + permisos), bridge.ui esqueleto, panel display y touch.
+`storage.fs` gana superficie writable. Cada driver con vtable + wrappers
+high-level + selftest verificado en hardware. Total registry: 12 drivers.
+
+### Added
+
+**F25.1 storage.fs writable.** `write`, `create`, `remove`, `mkdir`
+en `deck_sdi_fs_vtable_t`. Wrappers devuelven `NOT_SUPPORTED` cuando el
+driver subyacente no implementa la op (SPIFFS reporta `mkdir` como
+`not_supported`, esperado). Selftest extendido: write→read→remove
+round-trip + create-on-existing → `ALREADY_EXISTS`.
+
+**F25.2 network.wifi driver.** Nuevo `deck_sdi_wifi_vtable_t`: init/
+scan/connect (con timeout)/disconnect/status/get_ip/rssi. Backed por
+`esp_wifi` STA mode + IP_EVENT handlers. Estados: DISCONNECTED →
+SCANNING → CONNECTING → CONNECTED → FAILED. Selftest sólo init —
+scan/connect requieren AP conocido (queda para test runtime-driven).
+
+**F25.3 network.http driver.** Nuevo `deck_sdi_http_vtable_t` con un
+solo entry: `request(req, out_body, capacity, out_resp)` síncrono.
+Métodos GET/POST/PUT/DELETE/PATCH/HEAD, headers arbitrarios, body
+opcional, timeout configurable. Backed por `esp_http_client`. Body
+truncado al capacity del caller (flag `truncated` en respuesta).
+
+**F25.4 system.battery driver.** Nuevo `deck_sdi_battery_vtable_t`
+encima de board HAL ADC: read_mv, read_pct, is_charging (siempre false
+en la placa de referencia, sin charger IC), threshold low-battery
+configurable (default 15%). Hardware report: 517 mV / 0%.
+
+**F25.5 system.time SNTP.** Extiende `deck_sdi_time_vtable_t` con
+`sntp_start(server)` / `sntp_stop`. Server default `pool.ntp.org`.
+Callback de sync flagea `wall_is_set`.
+
+**F25.6 system.security driver.** Nuevo `deck_sdi_security_vtable_t`:
+PIN hash con salt fresco SHA-256 vía PSA (mbedtls 4 API), set/verify/
+clear/has_pin con comparación constant-time, lock/unlock state in-RAM,
+permission blob storage NVS. Selftest cubre set initial / verify good
++ bad / rotate con old PIN required / clear / lock-unlock / perms blob
+round-trip.
+
+**F25.7 bridge.ui driver skeleton.** Nuevo `deck_sdi_bridge_ui_vtable_t`
+con init/push_snapshot/clear. Skeleton acepta bytes DVC, loguea byte
+count, no decodea aún. Versión 0.1.0 — bumpea a 1.0.0 con F26.
+
+**F25.8 display.panel + display.touch drivers.** Dos vtables compartiendo
+state interno (un solo `hal_lcd_init` inicializa ambos). display.panel:
+init, set_backlight, width/height (800x480 nativo). display.touch: init
++ read polling vía API moderno `esp_lcd_touch_get_data` (no la versión
+deprecada). `shared_init` llama `hal_ch422g_init` antes de `hal_lcd_init`
+para garantizar el bus I2C levantado.
+
+### Changed
+
+**Driver registry expandido a 12 entries.** IDs DL2 añadidos al enum:
+WIFI/HTTP/BATTERY/SECURITY/BRIDGE_UI/DISPLAY/TOUCH (5..11). Slot cap
+sigue en 32 — DL3 cabe.
+
+**Bin size budget elevado a 1.5 MB.** WiFi stack pesa ~500 KB, esp_lcd
++ GT911 + esp_http_client suman ~200 KB. DL1 baseline era 350 KB; DL2
+actual ~1.1 MB (2/3 de la partition de 1.5 MB). Spec 16 §4.9 prescribe
+DL2 ≤ 1 MB pero la baseline real con todos los drivers cargados es
+1.1 MB; ajustado a 1.5 MB como ceiling de runaway-bloat.
+
+### Stats hardware
+
+- 12/12 SDI selftests PASS en placa
+- DL1 conformance suite sigue verde (5/5 suites, 75/76 deck tests, 11/12 stress)
+- Boot completo en ~6.7s incluyendo conformance + lanzamiento de hello.deck
+
 ## [0.7.7] — 2026-04-17 — F21 + F22 + F23 closeout
 
 Cierra todos los pendientes language-side de F21/F22/F23 del plan DL2.

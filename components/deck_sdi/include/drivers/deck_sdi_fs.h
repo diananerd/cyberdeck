@@ -36,6 +36,24 @@ typedef struct {
     deck_sdi_err_t (*list)(void *ctx, const char *path,
                            bool (*cb)(const char *name, bool is_dir, void *user),
                            void *user);
+
+    /* DL2+ writable surface. NULL → DECK_SDI_ERR_NOT_SUPPORTED at the
+     * wrapper layer (DL1 read-only platforms). */
+
+    /* Write `bytes` of `buf` to `path`, fully truncating any prior content.
+     * Creates the file if absent. Parent dir must exist. */
+    deck_sdi_err_t (*write)(void *ctx, const char *path,
+                            const void *buf, size_t bytes);
+
+    /* Create an empty file. ERR_ALREADY_EXISTS if path exists. */
+    deck_sdi_err_t (*create)(void *ctx, const char *path);
+
+    /* Delete file (or empty directory). NOT_FOUND if absent. */
+    deck_sdi_err_t (*remove)(void *ctx, const char *path);
+
+    /* Create a directory. ERR_ALREADY_EXISTS if path exists. Parent dir
+     * must already exist (no recursive mkdir at SDI surface). */
+    deck_sdi_err_t (*mkdir)(void *ctx, const char *path);
 } deck_sdi_fs_vtable_t;
 
 /* Platform registration — SPIFFS impl backed by the "apps" partition. */
@@ -48,7 +66,16 @@ deck_sdi_err_t deck_sdi_fs_list(const char *path,
                                 bool (*cb)(const char *name, bool is_dir, void *user),
                                 void *user);
 
-/* Selftest: list("/") + exists on a known-missing path returns NOT_FOUND. */
+/* DL2+ writable wrappers. Return DECK_SDI_ERR_NOT_SUPPORTED when the
+ * underlying driver does not implement the op. */
+deck_sdi_err_t deck_sdi_fs_write(const char *path, const void *buf, size_t bytes);
+deck_sdi_err_t deck_sdi_fs_create(const char *path);
+deck_sdi_err_t deck_sdi_fs_remove(const char *path);
+deck_sdi_err_t deck_sdi_fs_mkdir(const char *path);
+
+/* Selftest: list("/") + exists on a known-missing path returns NOT_FOUND.
+ * If the driver advertises writable ops, also exercises mkdir → write →
+ * read → remove round-trip in a temporary scratch directory. */
 deck_sdi_err_t deck_sdi_fs_selftest(void);
 
 #ifdef __cplusplus

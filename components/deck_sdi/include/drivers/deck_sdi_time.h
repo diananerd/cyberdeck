@@ -26,6 +26,14 @@ typedef struct {
 
     /* true if wall clock is considered set/accurate. */
     bool (*wall_is_set)(void *ctx);
+
+    /* DL2+ — start asynchronous SNTP sync against the configured pool.
+     * Idempotent. Caller polls wall_is_set() to see when sync lands.
+     * NULL when the platform has no SNTP support. */
+    deck_sdi_err_t (*sntp_start)(void *ctx, const char *server);
+
+    /* DL2+ — stop SNTP sync (frees client). NULL when unsupported. */
+    deck_sdi_err_t (*sntp_stop)(void *ctx);
 } deck_sdi_time_vtable_t;
 
 deck_sdi_err_t deck_sdi_time_register(void);
@@ -34,6 +42,11 @@ int64_t        deck_sdi_time_monotonic_us(void);
 int64_t        deck_sdi_time_wall_epoch_s(void);
 deck_sdi_err_t deck_sdi_time_set_wall_epoch_s(int64_t epoch_s);
 bool           deck_sdi_time_wall_is_set(void);
+
+/* SNTP wrappers. server may be NULL for the platform default
+ * ("pool.ntp.org" on the ESP-IDF impl). */
+deck_sdi_err_t deck_sdi_time_sntp_start(const char *server);
+deck_sdi_err_t deck_sdi_time_sntp_stop(void);
 
 /* Selftest: monotonic_us moves forward across a vTaskDelay. */
 deck_sdi_err_t deck_sdi_time_selftest(void);
