@@ -86,7 +86,7 @@ Cuando la app está en el estado initial de su `@flow` de entrada, el runtime ev
   match unsaved_changes()
     | true  ->
         :confirm
-          message: "¿Descartar cambios?"
+          prompt: "¿Descartar cambios?"
           confirm: "Salir"     -> :unhandled
           cancel:  "Cancelar"  -> :handled
     | false -> :unhandled
@@ -95,7 +95,7 @@ Cuando la app está en el estado initial de su `@flow` de entrada, el runtime ev
 `@on back` puede retornar:
 - `:handled` — la app consumió el evento; el OS no hace nada
 - `:unhandled` — la app delega al OS; el OS suspende la app
-- `:confirm { message, confirm, cancel }` — el OS muestra el diálogo nativo (no la app — evita el bug de diálogos que quedan huérfanos). `confirm` y `cancel` llevan `-> atom` indicando qué retornar al OS según la elección del usuario.
+- `:confirm { prompt, confirm, cancel }` — el OS muestra el diálogo nativo (no la app — evita el bug de diálogos que quedan huérfanos). `confirm` y `cancel` llevan `-> atom` indicando qué retornar al OS según la elección del usuario.
 
 ### 3.2 Home
 
@@ -448,11 +448,11 @@ Nothing about the launcher mentions grid vs list, card vs row, columns, icons, o
         app ->
           group
             when app.thumbnail is :some
-              media unwrap_opt(app.thumbnail)  alt: app.name  hint: :thumbnail
+              media unwrap_opt(app.thumbnail)  alt: app.name  role: :thumbnail
             navigate "Open {app.name}" -> do
                 apps.bring_to_front(app.id)
                 Launcher.send(:dismiss_tasks)
-            confirm "Close {app.name}"  message: "Close {app.name}?"
+            confirm "Close {app.name}"  prompt: "Close {app.name}?"
               -> apps.kill(app.id)
 ```
 
@@ -536,11 +536,11 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
               bg ->
                 group
                   bg
-                  confirm "Stop task"  message: "Cancelar {unwrap_opt(bg.task_name)}?"
+                  confirm "Stop task"  prompt: "Cancelar {unwrap_opt(bg.task_name)}?"
                     -> tasks.kill_task(bg.app_id, unwrap_opt(bg.task_name))
             when not p.app_id == "system.launcher"
               navigate "Ver detalle" -> TaskManager.send(:show_detail, app_id: p.app_id)
-              confirm "Kill {p.app_id}"  message: "Forzar cierre de {p.app_id}?"
+              confirm "Kill {p.app_id}"  prompt: "Forzar cierre de {p.app_id}?"
                 -> tasks.kill(p.app_id)
 
 fn main_processes () =
@@ -569,9 +569,9 @@ fn background_tasks_of (app_id: str) =
             group
               p
               when p.kind is :background
-                confirm "Stop {unwrap_opt(p.task_name)}"  message: "Cancelar este background task?"
+                confirm "Stop {unwrap_opt(p.task_name)}"  prompt: "Cancelar este background task?"
                   -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
-        confirm "Kill app"  message: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
+        confirm "Kill app"  prompt: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
           -> tasks.kill(app_id)
 
 fn processes_of (app_id: str) =
@@ -1981,10 +1981,10 @@ step :active _ ->
         group
           p
           when p.kind is :main
-            confirm "Kill {p.app_id}"  message: "Forzar cierre de {p.app_id}?"
+            confirm "Kill {p.app_id}"  prompt: "Forzar cierre de {p.app_id}?"
               -> tasks.kill(p.app_id)
           when p.kind is :background
-            confirm "Stop {p.task_name}"  message: "Cancelar background task {p.task_name}?"
+            confirm "Stop {p.task_name}"  prompt: "Cancelar background task {p.task_name}?"
               -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
 ```
 

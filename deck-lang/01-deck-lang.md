@@ -391,7 +391,7 @@ The `-> fragment` return type is optional. The loader infers it when the functio
 ```
 fn post_card (p) =
   group "post"
-    media p.author.avatar  alt: p.author.handle  hint: :avatar
+    media p.author.avatar  alt: p.author.handle  role: :avatar
     p.author.display_name
     rich_text p.text
     p.created_at
@@ -539,7 +539,7 @@ content =
         when p.liked_by_me
           status :liked  label: "Liked"
         for img in p.images
-          media img  hint: :inline
+          media img  role: :inline
 ```
 
 `when` and `for` outside a content body are a load error.

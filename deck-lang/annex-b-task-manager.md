@@ -26,6 +26,7 @@ System-privileged. Bundled. Cannot be uninstalled.
 
 ```deck
 @requires
+  deck_level: 3                 -- system.apps is DL3 (see 16-deck-levels §7.3)
   deck_os: ">= 1"
   runtime: ">= 1.0"
   capabilities:
@@ -141,7 +142,7 @@ Each running app is a `navigate` — a semantic "go into" affordance that the br
               bg ->
                 bg
 
-          confirm "FORCE KILL"  message: "Unsaved data will be lost."
+          confirm "FORCE KILL"  prompt: "Unsaved data will be lost."
             -> TaskmanState.send(:request_kill, id: id)
 ```
 

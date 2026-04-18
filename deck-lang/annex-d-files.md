@@ -26,6 +26,7 @@ System-privileged. Bundled. Cannot be uninstalled.
 
 ```deck
 @requires
+  deck_level: 3                 -- system.apps is DL3 (see 16-deck-levels §7.3)
   deck_os: ">= 1"
   runtime: ">= 1.0"
   capabilities:
@@ -176,7 +177,7 @@ Each `FsEntry` is `@type`'d with name/size/mtime/kind; the bridge renders those 
               trigger "Move here"
                 -> FilesState.send(:move_now, dst: current_path())
           | :delete ->
-              confirm "Delete selected"  message: "Delete {len(s.selected)} item(s)?"
+              confirm "Delete selected"  prompt: "Delete {len(s.selected)} item(s)?"
                 -> confirm_delete(s.selected)
 
         trigger "Cancel"
@@ -199,7 +200,7 @@ Each `FsEntry` is `@type`'d with name/size/mtime/kind; the bridge renders those 
         navigate "Details" -> show_details(v.path)
         trigger  "Rename"  -> FilesState.send(:start_rename, path: v.path)
         trigger  "Move"    -> FilesState.send(:start_move,   path: v.path)
-        confirm  "Delete"  message: "Delete {file_basename(v.path)}?"
+        confirm  "Delete"  prompt: "Delete {file_basename(v.path)}?"
           -> confirm_delete([v.path])
         trigger  "Copy"    -> FilesState.send(:start_copy,   path: v.path)
 ```

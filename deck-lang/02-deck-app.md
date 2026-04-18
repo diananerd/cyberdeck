@@ -183,6 +183,8 @@ Declares the OS surface, runtime, and capability versions the app needs to run. 
 
 ```
 @requires
+  deck_level: 2                     -- Minimum conformance profile: 1 (Core), 2 (Standard), 3 (Full)
+                                    -- See 16-deck-levels for the full feature matrix.
   deck_os: ">= 2"                   -- OS surface API level range; see 15-deck-versioning §5
   runtime: ">= 1.0"                 -- Interpreter version range; see 15-deck-versioning §6
   capabilities:
@@ -213,6 +215,7 @@ Versions are integers for `deck_os`, semver strings for `runtime`, integers for 
 
 If `@requires` is absent or partially specified:
 
+- `deck_level`: inferred as the lowest level that covers every language feature and capability the app uses. Implementations should fail closed — if inference is ambiguous, reject the load with `E_LEVEL_INCONSISTENT` and instruct the developer to declare the level explicitly. See `16-deck-levels.md §5` and `§10` for the error catalog.
 - `deck_os`: inferred as the lowest API level that contains every capability the app uses (computed from `@use` declarations + capability surface metadata).
 - `runtime`: defaults to `>= 1.0`.
 - `capabilities`: any capability appearing in `@use` is implicitly required at version `>= 1`. Optional `@use` entries become optional capability requirements.
@@ -828,7 +831,7 @@ The `content =` block inside any `@machine` state or `@flow` step is a semantic 
 list expr
   empty ->
     content               -- perceived state when expr is []
-  more:    bool_expr      -- signal that more items are available
+  has_more: bool_expr     -- whether more items exist beyond the current `expr`
   on more -> action       -- how to load them; the OS exposes this per form factor
   var ->
     content               -- structure of each item
@@ -891,7 +894,7 @@ Example — login flow with 2FA expressed as `@flow`:
     trigger "Continue" -> App.send(:authenticated)
 
   step :failed e ->
-    error message: e.message
+    error reason: e.message
     trigger "Try again" -> LoginFlow.send(:retry)
 ```
 
@@ -903,8 +906,10 @@ Semantic markers for the perceived state of the view. Used inside `match` arms o
 
 ```
 loading                     -- the system is working; the user is waiting
-error message: str_expr     -- something went wrong; the message is shown to the user
+error reason: str_expr      -- something went wrong; the app declares WHY so the OS can present it
 ```
+
+The rename from `message:` to `reason:` is deliberate: the app is not authoring a "message to display" (that would be a presentation concern); it is declaring the **reason** the error exists. A voice bridge may speak it; a screen bridge may dim-wrap it; a logger bridge may pipe it to telemetry. All three consume the same semantic reason.
 
 ---
 
@@ -926,8 +931,10 @@ Data expressions are placed directly in the body. The OS uses the Deck type to d
 ```
 media expr
   alt:  str_expr      -- required; accessibility label
-  hint: atom?         -- usage context: :avatar :cover :thumbnail :inline
+  role: atom?         -- semantic role: :avatar :cover :thumbnail :inline
 ```
+
+The field was `hint:` in earlier drafts. Renamed to `role:` because the atom declares the media's **role** in the UI, not a suggestion — it is authoritative semantic input the bridge uses to decide size, framing, and placement.
 
 `expr` is a URL (`str`) or binary (`[byte]`). The OS infers the medium (image, video, audio) from the content type. Images from URLs are cached by the OS renderer; no `!http` is needed in the view.
 
@@ -1122,25 +1129,25 @@ search name: atom  value: str?
 
 **`navigate`** — the user wants to go to a related context. The `->` action sends to a machine or flow to trigger a state transition. The OS treats `navigate` semantically — it knows the user intends movement to a new context, not a pure action.
 ```
-navigate label: str  -> action_expr
+navigate label: str  badge: int?  -> action_expr
 ```
-`action_expr` is typically a `Machine.send(...)` call that triggers a navigation transition in the app's root flow. The OS may render this as a disclosure affordance, transition animation hint, or navigation gesture.
+`action_expr` is typically a `Machine.send(...)` call that triggers a navigation transition in the app's root flow. `badge: int?` (optional) mirrors the one on `trigger` — a count the bridge may surface on the navigation affordance. The OS may render navigate as a disclosure affordance, transition animation hint, or navigation gesture.
 
 ---
 
 **`trigger`** — the user initiates an action without navigation or confirmation.
 ```
-trigger label: str  -> action
+trigger label: str  badge: int?  -> action
 ```
-Uses: refresh, retry, sync, mark as read, play/pause.
+`badge: int?` (optional) — a count the app wants associated with the trigger (e.g. pending actions, unread items). The bridge decides how/whether to render it; voice bridges may verbalize "3 new" before the label. Uses: refresh, retry, sync, mark as read, play/pause.
 
 ---
 
 **`confirm`** — the user initiates a significant or irreversible action. The OS interposes a confirmation; how depends on the form factor (dialog, voice confirmation, double-press).
 ```
-confirm label: str  message: str_expr  -> action
+confirm label: str  prompt: str_expr  -> action
 ```
-Uses: delete, block, sign out, reset.
+`prompt:` is the semantic explanation of what the user is being asked to confirm (e.g. `"Permanently delete {file}?"`). Earlier drafts called this `message:`; renamed to `prompt:` because the app is declaring the **question posed to the user**, not a generic body-text message — a voice bridge will phrase it as a question, a screen bridge will put it in the dialog body, a logger bridge will record it as the `prompt` field of the audit event. Uses: delete, block, sign out, reset.
 
 ---
 
@@ -1177,14 +1184,14 @@ The position of a declaration in the content determines its scope:
 content =
   match Timeline.state
     | :loading   -> loading
-    | :error e   -> error message: e.message
+    | :error e   -> error reason: e.message
     | :loaded s  ->
         list s.posts
-          more:    s.cursor is :some
+          has_more: s.cursor is :some
           on more -> Timeline.send(:paginate)
           p ->
             group "author"
-              media p.author.avatar  alt: p.author.handle  hint: :avatar
+              media p.author.avatar  alt: p.author.handle  role: :avatar
               p.author.display_name
               p.author.handle
             rich_text p.text
@@ -1194,8 +1201,8 @@ content =
               toggle :reposted state: p.reposted_by_me on -> interaction.toggle_repost(p)
               navigate "Reply" -> App.send(:open_compose, reply_to: p)
             group "options"
-              confirm "Report"     message: "Report this post?"         -> moderation.report_post(p)
-              confirm "Block user" message: "Block @{p.author.handle}?" -> moderation.block(p.author)
+              confirm "Report"     prompt: "Report this post?"         -> moderation.report_post(p)
+              confirm "Block user" prompt: "Block @{p.author.handle}?" -> moderation.block(p.author)
     | _ -> unit
 
   create "Compose" -> App.send(:open_compose)     -- context-level; always available
@@ -1510,7 +1517,7 @@ fn celsius (t: float) -> str
   step :dashboard ->
     match Sensor.state
       | :booting   -> loading
-      | :no_sensor -> error message: "Sensor not responding"
+      | :no_sensor -> error reason: "Sensor not responding"
       | :alert s   ->
           status true  label: "Temperature alert"
           "{s.temp}°C (max recorded: {s.max}°C)"
@@ -1520,7 +1527,7 @@ fn celsius (t: float) -> str
           chart TempStream.recent(60)
             label: "Last minute"
             y_label: "°C"
-          confirm "Dismiss alert" message: "Clear the temperature alert?" ->
+          confirm "Dismiss alert" prompt: "Clear the temperature alert?" ->
             Sensor.send(:acknowledge)
           navigate "History" -> App.send(:go_history)
       | :active s  ->

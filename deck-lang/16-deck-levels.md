@@ -360,8 +360,11 @@ Mandatory for a platform claiming DL2:
 | `@machine.watch:` (reactive watches) | §02.8.6 |
 | `@machine` delegated (`machine:` / `flow:` composition) | §02.8.3 |
 | `@stream` declarations | §02.10 |
-| Content bodies: `group`, `text`, `button`, `input`, `list`, `markdown`, `image`, `canvas`, `when`, `for` | §02.12 |
-| Content intents (action / toggle / navigate / send / emit) | §02.12.4 |
+| Content structural: `group "label"`, `list`, `form` | §02.12.1 |
+| Content state markers: `loading`, `error reason:` | §02.12.2 |
+| Content data: bare typed expressions, `media`, `rich_text`, `status`, `chart`, `progress`, `markdown`, `markdown_editor` | §02.12.3 |
+| Content intents: `toggle`, `range`, `choice`, `multiselect`, `text`, `password`, `pin`, `date`, `search`, `navigate`, `trigger`, `confirm`, `create`, `share` | §02.12.4 |
+| Control constructs inside content: `when cond`, `for var in expr` | §01.7 |
 | `@task` and `@task.every` | §02.14 |
 | `@doc` / `@example` | §02.17 |
 | `@handles` deep links | §02.20 |

@@ -28,6 +28,7 @@ Settings touches almost everything the OS exposes, because it surfaces almost ev
 
 ```deck
 @requires
+  deck_level: 3                 -- system.apps, system.crashes, ota, notifications, ble are DL3 (see 16-deck-levels §7.3)
   deck_os: ">= 1"
   runtime: ">= 1.0"
   capabilities:
@@ -293,7 +294,7 @@ content :detail s =
       config_input field
         on -> apps.config_set(s.app_id, field.name, event.value)
 
-  confirm "UNINSTALL"  message: "Remove {app_name(s.app_id)} and all its data?"
+  confirm "UNINSTALL"  prompt: "Remove {app_name(s.app_id)} and all its data?"
     -> confirm_uninstall(s.app_id)
 ```
 

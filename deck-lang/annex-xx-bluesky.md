@@ -929,7 +929,7 @@ fn get_list (m: {str: any}, k: str) -> [any] =
         | :submitting -> loading
         | :idle s ->
             match s.error
-              | :some msg -> error message: msg
+              | :some msg -> error reason: msg
               | :none     -> unit
             form
               on submit -> do_login(s.handle, s.password)
@@ -975,13 +975,13 @@ fn do_login (handle: str, password: str) -> unit !api !nvs =
       match Timeline.state
         | :empty | :loading -> loading
         | :error s ->
-            error message: s.message
+            error reason: s.message
             trigger "Retry" -> do
               Timeline.send(:load)
               load_timeline()
         | :loaded s | :refreshing s | :paginating s ->
             list posts_to_show(s)
-              more:    s.cursor is :some
+              has_more: s.cursor is :some
               on more -> load_more(s)
               p ->
                 post_card(p)
@@ -996,7 +996,7 @@ fn do_login (handle: str, password: str) -> unit !api !nvs =
     content =
       match ThreadView.state
         | :loading -> loading
-        | :error s -> error message: s.message
+        | :error s -> error reason: s.message
         | :loaded s -> thread_node(s.thread)
 
   initial :list
@@ -1039,7 +1039,7 @@ fn post_card (p: Post) =
   group "author"
     media unwrap_opt_or(p.author.avatar, "")
       alt:  "Avatar of {p.author.handle}"
-      hint: :avatar
+      role: :avatar
     unwrap_opt_or(p.author.display_name, p.author.handle)
     "@{p.author.handle}"
     time_ago.format(p.created_at)
@@ -1075,7 +1075,7 @@ fn post_expanded (p: Post) =
   group "author"
     media unwrap_opt_or(p.author.avatar, "")
       alt:  "Avatar of {p.author.handle}"
-      hint: :avatar
+      role: :avatar
     unwrap_opt_or(p.author.display_name, p.author.handle)
     "@{p.author.handle}"
   rich_text p.text
@@ -1113,7 +1113,7 @@ fn load_thread (uri: str) -> unit !api =
       match Notifs.state
         | :empty | :loading -> loading
         | :error s ->
-            error message: s.message
+            error reason: s.message
             trigger "Retry" -> do  Notifs.send(:load)  load_notifs()
         | :loaded s ->
             match s.unread > 0
@@ -1135,7 +1135,7 @@ fn notif_row (n: Notif) =
   group "author"
     media unwrap_opt_or(n.author.avatar, "")
       alt:  "Avatar of {n.author.handle}"
-      hint: :avatar
+      role: :avatar
     unwrap_opt_or(n.author.display_name, n.author.handle)
   reason_label(n.reason)
   time_ago.format(n.indexed_at)
@@ -1183,12 +1183,12 @@ fn load_notifs () -> unit !api =
     content =
       match ProfileView.state
         | :loading -> loading
-        | :error s -> error message: s.message
+        | :error s -> error reason: s.message
         | :loaded s ->
             item ->
               match s.profile.avatar
                 | :some url ->
-                    media url  alt: "Profile photo of @{s.profile.handle}"  hint: :cover
+                    media url  alt: "Profile photo of @{s.profile.handle}"  role: :cover
                 | :none -> unit
               unwrap_opt_or(s.profile.display_name, s.profile.handle)
               "@{s.profile.handle}"
@@ -1270,7 +1270,7 @@ fn do_unfollow (p: Profile) -> unit !api =
         | :posting _ -> loading
 
         | :error s ->
-            error message: "Failed: {s.message}"
+            error reason: "Failed: {s.message}"
             trigger "Retry"   -> Compose.send(:retry)
             trigger "Discard" -> do
               Compose.send(:cancel)
@@ -1337,7 +1337,7 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
         | :idle _       -> unit
         | :searching _  -> loading
         | :no_results s -> "No results for \"{s.query}\""
-        | :error s      -> error message: s.message
+        | :error s      -> error reason: s.message
         | :results s    ->
             match len(s.users) > 0
               | true ->
@@ -1347,7 +1347,7 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
                         group "user"
                           media unwrap_opt_or(u.avatar, "")
                             alt:  "Avatar of {u.handle}"
-                            hint: :avatar
+                            role: :avatar
                           unwrap_opt_or(u.display_name, u.handle)
                           "@{u.handle}"
                         navigate "View profile" -> do
@@ -1392,7 +1392,7 @@ fn do_search (q: str) -> unit !api =
             group "App"
               config.bsky_host
               sysinfo.app_version()
-            confirm "Sign Out"  message: "Sign out of Bluesky?"  -> do_logout()
+            confirm "Sign Out"  prompt: "Sign out of Bluesky?"  -> do_logout()
         | _ -> loading
 
   initial :main

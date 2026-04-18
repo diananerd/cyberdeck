@@ -533,6 +533,17 @@ Four complementary storage primitives — choose based on data size, durability 
   is_dir   : bool
   size     : int
   modified : Timestamp
+
+-- In-memory TTL cache. Not persisted. Lost on app restart. For API responses
+-- or computed values acceptable to recompute. Full detail + ErrorT in `05-deck-os-api §6`.
+@capability cache
+  get    (key: str)                          -> any?
+  set    (key: str, value: any, ttl: Duration) -> unit
+  set    (key: str, value: any)              -> unit
+  delete (key: str)                          -> unit
+  exists (key: str)                          -> bool
+  ttl    (key: str)                          -> Duration?
+  clear  ()                                  -> unit
 ```
 
 ### 4.3 Network
@@ -581,6 +592,40 @@ Four complementary storage primitives — choose based on data size, durability 
   body       : str
   body_bytes : [byte]   -- raw response body (same data as body, as bytes)
   headers    : {str: str}
+
+-- High-level HTTP client with session state, response caching, retry logic,
+-- and auth management. Built on network.http but stateful — maintains
+-- configuration and session across calls. Full detail in `05-deck-os-api §5`.
+-- Backed by the same driver as network.http (`12-deck-service-drivers §5.2`).
+-- api_client requires @permissions network.http.
+@capability api_client
+  configure         (opts: ApiConfig)                  -> Result unit api.Error
+  get               (path: str)                        -> Result ApiResponse api.Error
+  get               (path: str, opts: ReqOpts)         -> Result ApiResponse api.Error
+  post              (path: str, body: any)             -> Result ApiResponse api.Error
+  post              (path: str, body: any, opts: ReqOpts) -> Result ApiResponse api.Error
+  put               (path: str, body: any)             -> Result ApiResponse api.Error
+  delete            (path: str)                        -> Result ApiResponse api.Error
+  post_multipart    (path: str, parts: [MultipartPart]) -> Result ApiResponse api.Error
+  set_token         (token: str)                       -> unit
+  set_token         (token: str, kind: atom)           -> unit    -- :bearer | :basic | :custom
+  clear_token       ()                                 -> unit
+  set_header        (name: str, value: str)            -> unit
+  clear_header      (name: str)                        -> unit
+  invalidate        (path: str)                        -> unit
+  invalidate_prefix (prefix: str)                      -> unit
+  @errors
+    :invalid_config  "Configuration is malformed"
+    :not_configured  "api_client.configure() not called before request"
+    :offline         "No network connection"
+    :timeout         "Request timed out"
+    :unauthorized    "401 Authentication failed"
+    :forbidden       "403 Access denied"
+    :not_found       "404 Not found"
+    :server_error    "5xx Server error"
+    :rate_limited    "429 Rate limited"
+    :parse_error     "Response body parse failed"
+  @requires_permission
 
 @opaque WsConn     -- WebSocket connection handle; bridge owns underlying connection
 

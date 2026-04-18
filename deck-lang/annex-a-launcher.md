@@ -26,11 +26,11 @@ System-privileged (`app.id` starts with `system.`). Bundled into the firmware im
 
 ```deck
 @requires
+  deck_level: 3                -- system.apps and notifications are DL3 (see 16-deck-levels §7.3)
   deck_os: ">= 1"
   runtime: ">= 1.0"
   capabilities:
     system.apps:    ">= 1"     -- list installed / launch / suspend
-    system.shell:   ">= 1"     -- statusbar, navbar
     system.security: ">= 1"    -- lock, auto-lock timer
     display.theme:  ">= 1"     -- read current theme
     notifications:  ">= 1"     -- read unread counts for badges
