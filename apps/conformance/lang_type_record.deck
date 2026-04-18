@@ -6,24 +6,63 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `@type` record declarations + construction + field
+-- access + pattern matching (§4.1–§4.4). Old version used an ad-hoc
+-- `{:__type: :User, :name: …}` map form for construction — non-spec.
+-- Spec construction syntax is `TypeName { field: value, … }` (§4.1).
+
 @type User
-  name: str
-  age: int
+  name:   str
+  age:    int
   active: bool
 
 @type Address
   city: str
-  zip: int
+  zip:  int
+
+@type Profile
+  user:    User
+  address: Address
+  tags:    [str]
 
 @on launch:
-  let u = {:__type: :User, :name: "diana", :age: 30, :active: true}
-  let r1 = u.name == "diana"
-  let r2 = u.age == 30
-  let r3 = u.active
-  let r4 = match u.missing
-    none => true
-    _    => false
-  let addr = {:city: "BCN", :zip: 8001}
-  let r5 = addr.city == "BCN" && addr.zip == 8001
-  let ok = r1 && r2 && r3 && r4 && r5
+  -- Construction via TypeName { … } (§4.1).
+  let u = User { name: "diana", age: 30, active: true }
+
+  -- Field access (§4.2).
+  let ok_name = u.name == "diana"
+  let ok_age  = u.age == 30
+  let ok_act  = u.active
+
+  -- Addresses are a distinct type.
+  let a = Address { city: "BCN", zip: 8001 }
+  let ok_addr = a.city == "BCN" and a.zip == 8001
+
+  -- Nested records.
+  let p = Profile { user: u, address: a, tags: ["admin", "beta"] }
+  let ok_nest = p.user.name == "diana"
+            and p.address.city == "BCN"
+            and list.len(p.tags) == 2
+            and list.contains(p.tags, "beta")
+
+  -- Pattern matching on records (§4.4).
+  let categorize = match u
+                     | User { age: a } when a < 18  -> "minor"
+                     | User { age: a } when a < 65  -> "adult"
+                     | _                             -> "senior"
+  let ok_pat = categorize == "adult"
+
+  -- Type inspection.
+  let ok_type = type_of(u) == :User
+            and type_of(a) == :Address
+
+  -- Equality is structural.
+  let u2 = User { name: "diana", age: 30, active: true }
+  let ok_eq = u == u2
+  let u3 = User { name: "diana", age: 31, active: true }
+  let ok_ne = u != u3
+
+  let ok = ok_name and ok_age and ok_act and ok_addr and ok_nest
+        and ok_pat and ok_type and ok_eq and ok_ne
+
   log.info(if ok then "DECK_CONF_OK:lang.type.record" else "DECK_CONF_FAIL:lang.type.record")

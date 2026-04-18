@@ -6,21 +6,49 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `with` record update (§4.3). Produces a new value
+-- with specified fields changed; original is unchanged. Old version:
+--   - Used raw map literal with `:atom` keys in place of `@type` ctor.
+--   - Update syntax `u with {:name: "ada"}` — §4.3 is `u with { name:
+--     "ada" }` (fields, not atom keys).
+--   - Added non-type fields (`:extra: 99`); §4.1 says extra fields are
+--     a load error.
+-- Fixed to canonical spec.
+
 @type User
   name: str
-  age: int
+  age:  int
+  role: atom
 
 @on launch:
-  let u = {:name: "diana", :age: 30, :role: :admin}
-  let u2 = u with {:name: "ada"}
-  let r1 = u2.name == "ada"
-  let r2 = u2.age == 30
-  let r3 = u2.role == :admin
-  let r4 = u.name == "diana"
-  let u3 = u with {:age: 31, :role: :user, :extra: 99}
-  let r5 = u3.age == 31
-  let r6 = u3.role == :user
-  let r7 = u3.extra == 99
-  let r8 = u3.name == "diana"
-  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8
+  let u = User { name: "diana", age: 30, role: :admin }
+
+  -- Update one field.
+  let u2 = u with { name: "ada" }
+  let ok_1 = u2.name == "ada" and u2.age == 30 and u2.role == :admin
+
+  -- Original is unchanged (immutability).
+  let ok_orig = u.name == "diana" and u.age == 30 and u.role == :admin
+
+  -- Update multiple fields in one `with`.
+  let u3 = u with { age: 31, role: :user }
+  let ok_3 = u3.name == "diana" and u3.age == 31 and u3.role == :user
+
+  -- Update using a computation over the original.
+  let u4 = u with { age: u.age + 1 }
+  let ok_4 = u4.age == 31 and u4.name == "diana"
+
+  -- Chaining updates.
+  let u5 = u with { age: 25 } with { role: :user }
+  let ok_5 = u5.age == 25 and u5.role == :user and u5.name == "diana"
+
+  -- Update preserves type (type_of still reports :User).
+  let ok_type = type_of(u3) == :User
+
+  -- Equality after round-tripping through `with`.
+  let u_copy = u with {}    -- empty update is identity
+  let ok_idid = u_copy == u
+
+  let ok = ok_1 and ok_orig and ok_3 and ok_4 and ok_5 and ok_type and ok_idid
+
   log.info(if ok then "DECK_CONF_OK:lang.with.update" else "DECK_CONF_FAIL:lang.with.update")
