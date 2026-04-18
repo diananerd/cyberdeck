@@ -2,6 +2,75 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.7.0] — 2026-04-17 — DL2 language foundations
+
+Cierra **F21** del plan DL2 (`DEVELOPMENT-PLAN-DL2.md`): el lenguaje gana
+funciones, lambdas con closures, tail-call optimization, y los literales
+list/tuple/map. F22 (stdlib + Result + type inspection) y F23 (effects
+enforcement) parciales también — el "shape" del lenguaje DL2 está vivo.
+
+### Added — F21 Language
+
+- **F21.1 fn declarations + recursión.** Top-level + mutual recursion
+  vía pre-binding de fns en global env antes de `@on launch`. Trampolín
+  más adelante (F21.3) para no reventar el stack en recursión profunda.
+- **F21.2 lambdas + closures.** `x -> body`, `(a, b) -> body`,
+  `fn (a, b) = body` anonymous. Captura léxica inmutable. Env refactor
+  a refcount con `tearing_down` flag para romper ciclos
+  (env → fn-binding → fn → closure-env).
+- **F21.3 tail-call optimization.** Threading de `tail_pos` en
+  `interp_run` + trampoline en `invoke_user_fn`. Self-tail reusa el env
+  unbinding; mutual-tail intercambia el env contra el closure del fn
+  destino. count_down(2000) corre en ~240ms sin growth de C stack.
+- **F21.4 list literals + builtins.** `[1, 2, 3]` (heterogéneo, vacío
+  ok). list.len/head/tail/get + DECK_T_LIST (que existía sin estrenar).
+- **F21.5 tuple literals + acceso .N.** `(a, b, c)` distinguido de
+  paren-grouping por presencia de coma. `t.0`, `t.1` postfix.
+- **F21.6 map literals + builtins.** `{k: v}` (heterogéneo, vacío ok).
+  Linear-scan implementación. map.get/put/keys/values/len. Equality de
+  keys vía interned-ptr (str/atom) + valor (int/bool).
+- **F21.7 string interpolation.** `"hello \${name}!"` → concat tree de
+  text fragments + str(expr) con re-parse inline de la expr.
+- **F21.8 do blocks.** Ya estaban en DL1.
+- **F21.9 is operator.** `x is y` value/atom equality.
+- **F21.10 pipe operators.** `x |> f` ≡ `f(x)`. `x |>? f` short-circuit
+  en none + auto-unwrap de some.
+- **F21.11 where bindings.** Deferido — requiere refactor de parse_suite.
+
+### Added — F22 stdlib (parcial)
+
+- **list higher-order.** list.map / list.filter / list.reduce. Reusan
+  invoke_user_fn vía call_fn_value_c (args ya evaluados, sin AST).
+- **Result helpers.** ok(v) / err(e) constructors (tuple internal),
+  is_ok / is_err / unwrap / map_ok / and_then.
+- **Type inspection.** type_of, is_int, is_str, is_atom, is_list,
+  is_map, is_fn.
+- **some(v) constructor** para Optional.
+
+### Added — F23 effects (parcial)
+
+- **!alias enforcement.** AST_FN_DEF guarda effects[]; loader stage 4
+  verifica que cada effect alias tenga `@use` correspondiente o sea
+  built-in (math/text/log/time/etc).
+- Test negativo `errors.effect_undeclared`.
+
+### Changed
+
+- **Main task stack 6 KB → 16 KB.** TCO baja la presión real, pero
+  recursión sin TCO + 5-arg lambdas necesitan headroom.
+- Env management completamente reescrito: refcount + tearing_down.
+- `do_compare` y `match_pattern` extendidos para lists/tuples/maps.
+- Fuzz heap budget bumped a 16 KB (interpolación amplía intern surface).
+
+### Stats en hardware (v0.7.0)
+
+- **5/5 suites + 67/67 .deck + 12/12 stress PASS** (vs 5+49+12 en v0.6.0).
+- Suite total ~540 ms (lang.tco.deep p99 240ms es el slowest).
+- deck_alloc_peak ~12 KB; deck_alloc_live = 370 al final (sin leaks).
+- count_down(2000) tail recursivo verifica TCO sin stack overflow.
+- Snapshots por sub-fase en `tests/conformance/reports/dl2-f21.{1..10}*.log`,
+  `dl2-f22-sample.log`, `dl2-f23-sample.log`.
+
 ## [0.6.0] — 2026-04-17 — DL1 rock solid
 
 Profundiza aún más DL1: latency percentiles, fuzz testing, edge cases avanzados, SDI drivers bajo stress. **66 named checks** en hardware.
