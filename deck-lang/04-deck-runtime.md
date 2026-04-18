@@ -252,21 +252,25 @@ GuardPat        { base: Pattern, guard: Expr }
 -- the evaluator resolves them to [ViewContentNode] sequences at runtime.
 ViewContentNode
   -- Structural primitives
-  = VCList        { source: Expr, empty?: [ViewContentNode], more?: Expr,
+  = VCList        { source: Expr, empty?: [ViewContentNode], has_more?: Expr,
                     on_more?: Expr, binding: str, body: [ViewContentNode] }
   | VCGroup       { label: str, body: [ViewContentNode] }
   | VCForm        { on_submit: Expr, body: [ViewContentNode] }
   | VCFlow        { machine: TypeIdent, steps: [FlowStep] }
   -- View state
   | VCLoading     {}
-  | VCError       { message: Expr }
+  | VCError       { reason: Expr }
   -- Data content
   | VCData        { expr: Expr }               -- bare data expression or fragment call in content position
-  | VCMedia       { expr: Expr, alt: Expr, hint?: atom }
+  | VCMedia       { expr: Expr, alt: Expr, role?: atom }
   | VCRichText    { expr: Expr }
   | VCStatus      { expr: Expr, label: Expr }
   | VCChart       { expr: Expr, label?: Expr, x_label?: Expr, y_label?: Expr }
   | VCProgress    { value: Expr, label?: Expr }
+  | VCMarkdown    { content: Expr, purpose?: atom, on_link?: Expr, on_image?: Expr,
+                    focus?: Expr, describe?: Expr }
+  | VCMarkdownEditor { value: Expr, on_change?: Expr, on_cursor?: Expr, on_selection?: Expr,
+                       placeholder?: Expr, controlled_by?: Expr, describe?: Expr }
   -- Intents
   | VCToggle      { name: atom, state: Expr, on_: Expr }
   | VCRange       { name: atom, value: Expr, min: float, max: float, step?: float, on_: Expr }
@@ -276,10 +280,10 @@ ViewContentNode
   | VCPassword    { name: atom, value?: Expr, hint?: Expr, on_: Expr }
   | VCPin         { name: atom, length: int, on_: Expr }
   | VCDate        { name: atom, value?: Expr, hint?: Expr, on_: Expr }
-  | VCSearch      { name: atom, value?: Expr, hint?: Expr, on_: Expr }
+  | VCSearch      { name: atom, value?: Expr, hint?: Expr, max_length?: int, on_: Expr }
   | VCNavigate    { label: Expr, target: NavTarget, badge?: Expr }
   | VCTrigger     { label: Expr, action: Expr,     badge?: Expr }
-  | VCConfirm     { label: Expr, message: Expr, action: Expr }
+  | VCConfirm     { label: Expr, prompt: Expr, action: Expr }
   | VCCreate      { label: Expr, target: NavTarget }
   | VCShare       { expr: Expr, label?: Expr }
 
@@ -337,16 +341,16 @@ DvcNodeType   deck_node_type     (DeckViewNode* n);
 int           deck_node_child_count  (DeckViewNode* n);
 DeckViewNode* deck_node_child        (DeckViewNode* n, int i);
 
-/* VCList: empty subtree, more flag */
+/* VCList: empty subtree, has_more flag */
 int           deck_node_empty_count  (DeckViewNode* n);
 DeckViewNode* deck_node_empty_child  (DeckViewNode* n, int i);
-bool          deck_node_more         (DeckViewNode* n);  /* evaluated more: value */
+bool          deck_node_has_more     (DeckViewNode* n);  /* evaluated has_more: value */
 
 /* VCGroup / VCStatus: label string */
 const char*   deck_node_label        (DeckViewNode* n);
 
-/* VCError: message string */
-const char*   deck_node_message      (DeckViewNode* n);
+/* VCError: reason string */
+const char*   deck_node_reason       (DeckViewNode* n);
 
 /* Data content: evaluated value (VCData, VCMedia, VCRichText, VCStatus,
    VCChart, VCProgress) */
@@ -354,7 +358,7 @@ DeckValue*    deck_node_value        (DeckViewNode* n);
 
 /* VCMedia */
 const char*   deck_node_alt          (DeckViewNode* n);
-const char*   deck_node_hint         (DeckViewNode* n);  /* atom str or NULL */
+const char*   deck_node_role         (DeckViewNode* n);  /* atom str or NULL */
 
 /* VCChart / VCProgress: optional label strings */
 const char*   deck_node_x_label      (DeckViewNode* n);  /* NULL if absent */
@@ -384,8 +388,8 @@ DeckValue*    deck_node_option_value (DeckViewNode* n, int i);
 /* VCNavigate / VCTrigger / VCConfirm / VCCreate: label */
 const char*   deck_node_text         (DeckViewNode* n);
 
-/* VCConfirm: confirmation message */
-const char*   deck_node_confirm_msg  (DeckViewNode* n);
+/* VCConfirm: confirmation prompt */
+const char*   deck_node_confirm_prompt (DeckViewNode* n);
 
 /* VCNavigate / VCCreate: route atom ("back" and "root" are special) */
 const char*   deck_node_route        (DeckViewNode* n);
