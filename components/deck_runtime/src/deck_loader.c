@@ -295,6 +295,43 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
     }
 }
 
+/* DL2 F23 — collect declared @use names so fn !effect annotations can
+ * be cross-checked. The deck_arena is convenient scratch. */
+static bool use_declared(const ast_node_t *mod, const char *alias)
+{
+    if (!alias) return false;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (!it || it->kind != AST_USE || !it->as.use.module) continue;
+        const char *u = it->as.use.module;
+        /* @use foo.bar declares alias `bar` (last dotted segment) and `foo` (root). */
+        if (strcmp(u, alias) == 0) return true;
+        const char *dot = strrchr(u, '.');
+        if (dot && strcmp(dot + 1, alias) == 0) return true;
+        /* DL1 builtin caps (math/text/log/...) are implicitly available. */
+    }
+    /* Implicit caps that don't need @use (DL1 baseline). */
+    static const char *IMPLICIT[] = {
+        "math","text","bytes","log","time","system","nvs","fs","os","list","map",NULL
+    };
+    for (const char **e = IMPLICIT; *e; e++) if (strcmp(*e, alias) == 0) return true;
+    return false;
+}
+
+static void check_fn_effects(deck_loader_t *l, const ast_node_t *fn)
+{
+    for (uint32_t i = 0; i < fn->as.fndef.n_effects; i++) {
+        const char *eff = fn->as.fndef.effects[i];
+        if (!use_declared(l->module, eff)) {
+            set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, fn->line, fn->col,
+                    "fn '%s' declares !%s but no matching @use",
+                    fn->as.fndef.name ? fn->as.fndef.name : "<anon>",
+                    eff ? eff : "?");
+            return;
+        }
+    }
+}
+
 static void stage4_capability_bind(deck_loader_t *l)
 {
     for (uint32_t i = 0; i < l->module->as.module.items.len; i++) {
@@ -302,6 +339,8 @@ static void stage4_capability_bind(deck_loader_t *l)
         if (!it) continue;
         /* Only walk executable items — skip @app header. */
         if (it->kind == AST_APP || it->kind == AST_USE) continue;
+        if (it->kind == AST_FN_DEF) check_fn_effects(l, it);
+        if (l->err != DECK_LOAD_OK) return;
         walk_expr(l, it);
         if (l->err != DECK_LOAD_OK) return;
     }

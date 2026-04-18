@@ -880,13 +880,21 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
         advance(p);
     }
 
-    /* Optional effect annotations `!alias` — parsed and discarded at F21.1. */
+    /* DL2 F23: collect effect annotations `!alias` for loader to enforce
+     * against @use declarations. */
+    const char *effects_buf[8];
+    uint32_t n_effects = 0;
     while (at(p, TOK_BANG)) {
         advance(p);
         if (!at(p, TOK_IDENT)) {
             set_err(p, DECK_LOAD_PARSE_ERROR, "expected effect alias after '!'");
             return NULL;
         }
+        if (n_effects >= 8) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "too many effect annotations (max 8)");
+            return NULL;
+        }
+        effects_buf[n_effects++] = p->cur.text;
         advance(p);
     }
 
@@ -899,6 +907,11 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     n->as.fndef.params   = deck_arena_memdup(p->arena, params_buf,
                                              n_params * sizeof(char *));
     n->as.fndef.n_params = n_params;
+    n->as.fndef.effects  = n_effects > 0
+                          ? deck_arena_memdup(p->arena, effects_buf,
+                                              n_effects * sizeof(char *))
+                          : NULL;
+    n->as.fndef.n_effects = n_effects;
     n->as.fndef.body     = body;
     return n;
 }

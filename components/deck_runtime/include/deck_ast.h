@@ -136,13 +136,16 @@ struct ast_node {
         struct { const char *event; }                send;
         struct { const char *target; }               transition;
 
-        /* DL2 F21.1: function declaration. params is an array of interned
-         * idents in the arena; type annotations on params and return are
-         * parsed but not retained at this level. */
+        /* DL2 F21.1 + F23: function declaration. params is an array of
+         * interned idents in the arena. effects is the list of `!alias`
+         * effect annotations declared in the signature; the loader cross-
+         * checks each against the surrounding module's @use bindings. */
         struct {
             const char  *name;       /* interned */
             const char **params;     /* array length n_params, arena-owned */
             uint32_t     n_params;
+            const char **effects;    /* array length n_effects */
+            uint32_t     n_effects;
             ast_node_t  *body;
         } fndef;
 

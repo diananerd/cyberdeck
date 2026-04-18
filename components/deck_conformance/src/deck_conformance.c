@@ -178,6 +178,10 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F21.1 — fn arity mismatch must be a clean type-mismatch error. */
     { "errors.fn_arity", "/conformance/err_fn_arity.deck", NULL,
       DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, {0}, 0 },
+
+    /* DL2 F23 — fn declares !alias but no matching @use. */
+    { "errors.effect_undeclared", "/conformance/err_effect_undeclared.deck", NULL,
+      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, {0}, 0 },
 };
 
 #define N_DECK_TESTS (sizeof(DECK_TESTS) / sizeof(DECK_TESTS[0]))
