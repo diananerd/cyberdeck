@@ -831,7 +831,9 @@ static bool parse_app_fields(deck_parser_t *p, ast_app_field_t **out, uint32_t *
 static ast_node_t *parse_use_decl(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_USE); if (!n) return NULL;
-    advance(p); /* @use */
+    /* DL2 F23.4 — @use.optional reuses this path with a flag. */
+    n->as.use.is_optional = (p->cur.text && strcmp(p->cur.text, "use.optional") == 0);
+    advance(p); /* @use or @use.optional */
     if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected module name after @use"); return NULL; }
     /* collect dotted module name into a scratch */
     char scratch[128];
@@ -1033,6 +1035,57 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     return n;
 }
 
+/* DL2 F23.6 / F23.7 — `@permissions` and `@errors` are documented as
+ * indented blocks of `key: value` entries. F23 minimum: parse and
+ * discard (metadata for future shell prompts / runtime cataloging). */
+static ast_node_t *parse_metadata_block(deck_parser_t *p)
+{
+    advance(p); /* @permissions or @errors */
+    if (!expect(p, TOK_NEWLINE, "expected newline after metadata decorator")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented metadata body")) return NULL;
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in metadata block");
+            return NULL;
+        }
+        advance(p);
+        /* Dotted keys like `fs.write`, `network.http`. */
+        while (at(p, TOK_DOT)) {
+            advance(p);
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "expected ident after '.' in metadata key");
+                return NULL;
+            }
+            advance(p);
+        }
+        if (!expect(p, TOK_COLON, "expected ':' in metadata entry")) return NULL;
+        /* Value: skip the rest of the line (one expr or simple ident). */
+        if (at(p, TOK_NEWLINE)) {
+            /* allow empty / nested block — eat it */
+            advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            if (at(p, TOK_INDENT)) {
+                advance(p);
+                while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) advance(p);
+                if (!expect(p, TOK_DEDENT, "expected dedent")) return NULL;
+            }
+            continue;
+        }
+        ast_node_t *v = parse_expr_prec(p, 0);
+        if (!v) return NULL;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing metadata block")) return NULL;
+    /* Return a benign AST_USE node so module item list stays well-formed. */
+    ast_node_t *stub = mknode(p, AST_USE);
+    if (stub) {
+        stub->as.use.module = "__metadata";
+        stub->as.use.is_optional = true;
+    }
+    return stub;
+}
+
 /* DL2 F22.2 — `@type Name`<NEWLINE><INDENT> field: TypeName ... <DEDENT>.
  * Type annotations on fields are parsed and discarded (the runtime is
  * dynamic). Union types `T1 | T2` are also accepted and discarded. */
@@ -1091,12 +1144,32 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         return fnn;
     }
     if (at(p, TOK_DECORATOR)) {
-        if      (dec_is(&p->cur, "app"))     return parse_app_block(p);
-        else if (dec_is(&p->cur, "use"))     return parse_use_decl(p);
-        else if (dec_is(&p->cur, "on"))      return parse_on_decl(p);
-        else if (dec_is(&p->cur, "machine")) return parse_machine_decl(p);
-        else if (dec_is(&p->cur, "type"))    return parse_type_decl(p);
-        set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator (allowed: @app/@use/@on/@machine/@type)");
+        if      (dec_is(&p->cur, "app"))            return parse_app_block(p);
+        else if (dec_is(&p->cur, "use"))            return parse_use_decl(p);
+        else if (dec_is(&p->cur, "use.optional"))   return parse_use_decl(p);   /* DL2 F23.4 */
+        else if (dec_is(&p->cur, "on"))             return parse_on_decl(p);
+        else if (dec_is(&p->cur, "machine"))        return parse_machine_decl(p);
+        else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
+        else if (dec_is(&p->cur, "permissions"))    return parse_metadata_block(p);  /* F23.6 */
+        else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */
+        else if (dec_is(&p->cur, "private")) {
+            /* DL2 F22.9 — @private prefixes a fn declaration. */
+            advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            if (!at(p, TOK_KW_FN)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "@private must precede a fn declaration");
+                return NULL;
+            }
+            ast_node_t *fnn = parse_fn_decl(p);
+            if (!fnn) return NULL;
+            if (!fnn->as.fndef.name) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "@private cannot precede an anonymous fn");
+                return NULL;
+            }
+            fnn->as.fndef.is_private = true;
+            return fnn;
+        }
+        set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator");
         return NULL;
     }
     set_err(p, DECK_LOAD_PARSE_ERROR, "expected @app, @use, @on, @machine, or fn at top level");

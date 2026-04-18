@@ -157,6 +157,10 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F22.2 — @type records + map field access via dot. */
     { "lang.type.record", "/conformance/lang_type_record.deck", "DECK_CONF_OK:lang.type.record", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F22.9 + F23.4 + F23.6 + F23.7 — @private, @use.optional,
+     * @permissions, @errors metadata blocks. */
+    { "lang.metadata",    "/conformance/lang_metadata.deck",    "DECK_CONF_OK:lang.metadata",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },

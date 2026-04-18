@@ -154,10 +154,11 @@ struct ast_node {
             const char **effects;    /* array length n_effects */
             uint32_t     n_effects;
             ast_node_t  *body;
+            bool         is_private; /* DL2 F22.9 — @private prefix */
         } fndef;
 
         struct { ast_app_field_t *fields; uint32_t n_fields; } app;
-        struct { const char *module; }               use;
+        struct { const char *module; bool is_optional; } use;   /* DL2 F23.4 */
         struct { const char *event; ast_node_t *body; } on;
         struct { const char *name; ast_list_t states; }        machine;
         struct { const char *name; ast_list_t hooks; }         state;

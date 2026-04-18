@@ -1,0 +1,28 @@
+@app
+  name: "Conf lang.metadata"
+  id: "conf.lang.metadata"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@use log
+@use.optional crypto
+
+@permissions
+  network: required
+  fs.write: optional
+
+@errors
+  api_timeout: "API request timed out"
+  parse_failure: "Bad response"
+
+@private
+fn helper (x) = x * 2
+
+fn main_fn (n) = helper(n) + 1
+
+@on launch:
+  let r = main_fn(20)
+  let ok = r == 41
+  log.info(if ok then "DECK_CONF_OK:lang.metadata" else "DECK_CONF_FAIL:lang.metadata")
