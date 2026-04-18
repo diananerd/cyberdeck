@@ -2,6 +2,36 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.7.7] — 2026-04-17 — F21 + F22 + F23 closeout
+
+Cierra todos los pendientes language-side de F21/F22/F23 del plan DL2.
+Apps pueden ahora usar la sintaxis DL2 completa documentada en spec 16.
+F24–F31 (async, drivers, UI bridge, shell, apps reales) siguen pendientes.
+
+### Added
+
+**F21.11 where bindings.** `expr where x = v, y = w` (inline) y bloque
+indentado. Wrapping en AST_LET anidado.
+
+**F22.2 + F22.3 @type records + union types en annotations.**
+`@type User { name: str, age: int }`. Records son maps con `:__type` tag;
+field access via `r.name` extiende AST_DOT a maps. Union types `T1 | T2`
+parsed y descartadas (no static type system).
+
+**F22.9 + F23.4 + F23.6 + F23.7 metadata blocks.**
+`@private` antes de fn (visibility flag), `@use.optional X` (soft dep),
+`@permissions { ... }`, `@errors { ... }`. Parser acepta y guarda como
+metadata; enforcement runtime/UI vendrá con stages futuras.
+
+**F23.5 @requires.capabilities enforcement.**
+`requires.capabilities: [http, wifi]` validado at-load. Acepta caps
+built-in del runtime y la lista DL2 promised (http/wifi/crypto/ui/
+battery/security/tasks/display/locale/notify/screen/api/cache/store).
+Apps pueden declarar dependencias futuras sin fallo.
+
+### Stats hardware
+- 5/5 suites + 73/73 .deck + 14/14 negativos + 12/12 stress PASS
+
 ## [0.7.6] — 2026-04-17 — DL2 utility builtins
 
 Conveniencias prácticas que vuelven el runtime usable para apps reales.
