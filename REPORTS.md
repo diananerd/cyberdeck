@@ -257,6 +257,29 @@ User directive: "sigue iterando, no te detengas, esto es ad infinitum" — plus 
 - 2026-04-18 · layer 1 edit · §12.7 rewritten with three tables: input intents (all carry `event.value`), structural handlers (`form` → `event.values: {str: any}`, `list` → `event.page: int`), content handlers (markdown link/image carry `event.url`+contextual `text`/`alt`; markdown_editor change/cursor/selection each carry their own fields), and an explicit note that stream handlers use the `var ->` binder and bind no `event`. The shape-per-handler model is intentional — a blanket "all handlers get event.value" would be wrong for handlers that carry structured payloads (like `cursor` that needs both `cursor: int` and `formats: [atom]`).
 - 2026-04-18 · layer 4 note · runtime almost certainly does not bind `event.values` for `form on submit ->`, `event.page` for `list on more ->`, or the markdown_editor multi-field events yet. Layer 5 should add tests that probe each binding path (press a trigger inside a form; tap a markdown link; submit a form; request more items on a list). Future work.
 
+### Concept #7 — `@on` lifecycle & OS-event handler binding shapes
+
+- 2026-04-18 · layer 1 discovery · `02-deck-app §11` used two different binding styles in examples (`@on os.config_change` with `event.field`/`event.value`; `@on os.wifi_changed (ssid: s, connected: c)` with named binders; `@on hardware.button (id: 0, action: :press)` with value-pattern matching) without stating they were three separate styles. Readers had to guess.
+- 2026-04-18 · layer 1 edit · §11 rewritten to list the three styles explicitly (no-params + `event.field` accessor, named binders, value patterns) and cross-check dispatch: runtime picks the most specific match; equal-specificity handlers for the same event are a load error. The `@on hardware.button (id: 0, action: :press)` form in particular is a pattern-match, not a binding — a critical distinction the old spec didn't call out (apps might accidentally bind `:press` as a variable name expecting any `action`).
+
+### Shallow-test catalog (concept for future)
+
+- 2026-04-18 · layer 5 discovery · spot-checks on conformance fixtures confirm the user's diagnosis (`tests pasa pero en práctica se rompe`):
+  - `apps/conformance/os_fs.deck` tests ONLY `fs.exists` — not `read`, `write`, `append`, `delete`, `list`, `mkdir`, `move`. Claims to certify the `fs` capability but exercises one method of eight.
+  - `apps/conformance/os_nvs.deck` tests set/get/delete of **one** string — no ints, bools, floats, bytes; no error paths; no namespace isolation; no concurrent access.
+  - `apps/conformance/os_time.deck` tests `time.now()` monotonic + positive — nothing else (no `format`, `parse`, `ago`, `utc_*`).
+  - Same shallowness pattern repeats across the os_*.deck fixtures.
+- Layer 6 consolidation planned for a future session: rewrite the os_* conformance fixtures to exercise every method of each capability with multiple value types, error paths, and negative assertions. Gate the suite on the rewritten versions. This is the direct answer to the user's concern about A→B assumed-implementation.
+
+### Session cumulative index
+
+- **Concepts committed in this push**: #1 content-body vocabulary (layers 1+2), #2 capability catalog + DL3 declarations, #3 semantic rename pass + @app identity, #4 @machine hook execution order, #5 @flow sequential-step sugar + layer-4 parser gap, #6 event binding per handler shape, #7 @on OS-event handler binding styles.
+- **Layer-4 bugs flagged for future sessions** (with hardware validation): parser coverage for @machine/@flow full grammar; runtime @machine.before/.after execution order; bridge.ui.* imperative builtins replacement with declarative content evaluation; form/list/markdown_editor event bindings; @app requires: nested form audit.
+- **Layer-5 rewrites planned**: each conformance `.deck` fixture deepened to cover full capability surface; app_machine_hooks.deck asserts hook order, not just sentinel presence; app_bridge_ui.deck replaced with content-body declarative tests + C-side readback.
+- **Layer-6 app rewrites planned**: `hello.deck`, `ping.deck` migrated from `bridge.ui.*` imperative API to declarative `content =` form.
+
+Between sessions, re-read `REPORTS.md` top-to-bottom. The User framing at the top is the standing brief. The iteration journal tracks every edit with rationale.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.

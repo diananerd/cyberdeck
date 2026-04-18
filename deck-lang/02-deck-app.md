@@ -785,7 +785,16 @@ The `prompt:` field is semantically parallel to `confirm`'s `prompt:` in content
 
 The bridge evaluates `@on back` **after** the flow history check and **after** the dirty-form check (§6.2 of `10-deck-bridge-ui.md`). If neither intercepted the back event, `@on back` runs. If the hook returns `:unhandled` (or is absent), the OS suspends the app.
 
-OS-declared events (from `.deck-os`) can also appear in `@on`:
+OS-declared events (from `.deck-os`) can also appear in `@on`. Three binding styles are available, matching the patterns used elsewhere in Deck:
+
+| Style | Example | Semantic |
+|---|---|---|
+| **No params** | `@on os.locked` | Handler fires for every event; access payload via the implicit `event` binding — e.g. `event.field`, `event.value` — where the field names come from the `@event` declaration in the `.deck-os` file. |
+| **Named binders** | `@on os.wifi_changed (ssid: s, connected: c)` | `s` and `c` are regular value bindings for the whole handler body. Use `_` for fields whose value you do not need (`(orientation: _)`). |
+| **Value patterns** | `@on hardware.button (id: 0, action: :press)` | Pattern-matches the event against the given values. The handler fires **only** when `id == 0` and `action == :press`; other events of the same type are dropped at dispatch time. Combine with binders for partial matches: `(id: n, action: :press)`. |
+
+The binding style is chosen per handler; a single app may use all three for different events. The runtime picks the most specific matching `@on` handler; equal-specificity handlers declared for the same event are a load error.
+
 ```
 @on hardware.button (id: 0, action: :press)
   App.send(:button_pressed)
