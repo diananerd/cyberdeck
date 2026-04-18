@@ -322,6 +322,16 @@ Spec completeness cascades caught during this pass:
 
 Layer 6 remaining (next session's targets if this pattern continues): `os_lifecycle.deck`, `os_fs_list.deck`, `sanity.deck` (probably fine), `edge_*.deck` (already edge-case-focused by design), `err_*.deck` (already negative-path focused), `lang_*.deck` (language-level, separate audit), `app_*.deck` (bridge UI + flow + machine + assets — needs layer-4 fixes first).
 
+### Concept discovered while deepening: `if/then/else` vs `match`
+
+- 2026-04-18 · layer 1 ↔ layer 6 discovery · `01-deck-lang §1` states explicitly: "`match` is the only branching construct — exhaustive, multi-arm, with guards. No `if/then/else`, no switch, no ternary." Yet every conformance fixture uses `if cond then a else b` (including `log.info(if ok then "OK" else "FAIL")` in all sentinel lines). The runtime accepts it empirically. This is a runtime ↔ spec divergence that was never reconciled: either
+  1. the runtime should reject `if/then/else` at load time (forcing match), OR
+  2. the spec should acknowledge it as sugar for a two-arm bool match.
+
+  **Pragmatic reconciliation candidate** (proposal for next session): add a `§7.X If sugar` subsection to `01-deck-lang` formalising `if cond then a else b` as exactly equivalent to `match cond | true -> a | false -> b`. That's the shape the runtime already implements; the spec catches up. The alternative — removing `if/then/else` from the runtime — would require rewriting every `@on` body in every conformance fixture and every annex, and removing sugar that is broadly useful. Not worth it for no functional gain.
+
+  `apps/conformance/lang_if.deck` deepened: now tests the canonical `match` form AND the `if/then/else` sugar AND asserts both produce identical results. If the sugar is removed, the test fails at that branch; if the sugar drifts from match semantics, the `ok_agree` probe catches it.
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.
