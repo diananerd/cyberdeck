@@ -296,6 +296,32 @@ static deck_value_t *b_text_contains(deck_value_t **args, uint32_t n, deck_inter
     return deck_retain(deck_false());
 }
 
+/* DL2 F22 — call a fn value with N args from C. Used by stdlib higher-
+ * order helpers (list.map, list.filter, list.reduce, map_ok, and_then). */
+static deck_value_t *call_fn_value_c(deck_interp_ctx_t *c,
+                                     deck_value_t *fnv,
+                                     deck_value_t **argv, uint32_t argc)
+{
+    if (!fnv || fnv->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "expected function");
+        return NULL;
+    }
+    if (argc != fnv->as.fn.n_params) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                "fn '%s' takes %u args, got %u",
+                fnv->as.fn.name ? fnv->as.fn.name : "<anon>",
+                (unsigned)fnv->as.fn.n_params, (unsigned)argc);
+        return NULL;
+    }
+    deck_env_t *call_env = deck_env_new(c->arena, fnv->as.fn.closure);
+    if (!call_env) return NULL;
+    for (uint32_t i = 0; i < argc; i++)
+        deck_env_bind(c->arena, call_env, fnv->as.fn.params[i], argv[i]);
+    deck_value_t *result = deck_interp_run(c, call_env, fnv->as.fn.body);
+    deck_env_release(call_env);
+    return result;
+}
+
 /* ---- list.* ---- */
 static deck_value_t *b_list_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -324,6 +350,74 @@ static deck_value_t *b_list_get(deck_value_t **args, uint32_t n, deck_interp_ctx
     int64_t i = args[1]->as.i;
     if (i < 0 || i >= (int64_t)args[0]->as.list.len) return deck_new_none();
     return deck_new_some(args[0]->as.list.items[(uint32_t)i]);
+}
+static deck_value_t *b_list_tail(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.tail expects list"); return NULL;
+    }
+    uint32_t len = args[0]->as.list.len;
+    if (len == 0) return deck_new_list(0);
+    deck_value_t *out = deck_new_list(len - 1);
+    if (!out) return NULL;
+    for (uint32_t i = 1; i < len; i++)
+        deck_list_push(out, args[0]->as.list.items[i]);
+    return out;
+}
+static deck_value_t *b_list_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.map(list, fn)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.list.len);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *callargs[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 1);
+        if (!r) { deck_release(out); return NULL; }
+        deck_list_push(out, r);
+        deck_release(r);
+    }
+    return out;
+}
+static deck_value_t *b_list_filter(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.filter(list, pred)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.list.len);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *callargs[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 1);
+        if (!r) { deck_release(out); return NULL; }
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) deck_list_push(out, args[0]->as.list.items[i]);
+    }
+    return out;
+}
+static deck_value_t *b_list_reduce(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_FN || !args[2]) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.reduce(list, fn, init)"); return NULL;
+    }
+    deck_value_t *acc = deck_retain(args[2]);
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *callargs[2] = { acc, args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 2);
+        deck_release(acc);
+        if (!r) return NULL;
+        acc = r;
+    }
+    return acc;
 }
 
 /* ---- map.* (DL2 F21.6) ---- */
@@ -639,10 +733,14 @@ static const builtin_t BUILTINS[] = {
     { "text.ends_with",         b_text_ends_with,    2, 2 },
     { "text.contains",          b_text_contains,     2, 2 },
 
-    /* list (DL2 F21.4) */
+    /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },
     { "list.head",              b_list_head,         1, 1 },
+    { "list.tail",              b_list_tail,         1, 1 },
     { "list.get",               b_list_get,          2, 2 },
+    { "list.map",               b_list_map,          2, 2 },
+    { "list.filter",            b_list_filter,       2, 2 },
+    { "list.reduce",            b_list_reduce,       3, 3 },
 
     /* map (DL2 F21.6) */
     { "map.len",                b_map_len,           1, 1 },
@@ -687,6 +785,108 @@ static deck_value_t *b_to_some(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return deck_new_some(args[0]);
 }
 
+/* DL2 F22 — Result. Internally a tuple (atom, payload).
+ *   ok(v)  → (:ok,  v)
+ *   err(e) → (:err, e)
+ * Pattern matching can destructure via tuple patterns once those land,
+ * or callers can use is_ok/is_err/unwrap. */
+static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload)
+{
+    deck_value_t *atom_v = deck_new_atom(tag);
+    if (!atom_v) return NULL;
+    deck_value_t *items[2] = { atom_v, payload };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(atom_v);
+    return t;
+}
+static deck_value_t *b_to_ok(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    return make_result_tag("ok", args[0]);
+}
+static deck_value_t *b_to_err(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    return make_result_tag("err", args[0]);
+}
+static bool result_tag_is(deck_value_t *v, const char *tag)
+{
+    if (!v || v->type != DECK_T_TUPLE || v->as.tuple.arity != 2) return false;
+    deck_value_t *first = v->as.tuple.items[0];
+    if (!first || first->type != DECK_T_ATOM) return false;
+    return strcmp(first->as.atom, tag) == 0;
+}
+static deck_value_t *b_is_ok(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(result_tag_is(args[0], "ok") ? deck_true() : deck_false()); }
+static deck_value_t *b_is_err(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(result_tag_is(args[0], "err") ? deck_true() : deck_false()); }
+static deck_value_t *b_unwrap(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0]) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "unwrap: nil"); return NULL; }
+    if (args[0]->type == DECK_T_OPTIONAL) {
+        if (args[0]->as.opt.inner == NULL) {
+            set_err(c, DECK_RT_PATTERN_FAILED, 0, 0, "unwrap on none");
+            return NULL;
+        }
+        return deck_retain(args[0]->as.opt.inner);
+    }
+    if (result_tag_is(args[0], "ok"))  return deck_retain(args[0]->as.tuple.items[1]);
+    if (result_tag_is(args[0], "err")) {
+        set_err(c, DECK_RT_PATTERN_FAILED, 0, 0, "unwrap on err result");
+        return NULL;
+    }
+    set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "unwrap: not optional or result");
+    return NULL;
+}
+static deck_value_t *b_map_ok(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map_ok(result, fn)"); return NULL;
+    }
+    if (result_tag_is(args[0], "ok")) {
+        deck_value_t *callargs[1] = { args[0]->as.tuple.items[1] };
+        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 1);
+        if (!r) return NULL;
+        deck_value_t *out = make_result_tag("ok", r);
+        deck_release(r);
+        return out;
+    }
+    return deck_retain(args[0]);   /* err pass-through */
+}
+static deck_value_t *b_and_then(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "and_then(result, fn)"); return NULL;
+    }
+    if (result_tag_is(args[0], "ok")) {
+        deck_value_t *callargs[1] = { args[0]->as.tuple.items[1] };
+        return call_fn_value_c(c, args[1], callargs, 1);
+    }
+    return deck_retain(args[0]);
+}
+
+/* DL2 F22 — type inspection. */
+static deck_value_t *b_type_of(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    return deck_new_atom(args[0] ? deck_type_name(args[0]->type) : "nil");
+}
+static deck_value_t *b_is_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_INT ? deck_true() : deck_false()); }
+static deck_value_t *b_is_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_STR ? deck_true() : deck_false()); }
+static deck_value_t *b_is_atom(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_ATOM ? deck_true() : deck_false()); }
+static deck_value_t *b_is_list(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_LIST ? deck_true() : deck_false()); }
+static deck_value_t *b_is_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_MAP ? deck_true() : deck_false()); }
+static deck_value_t *b_is_fn(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_FN ? deck_true() : deck_false()); }
+
 /* Bare-ident builtins: str(), int(), float(), bool() type conversions. */
 static const builtin_t BARE_BUILTINS[] = {
     { "str",   b_to_str,   1, 1 },
@@ -694,6 +894,25 @@ static const builtin_t BARE_BUILTINS[] = {
     { "float", b_to_float, 1, 1 },
     { "bool",  b_to_bool,  1, 1 },
     { "some",  b_to_some,  1, 1 },   /* DL2 F21.9 — Optional constructor */
+
+    /* DL2 F22 — Result constructors + helpers. */
+    { "ok",       b_to_ok,    1, 1 },
+    { "err",      b_to_err,   1, 1 },
+    { "is_ok",    b_is_ok,    1, 1 },
+    { "is_err",   b_is_err,   1, 1 },
+    { "unwrap",   b_unwrap,   1, 1 },
+    { "map_ok",   b_map_ok,   2, 2 },
+    { "and_then", b_and_then, 2, 2 },
+
+    /* DL2 F22 — type inspection. */
+    { "type_of", b_type_of, 1, 1 },
+    { "is_int",  b_is_int,  1, 1 },
+    { "is_str",  b_is_str,  1, 1 },
+    { "is_atom", b_is_atom, 1, 1 },
+    { "is_list", b_is_list, 1, 1 },
+    { "is_map",  b_is_map,  1, 1 },
+    { "is_fn",   b_is_fn,   1, 1 },
+
     { NULL, NULL, 0, 0 },
 };
 

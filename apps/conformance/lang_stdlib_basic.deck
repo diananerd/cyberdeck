@@ -1,0 +1,29 @@
+@app
+  name: "Conf lang.stdlib.basic"
+  id: "conf.lang.stdlib.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let xs = [1, 2, 3, 4, 5]
+  let doubled = list.map(xs, x -> x * 2)
+  let evens = list.filter(xs, x -> x % 2 == 0)
+  let sum = list.reduce(xs, (a, b) -> a + b, 0)
+  let r1 = list.len(doubled) == 5
+  let r2 = list.len(evens) == 2
+  let r3 = sum == 15
+  let res_ok = ok(42)
+  let res_err = err("boom")
+  let r4 = is_ok(res_ok) && is_err(res_err)
+  let r5 = unwrap(res_ok) == 42
+  let mapped = map_ok(res_ok, x -> x + 1)
+  let r6 = unwrap(mapped) == 43
+  let mapped_err = map_ok(res_err, x -> x + 1)
+  let r7 = is_err(mapped_err)
+  let r8 = type_of(42) == :int
+  let r9 = type_of("x") == :str
+  let r10 = is_int(42) && (!is_int("x"))
+  let ok_all = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10
+  log.info(if ok_all then "DECK_CONF_OK:lang.stdlib.basic" else "DECK_CONF_FAIL:lang.stdlib.basic")

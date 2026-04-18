@@ -272,29 +272,67 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             n = mknode(p, AST_IDENT); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
         case TOK_LPAREN: {
-            /* DL2 F21.5: `(e)` is paren-grouping; `(e1, e2, ...)` is a
-             * tuple literal. We parse the first expression then peek for
-             * a comma to decide. Single-element tuples aren't supported
-             * (would need `(e,)` syntax and fight the grouping case). */
+            /* DL2 F21.5 + F21.2 multi-arg lambda:
+             *   (e)                   → paren-grouping
+             *   (e1, e2, ...)         → tuple literal
+             *   (a, b, ...) -> body   → multi-arg lambda
+             *   (a) -> body           → single-arg lambda (paren form)
+             * After parsing the inner content we peek for `->` to upgrade
+             * a paren/tuple shape into a lambda. */
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
             ast_node_t *first = parse_expr_prec(p, 0);
             if (!first) return NULL;
+            ast_node_t *tup = NULL;
             if (at(p, TOK_COMMA)) {
-                n = ast_new(p->arena, AST_LIT_TUPLE, ln, co); if (!n) return NULL;
-                ast_list_init(&n->as.tuple_lit.items);
-                ast_list_push(p->arena, &n->as.tuple_lit.items, first);
+                tup = ast_new(p->arena, AST_LIT_TUPLE, ln, co); if (!tup) return NULL;
+                ast_list_init(&tup->as.tuple_lit.items);
+                ast_list_push(p->arena, &tup->as.tuple_lit.items, first);
                 while (at(p, TOK_COMMA)) {
                     advance(p);
-                    if (at(p, TOK_RPAREN)) break;     /* trailing comma allowed */
+                    if (at(p, TOK_RPAREN)) break;
                     ast_node_t *item = parse_expr_prec(p, 0);
                     if (!item) return NULL;
-                    ast_list_push(p->arena, &n->as.tuple_lit.items, item);
+                    ast_list_push(p->arena, &tup->as.tuple_lit.items, item);
                 }
                 if (!expect(p, TOK_RPAREN, "expected ')' to close tuple")) return NULL;
             } else {
-                n = first;
                 if (!expect(p, TOK_RPAREN, "expected ')'")) return NULL;
+            }
+            if (at(p, TOK_ARROW)) {
+                /* Lambda. Items (or the single first) must be ident-only. */
+                advance(p);    /* -> */
+                ast_list_t *src = tup ? &tup->as.tuple_lit.items : NULL;
+                uint32_t np = src ? src->len : 1;
+                const char **plist = deck_arena_alloc(p->arena, np * sizeof(char *));
+                if (!plist) return NULL;
+                if (src) {
+                    for (uint32_t i = 0; i < np; i++) {
+                        ast_node_t *item = src->items[i];
+                        if (!item || item->kind != AST_IDENT) {
+                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                                    "lambda parameter list must contain only identifiers");
+                            return NULL;
+                        }
+                        plist[i] = item->as.s;
+                    }
+                } else {
+                    if (!first || first->kind != AST_IDENT) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                                "lambda parameter list must contain only identifiers");
+                        return NULL;
+                    }
+                    plist[0] = first->as.s;
+                }
+                ast_node_t *body = parse_expr_prec(p, 0);
+                if (!body) return NULL;
+                n = ast_new(p->arena, AST_FN_DEF, ln, co); if (!n) return NULL;
+                n->as.fndef.name     = NULL;
+                n->as.fndef.params   = plist;
+                n->as.fndef.n_params = np;
+                n->as.fndef.body     = body;
+            } else {
+                n = tup ? tup : first;
             }
             break;
         }
