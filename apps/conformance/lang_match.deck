@@ -6,22 +6,113 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §8` pattern matching — exhaustive,
+-- multi-arm, with guards. Old version used `=>` arrow and omitted the
+-- leading `|` — §8.1 canonical is `| pattern -> expr`. Uses §8 covering:
+--   - atom patterns (plain + variant)
+--   - literal patterns (int, float, bool, str, atom)
+--   - wildcard _
+--   - binder patterns
+--   - guards `when`
+--   - some / none / ok / err variant patterns
+--   - nested patterns
+--   - tuple patterns
+--   - list patterns (empty / cons / fixed)
+--   - record type patterns
 @on launch:
+  -- Atom pattern match.
   let by_atom = match :ready
-    :boot    => 1
-    :ready   => 2
-    _        => 0
+                  | :boot  -> 1
+                  | :ready -> 2
+                  | _      -> 0
+  let ok_atom = by_atom == 2
+
+  -- Int literal pattern.
   let by_int = match 42
-    0  => "zero"
-    42 => "answer"
-    _  => "other"
+                 | 0  -> "zero"
+                 | 42 -> "answer"
+                 | _  -> "other"
+  let ok_int = by_int == "answer"
+
+  -- Bool literal pattern.
   let by_bool = match false
-    true  => 1
-    false => 2
-    _     => 0
-  let wildcard = match 999
-    0 => :hit
-    1 => :hit
-    _ => :miss
-  let ok = by_atom == 2 && by_int == "answer" && by_bool == 2 && wildcard == :miss
+                  | true  -> 1
+                  | false -> 2
+  let ok_bool = by_bool == 2
+
+  -- Str literal pattern.
+  let by_str = match "cancel"
+                 | "ok"     -> 1
+                 | "cancel" -> 0
+                 | _        -> -1
+  let ok_str = by_str == 0
+
+  -- Wildcard catches anything else.
+  let wild = match 999
+               | 0 -> :hit
+               | 1 -> :hit
+               | _ -> :miss
+  let ok_wild = wild == :miss
+
+  -- Binder pattern: a bare identifier matches anything and binds.
+  let bnd = match 7
+              | 0 -> "zero"
+              | n -> "got {n}"
+  let ok_bind = bnd == "got 7"
+
+  -- Guard: `when` adds a boolean predicate.
+  let grd = match 15
+              | n when n < 10  -> "low"
+              | n when n < 100 -> "mid"
+              | _              -> "high"
+  let ok_guard = grd == "mid"
+
+  -- Atom variant with payload destructuring.
+  let v = :some 42
+  let unwrap = match v
+                 | :some n -> n
+                 | :none   -> 0
+  let ok_var = unwrap == 42
+
+  -- Some / None.
+  let none_val = :none
+  let ok_none  = match none_val
+                   | :some _ -> false
+                   | :none   -> true
+
+  -- Ok / Err.
+  let result = :ok "data"
+  let ok_okerr = match result
+                   | :ok v  -> v == "data"
+                   | :err _ -> false
+
+  -- Tuple pattern.
+  let tup = (1, 2, 3)
+  let ok_tup = match tup
+                 | (a, b, c) -> a + b + c == 6
+
+  -- List patterns: empty, cons, fixed.
+  let empty_ok  = match []
+                    | []     -> true
+                    | _ :: _ -> false
+  let cons_ok   = match [10, 20, 30]
+                    | []     -> 0
+                    | h :: _ -> h
+  let fixed_ok  = match [1, 2]
+                    | [x, y] -> x + y
+                    | _       -> 0
+
+  -- Nested pattern: variant-of-tuple.
+  let wrapped = :ok (100, "name")
+  let ok_nest = match wrapped
+                  | :ok (n, s) -> n == 100 and s == "name"
+                  | _           -> false
+
+  let ok = ok_atom and ok_int and ok_bool and ok_str and ok_wild
+        and ok_bind and ok_guard
+        and ok_var and ok_none and ok_okerr
+        and ok_tup
+        and empty_ok and (cons_ok == 10) and (fixed_ok == 3)
+        and ok_nest
+
   log.info(if ok then "DECK_CONF_OK:lang.match" else "DECK_CONF_FAIL:lang.match")
