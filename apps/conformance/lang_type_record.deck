@@ -1,0 +1,29 @@
+@app
+  name: "Conf lang.type.record"
+  id: "conf.lang.type.record"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@type User
+  name: str
+  age: int
+  active: bool
+
+@type Address
+  city: str
+  zip: int
+
+@on launch:
+  let u = {:__type: :User, :name: "diana", :age: 30, :active: true}
+  let r1 = u.name == "diana"
+  let r2 = u.age == 30
+  let r3 = u.active
+  let r4 = match u.missing
+    none => true
+    _    => false
+  let addr = {:city: "BCN", :zip: 8001}
+  let r5 = addr.city == "BCN" && addr.zip == 8001
+  let ok = r1 && r2 && r3 && r4 && r5
+  log.info(if ok then "DECK_CONF_OK:lang.type.record" else "DECK_CONF_FAIL:lang.type.record")

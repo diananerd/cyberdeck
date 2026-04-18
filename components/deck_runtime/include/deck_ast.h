@@ -72,6 +72,7 @@ typedef enum {
     AST_STATE_HOOK,   /* on enter / on leave */
 
     AST_MODULE,
+    AST_TYPE_DEF,    /* DL2 F22.2 — @type X { fields } */
 } ast_kind_t;
 
 typedef enum {
@@ -163,6 +164,11 @@ struct ast_node {
         struct { const char *kind; ast_node_t *body; }         state_hook; /* "enter" | "leave" | atom for transition */
 
         struct { ast_list_t items; }                 module;
+        struct {
+            const char  *name;
+            const char **fields;     /* field names (interned), arena */
+            uint32_t     n_fields;
+        } typedef_;
     } as;
 };
 

@@ -1242,12 +1242,31 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
 
         case AST_DOT: {
             c->tail_pos = false;
+            /* Capability dispatch first (e.g. system.info.deck_level). */
             char full[96];
             if (build_cap_name(n, full, sizeof(full))) {
                 const builtin_t *b = find_builtin(full);
                 if (b && b->min_arity == 0) { r = b->fn(NULL, 0, c); break; }
             }
-            set_err(c, DECK_RT_INTERNAL, n->line, n->col, "cannot use dot chain as value");
+            /* DL2 F22.2: record/map field access. Evaluate obj and look
+             * up the field as an interned atom key. Missing field → none.
+             * Records are just maps with conventional keys (or maps with
+             * an extra `:__type` tag). */
+            deck_value_t *obj = deck_interp_run(c, env, n->as.dot.obj);
+            if (!obj) break;
+            if (obj->type == DECK_T_MAP) {
+                deck_value_t *key = deck_new_atom(n->as.dot.field);
+                if (!key) { deck_release(obj); break; }
+                deck_value_t *v = deck_map_get(obj, key);
+                deck_release(key);
+                r = v ? deck_retain(v) : deck_new_none();
+                deck_release(obj);
+                break;
+            }
+            set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                    "field access on %s — only map/record supported",
+                    deck_type_name(obj->type));
+            deck_release(obj);
             break;
         }
 

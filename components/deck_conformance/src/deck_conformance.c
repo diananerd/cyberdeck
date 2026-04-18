@@ -154,6 +154,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F21.11 — where bindings (inline + comma-separated). */
     { "lang.where",       "/conformance/lang_where.deck",       "DECK_CONF_OK:lang.where",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F22.2 — @type records + map field access via dot. */
+    { "lang.type.record", "/conformance/lang_type_record.deck", "DECK_CONF_OK:lang.type.record", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },

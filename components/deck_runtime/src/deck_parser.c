@@ -1033,6 +1033,51 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     return n;
 }
 
+/* DL2 F22.2 — `@type Name`<NEWLINE><INDENT> field: TypeName ... <DEDENT>.
+ * Type annotations on fields are parsed and discarded (the runtime is
+ * dynamic). Union types `T1 | T2` are also accepted and discarded. */
+static ast_node_t *parse_type_decl(deck_parser_t *p)
+{
+    advance(p); /* @type */
+    if (!at(p, TOK_IDENT)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name after @type");
+        return NULL;
+    }
+    ast_node_t *n = mknode(p, AST_TYPE_DEF); if (!n) return NULL;
+    n->as.typedef_.name = p->cur.text;
+    advance(p);
+    if (!expect(p, TOK_NEWLINE, "expected newline after @type name")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @type body")) return NULL;
+
+    const char *fields[32];
+    uint32_t nf = 0;
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (nf >= 32) { set_err(p, DECK_LOAD_PARSE_ERROR, "too many fields (max 32)"); return NULL; }
+        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name"); return NULL; }
+        fields[nf++] = p->cur.text;
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after field name")) return NULL;
+        /* Type annotation: IDENT (`|` IDENT)* — F22.3 union types parsed
+         * and discarded for now (no static type system yet). */
+        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name"); return NULL; }
+        advance(p);
+        while (at(p, TOK_OR_OR) || at(p, TOK_PIPE)) {
+            advance(p);
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "expected type after '|'");
+                return NULL;
+            }
+            advance(p);
+        }
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @type body")) return NULL;
+    n->as.typedef_.fields   = nf > 0 ? deck_arena_memdup(p->arena, fields, nf * sizeof(char *)) : NULL;
+    n->as.typedef_.n_fields = nf;
+    return n;
+}
+
 static ast_node_t *parse_top_item(deck_parser_t *p)
 {
     if (at(p, TOK_KW_FN)) {
@@ -1050,7 +1095,8 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         else if (dec_is(&p->cur, "use"))     return parse_use_decl(p);
         else if (dec_is(&p->cur, "on"))      return parse_on_decl(p);
         else if (dec_is(&p->cur, "machine")) return parse_machine_decl(p);
-        set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator (DL1 supports @app/@use/@on/@machine)");
+        else if (dec_is(&p->cur, "type"))    return parse_type_decl(p);
+        set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator (allowed: @app/@use/@on/@machine/@type)");
         return NULL;
     }
     set_err(p, DECK_LOAD_PARSE_ERROR, "expected @app, @use, @on, @machine, or fn at top level");

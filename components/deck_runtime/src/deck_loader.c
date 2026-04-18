@@ -200,24 +200,34 @@ static deck_dl1_cap_t lookup_cap(const char *name)
 
 static void walk_expr(deck_loader_t *l, const ast_node_t *n);
 
-/* Given a DOT node whose root ident is a capability name, mark it. */
+/* Given a DOT node whose root ident is a capability name, mark it.
+ * DL2 F22.2: dot chains on non-cap roots are now legal record/map field
+ * accesses, so we only TRACK caps here — the actual capability-missing
+ * error fires at CALL sites in walk_call_check_cap. */
 static void handle_dot_chain(deck_loader_t *l, const ast_node_t *dot)
 {
+    (void)l;
     const ast_node_t *root = dot;
     while (root && root->kind == AST_DOT) root = root->as.dot.obj;
     if (!root || root->kind != AST_IDENT) return;
     deck_dl1_cap_t bit = lookup_cap(root->as.s);
-    if (bit) {
-        l->capabilities_used |= (uint32_t)bit;
-    } else {
-        /* Not a known capability and not a let-binding — flag only if
-         * clearly a capability-style chain (length ≥ 2). */
-        if (dot->kind == AST_DOT) {
-            set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, dot->line, dot->col,
-                    "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list)",
-                    root->as.s ? root->as.s : "?");
-        }
-    }
+    if (bit) l->capabilities_used |= (uint32_t)bit;
+}
+
+/* DL2 F22.2: when an AST_DOT appears as a CALL callee, the user is
+ * dispatching to a capability builtin; an unknown cap-rooted chain at
+ * that position is still an error. */
+static void check_call_cap(deck_loader_t *l, const ast_node_t *call)
+{
+    const ast_node_t *fn = call->as.call.fn;
+    if (!fn || fn->kind != AST_DOT) return;
+    const ast_node_t *root = fn;
+    while (root && root->kind == AST_DOT) root = root->as.dot.obj;
+    if (!root || root->kind != AST_IDENT) return;
+    if (lookup_cap(root->as.s)) return;
+    set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, fn->line, fn->col,
+            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map)",
+            root->as.s ? root->as.s : "?");
 }
 
 static void walk_list(deck_loader_t *l, const ast_list_t *list)
@@ -237,6 +247,8 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
             walk_expr(l, n->as.unary.expr);
             break;
         case AST_CALL:
+            check_call_cap(l, n);
+            if (l->err != DECK_LOAD_OK) return;
             walk_expr(l, n->as.call.fn);
             walk_list(l, &n->as.call.args);
             break;
