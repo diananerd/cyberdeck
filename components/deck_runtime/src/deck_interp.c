@@ -1704,17 +1704,19 @@ static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
             env_unbind_all(call_env);
             deck_release(next_fn);          /* duplicate retain from pending */
         } else {
-            /* Mutual tail call: swap env to the new fn's closure. */
-            deck_env_release(call_env);
-            call_env = deck_env_new(c->arena, next_fn->as.fn.closure);
+            /* Mutual tail call: rebind the existing env's parent to the
+             * new fn's closure. Reusing the env (instead of allocating
+             * a fresh one each iteration) keeps mutually recursive deep
+             * loops from blowing the arena — `is_even`/`is_odd` over
+             * 2000 levels would otherwise leak ~2000 envs. */
+            env_unbind_all(call_env);
+            deck_env_t *new_closure = next_fn->as.fn.closure;
+            if (new_closure) new_closure->refcount++;
+            deck_env_t *old_parent = call_env->parent;
+            call_env->parent = new_closure;
+            deck_env_release(old_parent);
             deck_release(current);
             current = next_fn;              /* transfer pending retain */
-            if (!call_env) {
-                for (uint32_t i = 0; i < next_argc; i++) deck_release(c->pending_tc.args[i]);
-                set_err(c, DECK_RT_NO_MEMORY, c->pending_tc.line, c->pending_tc.col,
-                        "tail-call env alloc failed");
-                break;
-            }
         }
         for (uint32_t i = 0; i < next_argc; i++) {
             deck_env_bind(c->arena, call_env, current->as.fn.params[i],

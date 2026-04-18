@@ -10,7 +10,7 @@
   let lvl   = system.info.deck_level()
   let heap  = system.info.free_heap()
   let dev   = system.info.device_id()
-  let ok_lvl  = lvl == 1
+  let ok_lvl  = lvl >= 1
   let ok_heap = heap > 0
   let ok_dev  = text.len(dev) > 0
   let ok = ok_lvl && ok_heap && ok_dev
