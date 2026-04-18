@@ -45,6 +45,20 @@ static void skip_newlines(deck_parser_t *p)
     while (at(p, TOK_NEWLINE)) advance(p);
 }
 
+/* One-token lookahead. The parser already reserves a `peek` slot but
+ * never used it pre-DL2; F21.2 lambdas need it to disambiguate
+ * `IDENT ->` (lambda) from a bare ident expression. */
+static deck_tok_t peek_next_tok(deck_parser_t *p)
+{
+    if (!p->have_peek) {
+        if (!deck_lexer_next(&p->lx, &p->peek)) {
+            p->peek.type = TOK_EOF;
+        }
+        p->have_peek = true;
+    }
+    return p->peek.type;
+}
+
 /* ================================================================
  * Expression precedence (Pratt)
  * ================================================================ */
@@ -81,6 +95,7 @@ static ast_node_t *parse_primary(deck_parser_t *p);
 static ast_node_t *parse_match(deck_parser_t *p);
 static ast_node_t *parse_if(deck_parser_t *p);
 static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head);
+static ast_node_t *parse_fn_decl(deck_parser_t *p);
 
 static ast_node_t *mknode(deck_parser_t *p, ast_kind_t k)
 {
@@ -114,6 +129,26 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             n = mknode(p, AST_LIT_ATOM); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
         case TOK_IDENT:
+            /* DL2 F21.2: single-ident lambda `x -> body`. We commit
+             * before consuming the ident, then take the lambda branch
+             * if the next token is `->`. */
+            if (peek_next_tok(p) == TOK_ARROW) {
+                uint32_t ln = p->cur.line, co = p->cur.col;
+                const char *param = p->cur.text;
+                advance(p);  /* ident */
+                advance(p);  /* -> */
+                ast_node_t *body = parse_expr_prec(p, 0);
+                if (!body) return NULL;
+                n = ast_new(p->arena, AST_FN_DEF, ln, co); if (!n) return NULL;
+                const char **plist = deck_arena_alloc(p->arena, sizeof(char *));
+                if (!plist) return NULL;
+                plist[0] = param;
+                n->as.fndef.name     = NULL;
+                n->as.fndef.params   = plist;
+                n->as.fndef.n_params = 1;
+                n->as.fndef.body     = body;
+                break;
+            }
             n = mknode(p, AST_IDENT); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
         case TOK_LPAREN:
@@ -142,6 +177,17 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         }
         case TOK_KW_MATCH: return parse_match(p);
         case TOK_KW_IF:    return parse_if(p);
+        case TOK_KW_FN: {
+            /* DL2 F21.2: anonymous fn in expression position. */
+            ast_node_t *fnn = parse_fn_decl(p);
+            if (!fnn) return NULL;
+            if (fnn->as.fndef.name) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "named fn declarations are only allowed at top level");
+                return NULL;
+            }
+            return parse_postfix(p, fnn);
+        }
         default:
             set_err(p, DECK_LOAD_PARSE_ERROR, "expected expression");
             return NULL;
@@ -538,18 +584,24 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
  * ================================================================ */
 
 /* DL2 F21.1: parse `fn name (p1, p2: T) -> T = body`.
+ * F21.2 makes the name optional — `fn (params) = body` becomes a lambda
+ * value usable in any expression position (let RHS, call argument, etc).
  * Type annotations and effect annotations are accepted but discarded at
  * F21.1; F22 lands the type system, F23 effect checks. */
 static ast_node_t *parse_fn_decl(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_FN_DEF); if (!n) return NULL;
     advance(p); /* fn */
-    if (!at(p, TOK_IDENT)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR, "expected function name after 'fn'");
+    if (at(p, TOK_LPAREN)) {
+        n->as.fndef.name = NULL;   /* anonymous (F21.2 lambda) */
+    } else if (at(p, TOK_IDENT)) {
+        n->as.fndef.name = p->cur.text;
+        advance(p);
+    } else {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "expected function name or '(' after 'fn'");
         return NULL;
     }
-    n->as.fndef.name = p->cur.text;
-    advance(p);
     if (!expect(p, TOK_LPAREN, "expected '(' after fn name")) return NULL;
 
     const char *params_buf[16];
@@ -616,7 +668,16 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
 
 static ast_node_t *parse_top_item(deck_parser_t *p)
 {
-    if (at(p, TOK_KW_FN)) return parse_fn_decl(p);
+    if (at(p, TOK_KW_FN)) {
+        ast_node_t *fnn = parse_fn_decl(p);
+        if (!fnn) return NULL;
+        if (!fnn->as.fndef.name) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "anonymous fn (lambda) is not allowed at top level");
+            return NULL;
+        }
+        return fnn;
+    }
     if (at(p, TOK_DECORATOR)) {
         if      (dec_is(&p->cur, "app"))     return parse_app_block(p);
         else if (dec_is(&p->cur, "use"))     return parse_use_decl(p);

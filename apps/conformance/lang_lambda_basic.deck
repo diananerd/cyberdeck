@@ -1,0 +1,14 @@
+@app
+  name: "Conf lang.lambda.basic"
+  id: "conf.lang.lambda.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let dbl = x -> x * 2
+  let inc = x -> x + 1
+  let sq  = x -> x * x
+  let ok = dbl(21) == 42 && inc(99) == 100 && sq(9) == 81
+  log.info(if ok then "DECK_CONF_OK:lang.lambda.basic" else "DECK_CONF_FAIL:lang.lambda.basic")

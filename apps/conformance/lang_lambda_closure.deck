@@ -1,0 +1,23 @@
+@app
+  name: "Conf lang.lambda.closure"
+  id: "conf.lang.lambda.closure"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn mk_adder (n) = fn (x) = x + n
+fn mk_multiplier (k) = x -> x * k
+
+@on launch:
+  let add5 = mk_adder(5)
+  let add10 = mk_adder(10)
+  let times3 = mk_multiplier(3)
+  let times7 = mk_multiplier(7)
+  let r1 = add5(3) == 8
+  let r2 = add10(3) == 13
+  let r3 = times3(4) == 12
+  let r4 = times7(6) == 42
+  let r5 = add5(times3(2)) == 11
+  let ok = r1 && r2 && r3 && r4 && r5
+  log.info(if ok then "DECK_CONF_OK:lang.lambda.closure" else "DECK_CONF_FAIL:lang.lambda.closure")

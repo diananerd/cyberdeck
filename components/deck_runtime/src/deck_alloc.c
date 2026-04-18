@@ -224,6 +224,12 @@ deck_value_t *deck_new_some(deck_value_t *inner)
     return val;
 }
 
+/* Forward decls — env retain/release live in deck_interp.c, but the
+ * fn value owns a refcount on its closure env so it must be able to
+ * call those from here. */
+struct deck_env *deck_env_retain(struct deck_env *e);
+void             deck_env_release(struct deck_env *e);
+
 deck_value_t *deck_new_fn(const char *name,
                           const char **params,
                           uint32_t n_params,
@@ -236,7 +242,7 @@ deck_value_t *deck_new_fn(const char *name,
     val->as.fn.params   = params;
     val->as.fn.n_params = n_params;
     val->as.fn.body     = body;
-    val->as.fn.closure  = closure;
+    val->as.fn.closure  = deck_env_retain(closure);
     return val;
 }
 
@@ -274,6 +280,10 @@ static void release_children(deck_value_t *v)
             break;
         case DECK_T_OPTIONAL:
             if (v->as.opt.inner) deck_release(v->as.opt.inner);
+            break;
+        case DECK_T_FN:
+            deck_env_release(v->as.fn.closure);
+            v->as.fn.closure = NULL;
             break;
         default: break; /* primitives + interned atoms/strs have no children */
     }

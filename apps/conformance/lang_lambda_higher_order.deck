@@ -1,0 +1,23 @@
+@app
+  name: "Conf lang.lambda.higher_order"
+  id: "conf.lang.lambda.higher_order"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn apply (f, x) = f(x)
+fn twice (f, x) = f(f(x))
+fn compose (f, g) = x -> f(g(x))
+
+@on launch:
+  let inc = x -> x + 1
+  let dbl = x -> x * 2
+  let inc_then_dbl = compose(dbl, inc)
+  let r1 = apply(inc, 5) == 6
+  let r2 = twice(inc, 10) == 12
+  let r3 = twice(dbl, 3) == 12
+  let r4 = inc_then_dbl(4) == 10
+  let r5 = apply(x -> x * x * x, 3) == 27
+  let ok = r1 && r2 && r3 && r4 && r5
+  log.info(if ok then "DECK_CONF_OK:lang.lambda.higher_order" else "DECK_CONF_FAIL:lang.lambda.higher_order")

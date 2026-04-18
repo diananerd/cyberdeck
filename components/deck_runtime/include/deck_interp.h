@@ -52,11 +52,20 @@ bool        deck_env_bind(deck_arena_t *a, deck_env_t *e,
                           const char *name, deck_value_t *val);
 deck_value_t *deck_env_lookup(deck_env_t *e, const char *name);
 
-/* Release every value retained by `e` and reset its bindings count. The
- * env struct itself remains in the arena and may be re-used. Call this
- * when an env scope ends (fn return, match arm completion, run end) —
- * arena reset alone leaks the heap-allocated values the env retained. */
-void          deck_env_clear(deck_env_t *e);
+/* Refcount semantics for envs.
+ *
+ * deck_env_new returns refcount=1 and retains the parent. retain++ the
+ * count; release-- it; reaching zero clears bindings (releasing every
+ * retained value) and releases the parent.
+ *
+ * Why refcount and not just "clear at scope exit": F21.2 closures may
+ * outlive the scope that created them. A `fn (n) = fn (x) = x + n`
+ * returns an inner fn whose closure points back to the outer call_env.
+ * Refcount keeps that env alive until the closure itself is released.
+ * The cycle (env → fn-binding → fn → closure-env) is broken by a
+ * `tearing_down` flag that ignores re-entry during teardown. */
+deck_env_t *deck_env_retain(deck_env_t *e);
+void        deck_env_release(deck_env_t *e);
 
 /* Interpreter selftest. */
 deck_err_t deck_interp_run_selftest(void);

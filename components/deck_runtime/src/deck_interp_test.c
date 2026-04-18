@@ -184,6 +184,60 @@ static bool t_fn_arity_mismatch(const char *name)
     return true;
 }
 
+/* ---- DL2 F21.2: lambdas + closures ---- */
+static bool t_lambda_single_ident(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "@on launch:\n"
+        "  let dbl = x -> x * 2\n"
+        "  log.info(str(dbl(21)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "lambda single ident");
+    return true;
+}
+static bool t_lambda_anon_fn(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "@on launch:\n"
+        "  let add = fn (a, b) = a + b\n"
+        "  log.info(str(add(7, 8)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "anon fn lambda");
+    return true;
+}
+static bool t_lambda_closure(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "fn mk_adder (n) = fn (x) = x + n\n"
+        "@on launch:\n"
+        "  let add5 = mk_adder(5)\n"
+        "  let add10 = mk_adder(10)\n"
+        "  log.info(str(add5(3) + add10(3)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "closure capture");
+    return true;
+}
+static bool t_lambda_inline_call(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "@on launch:\n"
+        "  log.info(str((x -> x * x)(7)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "inline lambda call");
+    return true;
+}
+static bool t_lambda_higher_order(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "fn apply (f, x) = f(x)\n"
+        "@on launch:\n"
+        "  let r = apply(x -> x + 100, 23)\n"
+        "  log.info(str(r))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "higher-order");
+    return true;
+}
+
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
 
@@ -225,6 +279,11 @@ static const case_t CASES[] = {
     { "fn_recursion",       t_fn_recursion },
     { "fn_mutual",          t_fn_mutual },
     { "fn_arity_mismatch",  t_fn_arity_mismatch },
+    { "lambda_single_ident", t_lambda_single_ident },
+    { "lambda_anon_fn",      t_lambda_anon_fn },
+    { "lambda_closure",      t_lambda_closure },
+    { "lambda_inline_call",  t_lambda_inline_call },
+    { "lambda_higher_order", t_lambda_higher_order },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

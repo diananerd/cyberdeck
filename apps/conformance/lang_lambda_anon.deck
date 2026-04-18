@@ -1,0 +1,15 @@
+@app
+  name: "Conf lang.lambda.anon"
+  id: "conf.lang.lambda.anon"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let add = fn (a, b) = a + b
+  let max3 = fn (a, b, c) =
+    let m1 = if a > b then a else b
+    if m1 > c then m1 else c
+  let ok = add(7, 8) == 15 && max3(3, 9, 5) == 9 && max3(20, 5, 11) == 20
+  log.info(if ok then "DECK_CONF_OK:lang.lambda.anon" else "DECK_CONF_FAIL:lang.lambda.anon")

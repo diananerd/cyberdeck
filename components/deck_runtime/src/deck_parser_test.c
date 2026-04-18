@@ -123,7 +123,9 @@ static const parser_case_t CASES[] = {
     /* --- errors --- */
     { "err_no_decorator", TEST_ERROR, "foo",        "expected @app" },
     { "err_unknown_dec",  TEST_ERROR, "@wtf",       "unknown top-level decorator" },
-    { "err_fn_no_name",   TEST_ERROR, "fn ()",      "expected function name" },
+    /* `fn ()` is now valid (DL2 F21.2 anonymous lambda); the actual
+     * error fires later when no `=` follows the empty param list. */
+    { "err_fn_no_name",   TEST_ERROR, "fn 42",      "expected function name or '(' after 'fn'" },
     { "err_fn_no_paren",  TEST_ERROR, "fn add a, b", "expected '(' after fn name" },
     { "err_fn_no_assign", TEST_ERROR, "fn add (a, b) a + b", "expected '=' in fn declaration" },
     { "err_missing_colon", TEST_ERROR,

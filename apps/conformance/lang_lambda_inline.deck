@@ -1,0 +1,14 @@
+@app
+  name: "Conf lang.lambda.inline"
+  id: "conf.lang.lambda.inline"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let r1 = (x -> x * x)(7)
+  let r2 = (fn (a, b) = a - b)(100, 42)
+  let r3 = ((y -> y + 1)(9))
+  let ok = r1 == 49 && r2 == 58 && r3 == 10
+  log.info(if ok then "DECK_CONF_OK:lang.lambda.inline" else "DECK_CONF_FAIL:lang.lambda.inline")

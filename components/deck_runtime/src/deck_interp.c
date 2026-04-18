@@ -25,19 +25,59 @@ static const char *TAG = "deck_interp";
 
 typedef struct { const char *name; deck_value_t *val; } binding_t;
 
+/* DL2 F21.2: refcounted environment.
+ *
+ * The struct lives in the per-run arena (so the storage is bulk-freed
+ * at arena reset), but the bindings retain heap-allocated values whose
+ * lifetimes outlive the immediate scope when captured by closures.
+ *
+ * Refcount semantics:
+ *   - new returns ref=1; retains parent so the chain stays valid
+ *   - retain bumps; release decrements
+ *   - on release-to-zero we clear bindings (deck_release each value)
+ *     and release the parent — `tearing_down` guards re-entry from a
+ *     binding whose value (a fn) holds a back-pointer to this env */
 struct deck_env {
     deck_env_t *parent;
     binding_t  *bindings;
     uint32_t    count;
     uint32_t    cap;
+    uint32_t    refcount;
+    bool        tearing_down;
 };
 
 deck_env_t *deck_env_new(deck_arena_t *a, deck_env_t *parent)
 {
     deck_env_t *e = deck_arena_zalloc(a, sizeof(*e));
     if (!e) return NULL;
-    e->parent = parent;
+    e->parent   = parent;
+    e->refcount = 1;
+    if (parent) parent->refcount++;
     return e;
+}
+
+deck_env_t *deck_env_retain(deck_env_t *e)
+{
+    if (e && !e->tearing_down) e->refcount++;
+    return e;
+}
+
+void deck_env_release(deck_env_t *e)
+{
+    if (!e || e->tearing_down) return;
+    if (e->refcount == 0) return;       /* already torn down */
+    if (--e->refcount > 0) return;
+    e->tearing_down = true;
+    for (uint32_t i = 0; i < e->count; i++) {
+        deck_release(e->bindings[i].val);
+        e->bindings[i].val  = NULL;
+        e->bindings[i].name = NULL;
+    }
+    e->count = 0;
+    deck_env_t *p = e->parent;
+    e->parent = NULL;
+    e->tearing_down = false;
+    deck_env_release(p);
 }
 
 bool deck_env_bind(deck_arena_t *a, deck_env_t *e,
@@ -70,16 +110,6 @@ deck_value_t *deck_env_lookup(deck_env_t *e, const char *name)
     return NULL;
 }
 
-void deck_env_clear(deck_env_t *e)
-{
-    if (!e) return;
-    for (uint32_t i = 0; i < e->count; i++) {
-        deck_release(e->bindings[i].val);
-        e->bindings[i].val  = NULL;
-        e->bindings[i].name = NULL;
-    }
-    e->count = 0;
-}
 
 /* ================================================================
  * Error reporting
@@ -707,10 +737,16 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         case AST_TRANSITION: r = deck_new_atom(n->as.transition.target); break;
 
         case AST_FN_DEF: {
-            /* Bind the function to the current env. The closure captures
-             * `env` so that mutually-recursive fns at the same scope can
-             * find each other (top-level pre-binding adds all fn names to
-             * the global env BEFORE any body runs). Returns unit. */
+            /* The closure captures `env` so that mutually-recursive
+             * named fns at the same scope can find each other (top-level
+             * pre-binding adds all fn names to the global env BEFORE any
+             * body runs).
+             *
+             * F21.2: when name == NULL the node is an anonymous lambda
+             * — return the fn value directly so it can flow into a let
+             * binding, an argument, or any other expression position.
+             * When name != NULL bind it into the current env and return
+             * unit (declaration semantics). */
             deck_value_t *fnv = deck_new_fn(n->as.fndef.name,
                                             n->as.fndef.params,
                                             n->as.fndef.n_params,
@@ -720,9 +756,13 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
                 set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "fn alloc failed");
                 break;
             }
-            deck_env_bind(c->arena, env, n->as.fndef.name, fnv);
-            deck_release(fnv);
-            r = deck_retain(deck_unit());
+            if (n->as.fndef.name) {
+                deck_env_bind(c->arena, env, n->as.fndef.name, fnv);
+                deck_release(fnv);
+                r = deck_retain(deck_unit());
+            } else {
+                r = fnv;
+            }
             break;
         }
 
@@ -744,18 +784,18 @@ static deck_value_t *run_match(deck_interp_ctx_t *c, deck_env_t *env, const ast_
     for (uint32_t i = 0; i < n->as.match.n_arms; i++) {
         deck_env_t *arm_env = deck_env_new(c->arena, env);
         if (!match_pattern(c->arena, arm_env, n->as.match.arms[i].pattern, scrut)) {
-            deck_env_clear(arm_env);
+            deck_env_release(arm_env);
             continue;
         }
         if (n->as.match.arms[i].guard) {
             deck_value_t *g = deck_interp_run(c, arm_env, n->as.match.arms[i].guard);
-            if (!g) { deck_env_clear(arm_env); deck_release(scrut); return NULL; }
+            if (!g) { deck_env_release(arm_env); deck_release(scrut); return NULL; }
             bool gt = deck_is_truthy(g);
             deck_release(g);
-            if (!gt) { deck_env_clear(arm_env); continue; }
+            if (!gt) { deck_env_release(arm_env); continue; }
         }
         out = deck_interp_run(c, arm_env, n->as.match.arms[i].body);
-        deck_env_clear(arm_env);
+        deck_env_release(arm_env);
         goto done;
     }
     set_err(c, DECK_RT_PATTERN_FAILED, n->line, n->col, "no match arm matched");
@@ -914,12 +954,12 @@ static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
     }
     for (uint32_t i = 0; i < argc; i++) {
         deck_value_t *v = deck_interp_run(c, env, call_site->as.call.args.items[i]);
-        if (!v) { deck_env_clear(call_env); return NULL; }
+        if (!v) { deck_env_release(call_env); return NULL; }
         deck_env_bind(c->arena, call_env, fnv->as.fn.params[i], v);
         deck_release(v);
     }
     deck_value_t *result = deck_interp_run(c, call_env, fnv->as.fn.body);
-    deck_env_clear(call_env);
+    deck_env_release(call_env);
     return result;
 }
 
@@ -975,7 +1015,25 @@ static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             return r;
         }
     }
-    set_err(c, DECK_RT_INTERNAL, n->line, n->col, "DL1 only supports capability calls");
+    /* DL2 F21.2: callee is an arbitrary expression (e.g. an inline
+     * lambda `(x -> x*2)(5)`, an anonymous fn, or an expression that
+     * returns a fn from a higher-order helper). Evaluate it and dispatch
+     * if the result is a fn value. */
+    if (fn) {
+        deck_value_t *callee = deck_interp_run(c, env, fn);
+        if (!callee) return NULL;
+        if (callee->type != DECK_T_FN) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                    "callee is not a function (got %s)",
+                    deck_type_name(callee->type));
+            deck_release(callee);
+            return NULL;
+        }
+        deck_value_t *r = invoke_user_fn(c, env, callee, n);
+        deck_release(callee);
+        return r;
+    }
+    set_err(c, DECK_RT_INTERNAL, n->line, n->col, "empty call expression");
     return NULL;
 }
 
@@ -1137,7 +1195,7 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
      * fn pre-bindings, top-level let bindings inside @on launch). The
      * arena reset only frees the env struct; without this, refcounted
      * values leak across runs and `memory.no_residual_leak` trips. */
-    deck_env_clear(c.global);
+    deck_env_release(c.global);
     deck_arena_reset(&arena);
     return run_rc;
 }
