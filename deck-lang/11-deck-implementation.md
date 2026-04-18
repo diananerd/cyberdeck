@@ -1447,16 +1447,19 @@ Attribute keys are always atoms. Common ones:
 | `:disabled` | Bool; disables interaction | All interactive nodes |
 | `:length` | PIN length | DVC_PIN |
 | `:cancellable` | Bool | DVC_PROGRESS, DVC_CONFIRM |
-| `:message` | Body text | DVC_CONFIRM, DVC_TOAST |
+| `:prompt` | Question posed to the user | DVC_CONFIRM |
+| `:reason` | Why the error exists | DVC_ERROR |
 | `:confirm_label`, `:cancel_label` | Button labels | DVC_CONFIRM |
 | `:src` | Asset ref or URL | DVC_MEDIA |
 | `:alt` | Fallback text | DVC_MEDIA |
+| `:role` | Semantic role of media (`:avatar`, `:cover`, `:thumbnail`, `:inline`) | DVC_MEDIA |
+| `:has_more` | Whether more items exist beyond the current page | DVC_LIST |
 | `:max_height`, `:max_width` | Layout bounds | DVC_RICH_TEXT, DVC_MEDIA |
 | `:purpose` | `:reading`, `:reference`, `:fragment` | DVC_MARKDOWN |
-| `:scroll_to` | Heading id to scroll to (reactive) | DVC_MARKDOWN |
+| `:focus` | Heading id the user should be focused on (reactive) | DVC_MARKDOWN |
 | `:placeholder` | Empty-state hint | DVC_TEXT, DVC_MARKDOWN_EDITOR |
-| `:editor_state` | `MdEditorState` for external programmatic control | DVC_MARKDOWN_EDITOR |
-| `:accessibility` | Accessible region label | DVC_MARKDOWN, DVC_MARKDOWN_EDITOR (and most others) |
+| `:controlled_by` | `MdEditorState` for external programmatic control | DVC_MARKDOWN_EDITOR |
+| `:describe` | Accessible description of the region | DVC_MARKDOWN, DVC_MARKDOWN_EDITOR (and most others) |
 
 DVC_MARKDOWN and DVC_MARKDOWN_EDITOR carry **only semantic intent**. The bridge decides every presentation concern (density, max-width, ToC visibility, code-block affordances, image sizing, editor toolbar layout, preview placement, line numbers, virtual rendering) from the declared `:purpose`, the document content, and the device. See `02-deck-app §12.3` for the inference table and `10-deck-bridge-ui §4.2` for this board's concrete decisions.
 

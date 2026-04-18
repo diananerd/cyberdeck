@@ -358,7 +358,7 @@ Multi-line `lv_label`, `CYBERDECK_FONT_MD`, `primary`. Plain text rendered as-is
 
 #### `DVC_MARKDOWN` — Rendered Markdown (first-class)
 
-The app passes raw markdown text, an `MdDocument`, or an `MdPatch` (streaming). The only attributes the app carries are `:purpose`, `:scroll_to`, `:accessibility`, and the `on link` / `on image` interaction intents (see `02-deck-app §12.3`). Every presentation choice on this board is bridge inference.
+The app passes raw markdown text, an `MdDocument`, or an `MdPatch` (streaming). The only attributes the app carries are `:purpose`, `:focus`, `:describe`, and the `on link` / `on image` interaction intents (see `02-deck-app §12.3`). Every presentation choice on this board is bridge inference.
 
 **Inference rules on this board (Waveshare 800×480):**
 
@@ -379,7 +379,7 @@ The app passes raw markdown text, an `MdDocument`, or an `MdPatch` (streaming). 
 | Selection | enabled (LVGL long-press selection) | enabled | disabled |
 | Virtual render | engaged above 10 000 chars | engaged above 5 000 chars | n/a |
 
-The bridge resolves `:scroll_to "heading-id"` reactively: when the value changes, it scrolls the rendered body to the target heading using `lv_obj_scroll_to_view(heading_obj, LV_ANIM_ON)`.
+The bridge resolves `:focus "heading-id"` reactively: when the value changes, it brings the target heading into view via `lv_obj_scroll_to_view(heading_obj, LV_ANIM_ON)` (the bridge's chosen means — the app declared "user focus is here", not "scroll to here").
 
 `on link` / `on image` presence makes the corresponding elements tappable and routes taps through `intent_fn` with the matching event payload (`os.markdown.link_tap` / `os.markdown.image_tap` per `03-deck-os §5`).
 
@@ -387,7 +387,7 @@ If the app passes a streaming `MdPatch?`, the bridge renders incrementally — c
 
 #### `DVC_MARKDOWN_EDITOR` — Markdown Editor (first-class)
 
-Read-write counterpart to `DVC_MARKDOWN`. The app provides only `value`, change/cursor/selection event handlers, optional `placeholder`, optional `editor_state` for programmatic control, and `accessibility`. The bridge owns every UI choice.
+Read-write counterpart to `DVC_MARKDOWN`. The app provides only `value`, change/cursor/selection event handlers, optional `placeholder`, optional `controlled_by` (an `MdEditorState` for programmatic control), and `describe` (a11y description). The bridge owns every UI choice.
 
 **Inference rules on this board:**
 
@@ -403,7 +403,7 @@ Read-write counterpart to `DVC_MARKDOWN`. The app provides only `value`, change/
 | Selection | Long-press to enter selection; drag handles in `primary` color. |
 | Keyboard | `Keyboard Service` (§5.4) raises automatically on `on_resume` per the no-keyboard-in-on_create rule. |
 | Placeholder | Rendered in `text_dim` only when `value` is empty. |
-| External state (`editor_state`) | When present, the bridge mirrors the canonical state from the runtime instead of holding its own; the textarea becomes a fully controlled component. Used when the app drives the editor via `markdown.editor_*` capability methods (e.g. macros, snippet expansion, undo/redo from external buttons). |
+| External state (`controlled_by`) | When present, the bridge mirrors the canonical state from the runtime instead of holding its own; the textarea becomes a fully controlled component. Used when the app drives the editor via `markdown.editor_*` capability methods (e.g. macros, snippet expansion, undo/redo from external buttons). |
 
 #### `DVC_MEDIA` — Image
 
@@ -476,7 +476,7 @@ On tap → `intent_fn("navigate", deck_atom(route))`. The bridge does not push a
 
 #### `DVC_CONFIRM` — Destructive Action Button
 
-Visually identical to `DVC_TRIGGER` (outline button). On tap → triggers **Confirm Dialog Service** (§5.2). The dialog receives the trigger's label as its title and the `message` field as the dialog body. On user confirmation → `intent_fn(name, deck_bool(true))`. On cancel → no intent dispatched.
+Visually identical to `DVC_TRIGGER` (outline button). On tap → triggers **Confirm Dialog Service** (§5.2). The dialog receives the trigger's label as its title and the `prompt` field as the dialog body. On user confirmation → `intent_fn(name, deck_bool(true))`. On cancel → no intent dispatched.
 
 #### `DVC_CREATE` — Create Row
 
@@ -1078,7 +1078,7 @@ El bridge infiere decisiones de presentación del contexto semántico. Estas reg
 |---|---|
 | `DVC_GROUP` sin label | Spacer + card container, sin label row |
 | `DVC_GROUP` con label | Spacer + dim label + card container |
-| `DVC_LIST` con `more: true` | "LOAD MORE" button al final de la lista |
+| `DVC_LIST` con `has_more: true` | "LOAD MORE" button al final de la lista |
 | `DVC_LIST` vacía con bloque `empty` | Renderiza el bloque `empty` como contenido centrado |
 | `DVC_DATA` con texto largo (>3 líneas estimadas) | `lv_label` con long mode wrap; container scrollable |
 | `DVC_STATUS` items en fila horizontal | Bridge apila vertical (portrait) o muestra en grid 2-col (landscape) según espacio disponible |
