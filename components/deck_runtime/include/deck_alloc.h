@@ -76,6 +76,14 @@ deck_value_t *deck_new_tuple(deck_value_t **items, uint32_t arity);
 deck_value_t *deck_new_none(void);
 deck_value_t *deck_new_some(deck_value_t *inner);
 
+/* DL2 F21.1: function value. Callee-owned references into the runtime
+ * arena (params/body/closure/name); release does NOT free those. */
+deck_value_t *deck_new_fn(const char *name,
+                          const char **params,
+                          uint32_t n_params,
+                          const struct ast_node *body,
+                          struct deck_env *closure);
+
 /* --- Refcount primitives --- */
 
 /* Increment refcount. No-op for immortals. Returns v for chaining. */

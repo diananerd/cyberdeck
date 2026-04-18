@@ -1,0 +1,18 @@
+@app
+  name: "Conf lang.fn.basic"
+  id: "conf.lang.fn.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn add (a, b) = a + b
+fn double (x) = x * 2
+fn answer () = 42
+
+@on launch:
+  let s = add(2, 3)
+  let d = double(21)
+  let a = answer()
+  let ok = s == 5 && d == 42 && a == 42
+  log.info(if ok then "DECK_CONF_OK:lang.fn.basic" else "DECK_CONF_FAIL:lang.fn.basic")

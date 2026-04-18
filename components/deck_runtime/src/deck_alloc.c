@@ -224,6 +224,22 @@ deck_value_t *deck_new_some(deck_value_t *inner)
     return val;
 }
 
+deck_value_t *deck_new_fn(const char *name,
+                          const char **params,
+                          uint32_t n_params,
+                          const struct ast_node *body,
+                          struct deck_env *closure)
+{
+    deck_value_t *val = alloc_value(DECK_T_FN);
+    if (!val) return NULL;
+    val->as.fn.name     = name;
+    val->as.fn.params   = params;
+    val->as.fn.n_params = n_params;
+    val->as.fn.body     = body;
+    val->as.fn.closure  = closure;
+    return val;
+}
+
 /* --- refcount ----------------------------------------------------- */
 
 deck_value_t *deck_retain(deck_value_t *v)

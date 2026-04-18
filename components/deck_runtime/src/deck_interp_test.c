@@ -128,6 +128,62 @@ static bool t_machine_two_states(const char *name)
     return true;
 }
 
+/* ---- DL2 F21.1: user-defined functions ---- */
+static bool t_fn_basic(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn add (a, b) = a + b\n"
+        "@on launch:\n"
+        "  log.info(str(add(2, 3)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "run add(2,3)");
+    return true;
+}
+static bool t_fn_multi_line(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn bmi (w, h) =\n"
+        "  let h2 = h * h\n"
+        "  w / h2\n"
+        "@on launch:\n"
+        "  log.info(str(bmi(80, 2)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "run bmi(80,2)");
+    return true;
+}
+static bool t_fn_recursion(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn fact (n) =\n"
+        "  if n <= 1 then 1 else n * fact(n - 1)\n"
+        "@on launch:\n"
+        "  log.info(str(fact(6)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "run fact(6)");
+    return true;
+}
+static bool t_fn_mutual(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn is_even (n) = if n == 0 then true else is_odd(n - 1)\n"
+        "fn is_odd  (n) = if n == 0 then false else is_even(n - 1)\n"
+        "@on launch:\n"
+        "  log.info(if is_even(4) then \"yes\" else \"no\")\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "mutual recursion");
+    return true;
+}
+static bool t_fn_arity_mismatch(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn add (a, b) = a + b\n"
+        "@on launch:\n"
+        "  log.info(str(add(2)))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_TYPE_MISMATCH, "expected arity mismatch");
+    return true;
+}
+
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
 
@@ -164,6 +220,11 @@ static const case_t CASES[] = {
     { "hello",              t_hello },
     { "match_wild",         t_match_wild },
     { "machine_two_states", t_machine_two_states },
+    { "fn_basic",           t_fn_basic },
+    { "fn_multi_line",      t_fn_multi_line },
+    { "fn_recursion",       t_fn_recursion },
+    { "fn_mutual",          t_fn_mutual },
+    { "fn_arity_mismatch",  t_fn_arity_mismatch },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

@@ -70,6 +70,17 @@ deck_value_t *deck_env_lookup(deck_env_t *e, const char *name)
     return NULL;
 }
 
+void deck_env_clear(deck_env_t *e)
+{
+    if (!e) return;
+    for (uint32_t i = 0; i < e->count; i++) {
+        deck_release(e->bindings[i].val);
+        e->bindings[i].val  = NULL;
+        e->bindings[i].name = NULL;
+    }
+    e->count = 0;
+}
+
 /* ================================================================
  * Error reporting
  * ================================================================ */
@@ -695,6 +706,26 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         case AST_SEND:       r = deck_new_atom(n->as.send.event); break;
         case AST_TRANSITION: r = deck_new_atom(n->as.transition.target); break;
 
+        case AST_FN_DEF: {
+            /* Bind the function to the current env. The closure captures
+             * `env` so that mutually-recursive fns at the same scope can
+             * find each other (top-level pre-binding adds all fn names to
+             * the global env BEFORE any body runs). Returns unit. */
+            deck_value_t *fnv = deck_new_fn(n->as.fndef.name,
+                                            n->as.fndef.params,
+                                            n->as.fndef.n_params,
+                                            n->as.fndef.body,
+                                            env);
+            if (!fnv) {
+                set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "fn alloc failed");
+                break;
+            }
+            deck_env_bind(c->arena, env, n->as.fndef.name, fnv);
+            deck_release(fnv);
+            r = deck_retain(deck_unit());
+            break;
+        }
+
         default:
             set_err(c, DECK_RT_INTERNAL, n->line, n->col,
                     "unsupported AST kind %d", (int)n->kind);
@@ -712,16 +743,19 @@ static deck_value_t *run_match(deck_interp_ctx_t *c, deck_env_t *env, const ast_
     deck_value_t *out = NULL;
     for (uint32_t i = 0; i < n->as.match.n_arms; i++) {
         deck_env_t *arm_env = deck_env_new(c->arena, env);
-        if (!match_pattern(c->arena, arm_env, n->as.match.arms[i].pattern, scrut))
+        if (!match_pattern(c->arena, arm_env, n->as.match.arms[i].pattern, scrut)) {
+            deck_env_clear(arm_env);
             continue;
+        }
         if (n->as.match.arms[i].guard) {
             deck_value_t *g = deck_interp_run(c, arm_env, n->as.match.arms[i].guard);
-            if (!g) { deck_release(scrut); return NULL; }
+            if (!g) { deck_env_clear(arm_env); deck_release(scrut); return NULL; }
             bool gt = deck_is_truthy(g);
             deck_release(g);
-            if (!gt) continue;
+            if (!gt) { deck_env_clear(arm_env); continue; }
         }
         out = deck_interp_run(c, arm_env, n->as.match.arms[i].body);
+        deck_env_clear(arm_env);
         goto done;
     }
     set_err(c, DECK_RT_PATTERN_FAILED, n->line, n->col, "no match arm matched");
@@ -845,11 +879,62 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
     return r;
 }
 
+/* Invoke a user-defined function value.
+ *
+ * Stack discipline: this is the C-recursion hot path for Deck recursion.
+ * We deliberately do NOT spill the evaluated args into a stack buffer —
+ * each fib(10)-class call already chains ~10 C frames per Deck level,
+ * so a 16-pointer array per frame burns the main task stack quickly. We
+ * evaluate each arg and immediately bind it into the callee env. If an
+ * arg evaluation fails, partially-bound entries are reachable via the
+ * arena env until the arena resets (no extra heap leak vs the existing
+ * env semantics). */
+static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
+                                    deck_value_t *fnv,
+                                    const ast_node_t *call_site)
+{
+    if (!fnv || fnv->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                "callee is not a function");
+        return NULL;
+    }
+    uint32_t argc = call_site->as.call.args.len;
+    if (argc != fnv->as.fn.n_params) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                "fn '%s': arity mismatch (got %u, want %u)",
+                fnv->as.fn.name ? fnv->as.fn.name : "<anon>",
+                (unsigned)argc, (unsigned)fnv->as.fn.n_params);
+        return NULL;
+    }
+    deck_env_t *call_env = deck_env_new(c->arena, fnv->as.fn.closure);
+    if (!call_env) {
+        set_err(c, DECK_RT_NO_MEMORY, call_site->line, call_site->col,
+                "fn call: env alloc failed");
+        return NULL;
+    }
+    for (uint32_t i = 0; i < argc; i++) {
+        deck_value_t *v = deck_interp_run(c, env, call_site->as.call.args.items[i]);
+        if (!v) { deck_env_clear(call_env); return NULL; }
+        deck_env_bind(c->arena, call_env, fnv->as.fn.params[i], v);
+        deck_release(v);
+    }
+    deck_value_t *result = deck_interp_run(c, call_env, fnv->as.fn.body);
+    deck_env_clear(call_env);
+    return result;
+}
+
 static deck_value_t *run_call(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)
 {
     const ast_node_t *fn = n->as.call.fn;
-    /* Bare ident: type conversions str/int/float/bool. */
+    /* Bare ident: prefer user-defined fn binding in env over builtins.
+     * (Builtins are namespaced via dot for capabilities; bare builtins are
+     * the type conversions, which would never collide with a user fn name
+     * in a well-written program — but we check env first to allow shadowing.) */
     if (fn && fn->kind == AST_IDENT) {
+        deck_value_t *bound = deck_env_lookup(env, fn->as.s);
+        if (bound && bound->type == DECK_T_FN) {
+            return invoke_user_fn(c, env, bound, n);
+        }
         const builtin_t *b = find_bare_builtin(fn->as.s);
         if (b) {
             uint32_t argc = n->as.call.args.len;
@@ -1018,7 +1103,21 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
     deck_interp_ctx_t c;
     deck_interp_init(&c, &arena);
 
-    const ast_node_t *on = find_on_launch(ld.module);
+    /* DL2 F21.1: pre-bind every top-level `fn` so @on launch and @machine
+     * bodies can reference them — and so fn bodies can reference each
+     * other (mutual recursion) regardless of declaration order. */
+    if (ld.module && ld.module->kind == AST_MODULE) {
+        for (uint32_t i = 0; i < ld.module->as.module.items.len; i++) {
+            const ast_node_t *it = ld.module->as.module.items.items[i];
+            if (it && it->kind == AST_FN_DEF) {
+                deck_value_t *r = deck_interp_run(&c, c.global, it);
+                if (r) deck_release(r);
+                if (c.err != DECK_RT_OK) break;
+            }
+        }
+    }
+
+    const ast_node_t *on = (c.err == DECK_RT_OK) ? find_on_launch(ld.module) : NULL;
     if (on) {
         deck_value_t *r = deck_interp_run(&c, c.global, on->as.on.body);
         if (r) deck_release(r);
@@ -1034,6 +1133,11 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
         ESP_LOGE(TAG, "runtime error @ %u:%u — %s: %s",
                  c.err_line, c.err_col, deck_err_name(run_rc), c.err_msg);
     }
+    /* Release every retained value bound in the global env (top-level
+     * fn pre-bindings, top-level let bindings inside @on launch). The
+     * arena reset only frees the env struct; without this, refcounted
+     * values leak across runs and `memory.no_residual_leak` trips. */
+    deck_env_clear(c.global);
     deck_arena_reset(&arena);
     return run_rc;
 }

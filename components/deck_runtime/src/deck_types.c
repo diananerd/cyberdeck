@@ -14,6 +14,7 @@ const char *deck_type_name(deck_type_t t)
         case DECK_T_MAP:      return "map";
         case DECK_T_TUPLE:    return "tuple";
         case DECK_T_OPTIONAL: return "optional";
+        case DECK_T_FN:       return "fn";
         default:              return "unknown";
     }
 }

@@ -537,8 +537,86 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
  * Module entry point
  * ================================================================ */
 
+/* DL2 F21.1: parse `fn name (p1, p2: T) -> T = body`.
+ * Type annotations and effect annotations are accepted but discarded at
+ * F21.1; F22 lands the type system, F23 effect checks. */
+static ast_node_t *parse_fn_decl(deck_parser_t *p)
+{
+    ast_node_t *n = mknode(p, AST_FN_DEF); if (!n) return NULL;
+    advance(p); /* fn */
+    if (!at(p, TOK_IDENT)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR, "expected function name after 'fn'");
+        return NULL;
+    }
+    n->as.fndef.name = p->cur.text;
+    advance(p);
+    if (!expect(p, TOK_LPAREN, "expected '(' after fn name")) return NULL;
+
+    const char *params_buf[16];
+    uint32_t n_params = 0;
+    if (!at(p, TOK_RPAREN)) {
+        for (;;) {
+            if (n_params >= 16) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "too many parameters (max 16)");
+                return NULL;
+            }
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR, "expected parameter name");
+                return NULL;
+            }
+            params_buf[n_params++] = p->cur.text;
+            advance(p);
+            /* Optional ': Type' — a single ident type at F21.1, ignored. */
+            if (at(p, TOK_COLON)) {
+                advance(p);
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name after ':'");
+                    return NULL;
+                }
+                advance(p);
+            }
+            if (!at(p, TOK_COMMA)) break;
+            advance(p);
+        }
+    }
+    if (!expect(p, TOK_RPAREN, "expected ')' after fn parameters")) return NULL;
+
+    /* Optional `-> Type`. Single ident type at F21.1, ignored. */
+    if (at(p, TOK_ARROW)) {
+        advance(p);
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected return type after '->'");
+            return NULL;
+        }
+        advance(p);
+    }
+
+    /* Optional effect annotations `!alias` — parsed and discarded at F21.1. */
+    while (at(p, TOK_BANG)) {
+        advance(p);
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected effect alias after '!'");
+            return NULL;
+        }
+        advance(p);
+    }
+
+    if (!expect(p, TOK_ASSIGN, "expected '=' in fn declaration")) return NULL;
+
+    /* Body: indented suite (NEWLINE INDENT ... DEDENT) or a single inline expr. */
+    ast_node_t *body = parse_suite(p);
+    if (!body) return NULL;
+
+    n->as.fndef.params   = deck_arena_memdup(p->arena, params_buf,
+                                             n_params * sizeof(char *));
+    n->as.fndef.n_params = n_params;
+    n->as.fndef.body     = body;
+    return n;
+}
+
 static ast_node_t *parse_top_item(deck_parser_t *p)
 {
+    if (at(p, TOK_KW_FN)) return parse_fn_decl(p);
     if (at(p, TOK_DECORATOR)) {
         if      (dec_is(&p->cur, "app"))     return parse_app_block(p);
         else if (dec_is(&p->cur, "use"))     return parse_use_decl(p);
@@ -547,7 +625,7 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator (DL1 supports @app/@use/@on/@machine)");
         return NULL;
     }
-    set_err(p, DECK_LOAD_PARSE_ERROR, "expected @app, @use, @on, or @machine at top level");
+    set_err(p, DECK_LOAD_PARSE_ERROR, "expected @app, @use, @on, @machine, or fn at top level");
     return NULL;
 }
 

@@ -1,0 +1,20 @@
+@app
+  name: "Conf lang.fn.mutual"
+  id: "conf.lang.fn.mutual"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn is_even (n) =
+  if n == 0 then true else is_odd(n - 1)
+
+fn is_odd (n) =
+  if n == 0 then false else is_even(n - 1)
+
+@on launch:
+  let e4 = is_even(4)
+  let o7 = is_odd(7)
+  let e3 = is_even(3)
+  let ok = e4 && o7 && !e3
+  log.info(if ok then "DECK_CONF_OK:lang.fn.mutual" else "DECK_CONF_FAIL:lang.fn.mutual")

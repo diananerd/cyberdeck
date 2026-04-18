@@ -164,6 +164,11 @@ static const lex_case_t CASES[] = {
     /* 35. Question mark */
     { "question",      "x? y",
       { TOK_IDENT, TOK_QUESTION, TOK_IDENT, TOK_EOF } },
+
+    /* 36. fn keyword (DL2 F21.1) */
+    { "kw_fn",         "fn add (a, b) = a + b",
+      { TOK_KW_FN, TOK_IDENT, TOK_LPAREN, TOK_IDENT, TOK_COMMA, TOK_IDENT,
+        TOK_RPAREN, TOK_ASSIGN, TOK_IDENT, TOK_PLUS, TOK_IDENT, TOK_EOF } },
 };
 
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))

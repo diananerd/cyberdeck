@@ -32,6 +32,7 @@ typedef enum {
     DECK_T_MAP,        /* hash map of value → value */
     DECK_T_TUPLE,      /* fixed arity */
     DECK_T_OPTIONAL,   /* some(inner) | none (inner NULL) */
+    DECK_T_FN,         /* DL2 F21.1 — user-defined function value */
 } deck_type_t;
 
 const char *deck_type_name(deck_type_t t);
@@ -76,6 +77,19 @@ typedef struct {
     deck_value_t *inner;   /* NULL = none */
 } deck_opt_t;
 
+/* DL2 F21.1: function value. All pointers point into the runtime arena
+ * — releasing the value frees only the deck_value_t struct, not the AST
+ * or environment (which live for the arena's lifetime). */
+struct ast_node;
+struct deck_env;
+typedef struct {
+    const char            *name;       /* interned, may be NULL for lambdas */
+    const char           **params;
+    uint32_t               n_params;
+    const struct ast_node *body;
+    struct deck_env       *closure;    /* lexical scope at definition */
+} deck_fn_t;
+
 struct deck_value {
     deck_type_t type;
     uint32_t    refcount;   /* 0 = immortal (unit, true, false, common atoms) */
@@ -90,6 +104,7 @@ struct deck_value {
         deck_map_t        map;
         deck_tuple_t      tuple;
         deck_opt_t        opt;
+        deck_fn_t         fn;
     } as;
 };
 
@@ -111,6 +126,7 @@ static inline bool deck_is_truthy(const deck_value_t *v) {
         case DECK_T_TUPLE:    return v->as.tuple.arity > 0;
         case DECK_T_OPTIONAL: return v->as.opt.inner != NULL;
         case DECK_T_ATOM:     return true;
+        case DECK_T_FN:       return true;
         default:              return false;
     }
 }

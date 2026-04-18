@@ -32,10 +32,10 @@ typedef struct {
 
 static row_t ROWS[] = {
     { "memory",        "allocator + intern",    deck_runtime_selftest,    false },
-    { "language.lex",  "lexer (35)",            deck_lexer_run_selftest,  false },
-    { "language.ast",  "parser (43)",           deck_parser_run_selftest, false },
+    { "language.lex",  "lexer (36)",            deck_lexer_run_selftest,  false },
+    { "language.ast",  "parser (51)",           deck_parser_run_selftest, false },
     { "loader",        "stages 0-9 (18)",       deck_loader_run_selftest, false },
-    { "language.eval", "interp + machine (32)", deck_interp_run_selftest, false },
+    { "language.eval", "interp + machine (37)", deck_interp_run_selftest, false },
 };
 
 #define N_ROWS (sizeof(ROWS) / sizeof(ROWS[0]))
@@ -110,6 +110,13 @@ static deck_test_t DECK_TESTS[] = {
     { "os.conv",       "/conformance/os_conv.deck",       "DECK_CONF_OK:os.conv",       DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
     { "app.machine",   "/conformance/app_machine.deck",   "DECK_CONF_OK:app.machine",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F21.1 — user-defined functions. */
+    { "lang.fn.basic",     "/conformance/lang_fn_basic.deck",     "DECK_CONF_OK:lang.fn.basic",     DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.fn.recursion", "/conformance/lang_fn_recursion.deck", "DECK_CONF_OK:lang.fn.recursion", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.fn.block",     "/conformance/lang_fn_block.deck",     "DECK_CONF_OK:lang.fn.block",     DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.fn.mutual",    "/conformance/lang_fn_mutual.deck",    "DECK_CONF_OK:lang.fn.mutual",    DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+    { "lang.fn.typed",     "/conformance/lang_fn_typed.deck",     "DECK_CONF_OK:lang.fn.typed",     DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },
@@ -138,6 +145,10 @@ static deck_test_t DECK_TESTS[] = {
     { "errors.divide_by_zero_float", "/conformance/err_div_zero_float.deck", NULL,
       DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0, {0}, 0 },
     { "errors.str_minus_int", "/conformance/err_str_minus_int.deck", NULL,
+      DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, {0}, 0 },
+
+    /* DL2 F21.1 — fn arity mismatch must be a clean type-mismatch error. */
+    { "errors.fn_arity", "/conformance/err_fn_arity.deck", NULL,
       DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, {0}, 0 },
 };
 
@@ -777,6 +788,12 @@ deck_err_t deck_conformance_run(void)
     if (N_DECK_TESTS > 0) {
         ESP_LOGI(TAG, "--- .deck tests (%u) ---", (unsigned)N_DECK_TESTS);
         for (size_t i = 0; i < N_DECK_TESTS; i++) {
+            /* Feed the IDLE0 watchdog. As DL2 grows the suite past ~50
+             * tests the cumulative time on CPU 0 blows the 5 s task WDT
+             * even though no individual test is slow — a single tick
+             * yield keeps IDLE0 happy without polluting per-test timing
+             * (sampled inside run_deck_test). */
+            vTaskDelay(1);
             bool is_positive = (DECK_TESTS[i].expected_err == DECK_RT_OK);
             uint32_t runs = is_positive ? DECK_TEST_SAMPLE_RUNS : 1;
 

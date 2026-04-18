@@ -44,6 +44,7 @@ static const char *const s_tok_names[TOK_COUNT] = {
     [TOK_KW_SEND]      = "send",
     [TOK_KW_USE]       = "use",
     [TOK_KW_TRANSITION]= "transition",
+    [TOK_KW_FN]        = "fn",
     [TOK_PLUS]         = "+",
     [TOK_MINUS]        = "-",
     [TOK_STAR]         = "*",
@@ -177,6 +178,7 @@ static const kw_t s_keywords[] = {
     {"send",       TOK_KW_SEND},
     {"use",        TOK_KW_USE},
     {"transition", TOK_KW_TRANSITION},
+    {"fn",         TOK_KW_FN},
     {NULL, TOK_EOF},
 };
 

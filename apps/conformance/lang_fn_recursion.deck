@@ -1,0 +1,19 @@
+@app
+  name: "Conf lang.fn.recursion"
+  id: "conf.lang.fn.recursion"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn fact (n) =
+  if n <= 1 then 1 else n * fact(n - 1)
+
+fn fib (n) =
+  if n < 2 then n else fib(n - 1) + fib(n - 2)
+
+@on launch:
+  let f5 = fact(5)
+  let f10 = fib(10)
+  let ok = f5 == 120 && f10 == 55
+  log.info(if ok then "DECK_CONF_OK:lang.fn.recursion" else "DECK_CONF_FAIL:lang.fn.recursion")

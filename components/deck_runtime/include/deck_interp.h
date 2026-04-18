@@ -52,6 +52,12 @@ bool        deck_env_bind(deck_arena_t *a, deck_env_t *e,
                           const char *name, deck_value_t *val);
 deck_value_t *deck_env_lookup(deck_env_t *e, const char *name);
 
+/* Release every value retained by `e` and reset its bindings count. The
+ * env struct itself remains in the arena and may be re-used. Call this
+ * when an env scope ends (fn return, match arm completion, run end) —
+ * arena reset alone leaks the heap-allocated values the env retained. */
+void          deck_env_clear(deck_env_t *e);
+
 /* Interpreter selftest. */
 deck_err_t deck_interp_run_selftest(void);
 

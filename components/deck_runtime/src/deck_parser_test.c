@@ -101,9 +101,31 @@ static const parser_case_t CASES[] = {
       "      log.info(\"idle\")\n",
       "(module (machine m (state idle (state_hook enter (do (call (dot (ident log) info) (str \"idle\")))))))" },
 
+    /* --- DL2 F21.1: fn declarations --- */
+    { "mod_fn_inline",    TEST_MODULE, "fn add (a, b) = a + b\n",
+      "(module (fn add (params a b) (binop + (ident a) (ident b))))" },
+    { "mod_fn_no_args",   TEST_MODULE, "fn answer () = 42\n",
+      "(module (fn answer (params) (int 42)))" },
+    { "mod_fn_typed",     TEST_MODULE, "fn bmi (w: float, h: float) -> float = w / h\n",
+      "(module (fn bmi (params w h) (binop / (ident w) (ident h))))" },
+    { "mod_fn_block",     TEST_MODULE,
+      "fn bmi (w, h) =\n"
+      "  let h2 = h * h\n"
+      "  w / h2\n",
+      "(module (fn bmi (params w h) (do (let h2 (binop * (ident h) (ident h)) _) (binop / (ident w) (ident h2)))))" },
+    /* Multi-line fn body: parse_suite always wraps in AST_DO even when
+     * the body is a single expression — the printer mirrors that wrap. */
+    { "mod_fn_recursion", TEST_MODULE,
+      "fn fact (n) =\n"
+      "  if n <= 1 then 1 else n * fact(n - 1)\n",
+      "(module (fn fact (params n) (do (if (binop <= (ident n) (int 1)) (int 1) (binop * (ident n) (call (ident fact) (binop - (ident n) (int 1))))))))" },
+
     /* --- errors --- */
     { "err_no_decorator", TEST_ERROR, "foo",        "expected @app" },
     { "err_unknown_dec",  TEST_ERROR, "@wtf",       "unknown top-level decorator" },
+    { "err_fn_no_name",   TEST_ERROR, "fn ()",      "expected function name" },
+    { "err_fn_no_paren",  TEST_ERROR, "fn add a, b", "expected '(' after fn name" },
+    { "err_fn_no_assign", TEST_ERROR, "fn add (a, b) a + b", "expected '=' in fn declaration" },
     { "err_missing_colon", TEST_ERROR,
       "@app\n  name \"X\"\n",
       "expected ':' after app field name" },

@@ -1,0 +1,21 @@
+@app
+  name: "Conf lang.fn.block"
+  id: "conf.lang.fn.block"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn bmi (w, h) =
+  let h2 = h * h
+  w / h2
+
+fn area_of_triangle (b, h) =
+  let half = b / 2
+  half * h
+
+@on launch:
+  let bm = bmi(80, 2)
+  let ar = area_of_triangle(10, 4)
+  let ok = bm == 20 && ar == 20
+  log.info(if ok then "DECK_CONF_OK:lang.fn.block" else "DECK_CONF_FAIL:lang.fn.block")

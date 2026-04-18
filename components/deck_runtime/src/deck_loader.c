@@ -273,6 +273,9 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
         case AST_MACHINE:
             walk_list(l, &n->as.machine.states);
             break;
+        case AST_FN_DEF:
+            walk_expr(l, n->as.fndef.body);
+            break;
         default: break;
     }
 }
@@ -351,6 +354,9 @@ static void walk_check_match(deck_loader_t *l, const ast_node_t *n)
         case AST_MACHINE:
             for (uint32_t i = 0; i < n->as.machine.states.len; i++)
                 walk_check_match(l, n->as.machine.states.items[i]);
+            break;
+        case AST_FN_DEF:
+            walk_check_match(l, n->as.fndef.body);
             break;
         default: break;
     }

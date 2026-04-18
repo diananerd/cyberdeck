@@ -59,6 +59,7 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_PAT_IDENT:   return "pat_ident";
         case AST_SEND:        return "send";
         case AST_TRANSITION:  return "transition";
+        case AST_FN_DEF:      return "fn";
         case AST_APP:         return "app";
         case AST_APP_FIELD:   return "app_field";
         case AST_USE:         return "use";
@@ -215,6 +216,14 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
         case AST_PAT_IDENT:  sp_printf(p, " %s", n->as.pat_ident ? n->as.pat_ident : ""); break;
         case AST_SEND:       sp_printf(p, " :%s", n->as.send.event ? n->as.send.event : ""); break;
         case AST_TRANSITION: sp_printf(p, " :%s", n->as.transition.target ? n->as.transition.target : ""); break;
+        case AST_FN_DEF:
+            sp_printf(p, " %s", n->as.fndef.name ? n->as.fndef.name : "?");
+            sp_puts(p, " (params");
+            for (uint32_t i = 0; i < n->as.fndef.n_params; i++)
+                sp_printf(p, " %s", n->as.fndef.params[i] ? n->as.fndef.params[i] : "?");
+            sp_putc(p, ')');
+            sp_putc(p, ' '); print_node(p, n->as.fndef.body);
+            break;
         case AST_APP:
             for (uint32_t i = 0; i < n->as.app.n_fields; i++) {
                 sp_printf(p, " (%s ", n->as.app.fields[i].name);

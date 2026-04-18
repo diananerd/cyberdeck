@@ -38,6 +38,9 @@ CONFIG_SPIFFS_OBJ_NAME_LEN=64
 
 # Main task stack: 3584 bytes is tight for the DL1 conformance harness,
 # which on top of the runtime + SPIFFS + log-capture hook also runs a
-# concurrent-logging stress test. 6 KB leaves headroom without pushing
-# footprint meaningfully.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# concurrent-logging stress test. DL2 F21.1 introduces user-defined `fn`
+# with recursion: a depth-10 fib(10) chains ~10 C frames per Deck level
+# inside the tree-walking interpreter, so 100+ active frames on the C
+# stack is realistic before TCO lands in F21.3. 16 KB carries comfortable
+# headroom until then; we'll revisit (and likely shrink) once TCO is in.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

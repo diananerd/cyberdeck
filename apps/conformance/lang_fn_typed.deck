@@ -1,0 +1,19 @@
+@app
+  name: "Conf lang.fn.typed"
+  id: "conf.lang.fn.typed"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn celsius_to_f (c: float) -> float = c * 1.8 + 32.0
+fn clamp (x: int, lo: int, hi: int) -> int =
+  if x < lo then lo else if x > hi then hi else x
+
+@on launch:
+  let f = celsius_to_f(100.0)
+  let c1 = clamp(50, 0, 100)
+  let c2 = clamp(-5, 0, 100)
+  let c3 = clamp(200, 0, 100)
+  let ok = f > 211.9 && f < 212.1 && c1 == 50 && c2 == 0 && c3 == 100
+  log.info(if ok then "DECK_CONF_OK:lang.fn.typed" else "DECK_CONF_FAIL:lang.fn.typed")
