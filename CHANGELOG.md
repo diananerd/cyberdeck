@@ -2,6 +2,72 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.9.0] — 2026-04-17 — F27 Shell DL2
+
+Sobre el bridge UI de F26 aterriza el shell DL2: lockscreen PIN, intent
+navigation con back/home, settings + sub-screen Display, rotación
+persistida en NVS, y una launcher demo con tarjeta clickable a Settings.
+
+### Added
+
+**F27.1 lockscreen PIN.** `deck_shell_lockscreen_show(cb)` overlay
+sobre `lv_layer_top`: header "ENTER PIN" + 4 dots + numpad 3×4 con
+1-9, BACKSPACE, 0, OK. Verifica vía `deck_sdi_security_verify_pin`.
+Sobre éxito invoca callback; sobre error toast "WRONG PIN" + reset.
+Si no hay PIN, salta lockscreen y dispara cb sincrónicamente. Mientras
+visible, `deck_shell_nav_lock(true)` bloquea BACK/HOME.
+
+**F27.2 intent navigation.** `deck_shell_intent_register(app_id, fn)`
+registra resolver por app id. `deck_shell_intent_navigate(intent)`
+busca + invoca. Navbar wired: `deck_shell_navbar_back` →
+`activity_pop` (no-op si depth=1 o nav locked); `_navbar_home` →
+`activity_pop_to_home`. Status: `deck_shell_nav_lock` /
+`_is_locked`.
+
+**F27.3 settings sub-screens.** `deck_shell_settings_register()` mapea
+`app_id=9` con dos screen_ids: SCR_MAIN (lista DISPLAY/ABOUT) y
+SCR_DISPLAY (chooser de rotación 0°/90°/180°/270° con highlight del
+actual). Sub-screens convención `screen_id = 0..N` (no enum
+proliferation).
+
+**F27.4 rotation NVS persist.** `deck_shell_rotation_set(rot)`
+guarda en NVS namespace="cyberdeck" key="display_rot" (i64) +
+aplica vía `deck_bridge_ui_set_rotation`.
+`deck_shell_rotation_restore()` lee on-boot. Defaults a 0° si la key
+no existe.
+
+**Launcher demo.** Boot trae al usuario a un grid con tarjeta SETTINGS
+clickable + 4 stubs (BOOKS/NOTES/FILES/WIFI con borde dim + toast
+"Coming soon..."). F29 reemplazará esto con la app launcher real
+(Annex A).
+
+### Changed
+
+**Statusbar + navbar viven en `lv_layer_top`.** En F26 vivían como
+hijos de `lv_scr_act()`, pero el flujo
+`bridge_ui_render → lv_obj_clean(scr)` los destruía cuando una activity
+pintaba. Mover a layer_top los aísla del activity stack y permite que
+sobrevivan a screen swaps + rotación.
+
+**main.c:** primero hace `deck_shell_dl2_boot()` (DL2 chrome) y luego
+`deck_shell_boot()` (DL1 sample app, conformance path). Ambos coexisten.
+
+### Fix
+
+- Crash al refresh de statusbar después del primer DVC render
+  (`lv_label_set_text` sobre lv_obj liberado por `lv_obj_clean`):
+  causa raíz fue compartir parent entre statusbar/navbar y la activity
+  screen. Resolución: layer_top.
+
+### Stats hardware
+
+- Boot end-to-end ~7.1s (incluye SDI selftests + DL1 conformance + DL2 shell)
+- Bin 1.35 MB / 1.5 MB budget
+- En pantalla: statusbar (CYBERDECK + time + WiFi + battery) + launcher
+  grid (SETTINGS + 4 stubs) + navbar (BACK + HOME)
+- Tap SETTINGS → push settings main → tap DISPLAY → push display chooser
+- Tap HOME → pop_to_home → vuelve al launcher
+
 ## [0.8.5] — 2026-04-17 — F26 Bridge UI DVC + LVGL
 
 LVGL 8.4 entra al proyecto. Aterriza la cadena completa runtime → DVC →

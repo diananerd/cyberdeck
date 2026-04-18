@@ -64,9 +64,11 @@ deck_sdi_err_t deck_bridge_ui_navbar_init(deck_bridge_ui_nav_cb_t back_cb,
     if (s_bar) return DECK_SDI_OK;
     if (!deck_bridge_ui_lock(200)) return DECK_SDI_ERR_BUSY;
 
-    lv_obj_t *scr = lv_scr_act();
-    s_bar = lv_obj_create(scr);
-    lv_obj_set_size(s_bar, lv_pct(100), NB_HEIGHT);
+    /* Same reasoning as statusbar — live on lv_layer_top to survive
+     * activity screen swaps. */
+    lv_obj_t *layer = lv_layer_top();
+    s_bar = lv_obj_create(layer);
+    lv_obj_set_size(s_bar, lv_disp_get_hor_res(NULL), NB_HEIGHT);
     lv_obj_align(s_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(s_bar, CD_BG_DARK, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, LV_PART_MAIN);

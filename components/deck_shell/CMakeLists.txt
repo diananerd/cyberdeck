@@ -1,5 +1,11 @@
 idf_component_register(
     SRCS "src/deck_shell.c"
+         "src/deck_shell_dl2.c"
+         "src/deck_shell_lockscreen.c"
+         "src/deck_shell_intent.c"
+         "src/deck_shell_settings.c"
+         "src/deck_shell_rotation.c"
     INCLUDE_DIRS "include"
-    REQUIRES log deck_runtime deck_sdi
+    REQUIRES log deck_runtime deck_sdi deck_bridge_ui
+             lvgl__lvgl
 )

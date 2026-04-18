@@ -33,6 +33,8 @@
 #include "deck_bridge_ui.h"
 #include "deck_conformance.h"
 #include "deck_shell.h"
+#include "deck_shell_dl2.h"
+#include "deck_shell_intent.h"
 
 static const char *TAG = "cyberdeck";
 
@@ -135,10 +137,11 @@ void app_main(void)
     /* bridge.ui must register AFTER display + touch because its LVGL
      * init pulls those drivers up. */
     (void)deck_bridge_ui_register_lvgl();
-    /* Statusbar + navbar mount on the active screen. F27 wires real
-     * back/home callbacks into the activity stack; for now they log only. */
+    /* Statusbar + navbar mount on the active screen. Navbar BACK/HOME
+     * route through the DL2 shell intent stack. */
     (void)deck_bridge_ui_statusbar_init();
-    (void)deck_bridge_ui_navbar_init(NULL, NULL);
+    (void)deck_bridge_ui_navbar_init(deck_shell_navbar_back,
+                                       deck_shell_navbar_home);
     deck_sdi_log_registered();
 
     /* Runtime init — heap hard-limit for DL1 is 64 KB (spec 16 §4.4). */
@@ -150,10 +153,16 @@ void app_main(void)
 
     log_heap("idle");
 
-    ESP_LOGI(TAG, "--- booting DL1 shell ---");
-    deck_err_t shell_rc = deck_shell_boot();
+    ESP_LOGI(TAG, "--- booting DL2 shell ---");
+    deck_err_t shell_rc = deck_shell_dl2_boot();
     if (shell_rc != DECK_RT_OK) {
-        ESP_LOGE(TAG, "shell boot FAILED: %s", deck_err_name(shell_rc));
+        ESP_LOGE(TAG, "DL2 shell boot FAILED: %s", deck_err_name(shell_rc));
+    }
+    /* DL1 sample app still runs once after the DL2 chrome is up so the
+     * runtime conformance path is exercised on every boot. */
+    deck_err_t dl1_rc = deck_shell_boot();
+    if (dl1_rc != DECK_RT_OK) {
+        ESP_LOGE(TAG, "DL1 sample boot FAILED: %s", deck_err_name(dl1_rc));
     }
 
     ESP_LOGI(TAG, "Bootstrap complete — idle loop (10s heartbeat)");

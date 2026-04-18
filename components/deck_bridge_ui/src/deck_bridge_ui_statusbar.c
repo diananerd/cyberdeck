@@ -91,9 +91,13 @@ deck_sdi_err_t deck_bridge_ui_statusbar_init(void)
     if (s_bar) return DECK_SDI_OK;
     if (!deck_bridge_ui_lock(200)) return DECK_SDI_ERR_BUSY;
 
-    lv_obj_t *scr = lv_scr_act();
-    s_bar = lv_obj_create(scr);
-    lv_obj_set_size(s_bar, lv_pct(100), SB_HEIGHT);
+    /* Statusbar lives on lv_layer_top so it survives activity screen
+     * swaps + lv_obj_clean cycles in DVC render. Toasts and dialogs
+     * also live on lv_layer_top — they layer above by virtue of being
+     * created later (LVGL z-order = creation order within parent). */
+    lv_obj_t *layer = lv_layer_top();
+    s_bar = lv_obj_create(layer);
+    lv_obj_set_size(s_bar, lv_disp_get_hor_res(NULL), SB_HEIGHT);
     lv_obj_align(s_bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(s_bar, CD_BG_DARK, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, LV_PART_MAIN);
