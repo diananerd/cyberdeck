@@ -115,6 +115,21 @@ typedef struct {
     ast_node_t *value;
 } ast_app_field_t;
 
+/* Spec 02-deck-app §4 — one entry in an `@use` block body:
+ *   capability.path  as alias  [optional | when: cond]
+ *   ./local/path
+ *
+ * `module` is the capability path or relative path (interned).
+ * `alias` is the explicit `as alias` name, or (when absent) the last
+ * dotted segment of `module`. Code refers to the capability by alias.
+ * `is_optional` is set when the entry ends in the `optional` keyword.
+ */
+typedef struct {
+    const char *module;
+    const char *alias;
+    bool        is_optional;
+} ast_use_entry_t;
+
 struct ast_node {
     ast_kind_t  kind;
     uint32_t    line;
@@ -165,7 +180,20 @@ struct ast_node {
         } fndef;
 
         struct { ast_app_field_t *fields; uint32_t n_fields; } app;
-        struct { const char *module; bool is_optional; } use;   /* DL2 F23.4 */
+        /* Spec 02-deck-app §4 — @use declares a block of bindings. The
+         * spec's canonical shape is always a block body; a single
+         * binding is expressed as a one-entry block. `entries` is
+         * arena-owned. For backwards-compat with older accessors the
+         * struct also exposes `module` / `alias` / `is_optional`
+         * mirroring `entries[0]` when n_entries == 1. Multi-entry
+         * blocks must walk `entries`. */
+        struct {
+            ast_use_entry_t *entries;
+            uint32_t         n_entries;
+            const char      *module;       /* = entries[0].module when n==1 */
+            const char      *alias;        /* = entries[0].alias  when n==1 */
+            bool             is_optional;  /* = entries[0].is_optional when n==1 */
+        } use;
         struct { const char *event; ast_node_t *body; } on;
         struct { const char *name; ast_list_t states; }        machine;
         struct { const char *name; ast_list_t hooks; }         state;

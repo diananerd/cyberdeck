@@ -258,7 +258,20 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
                 sp_putc(p, ')');
             }
             break;
-        case AST_USE:        sp_printf(p, " %s", n->as.use.module ? n->as.use.module : ""); break;
+        case AST_USE:
+            if (n->as.use.n_entries > 0) {
+                for (uint32_t i = 0; i < n->as.use.n_entries; i++) {
+                    const ast_use_entry_t *e = &n->as.use.entries[i];
+                    sp_printf(p, " (%s%s%s%s)",
+                              e->module ? e->module : "?",
+                              e->alias  ? " as "    : "",
+                              e->alias  ? e->alias  : "",
+                              e->is_optional ? " optional" : "");
+                }
+            } else if (n->as.use.module) {
+                sp_printf(p, " %s", n->as.use.module);
+            }
+            break;
         case AST_ON:
             sp_printf(p, " :%s ", n->as.on.event ? n->as.on.event : "");
             print_node(p, n->as.on.body);

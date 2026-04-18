@@ -6,9 +6,12 @@
  *   module   := (top_item (NEWLINE+ top_item)*)?
  *   top_item := app_decl | use_decl | on_decl | machine_decl | let_decl
  *   app_decl := "@app" NEWLINE INDENT app_field+ DEDENT
- *   app_field:= IDENT ":" expr NEWLINE
- *            |  IDENT ":" NEWLINE INDENT app_field+ DEDENT       # requires: ...
- *   use_decl := "@use" IDENT ("." IDENT)* NEWLINE
+ *   app_field:= IDENT ":" expr NEWLINE                           # scalar only
+ *   requires_decl := "@requires" NEWLINE INDENT req_field+ DEDENT  # 02-deck-app §4A
+ *   req_field:= DOTTED ":" expr NEWLINE
+ *            |  DOTTED ":" NEWLINE INDENT req_field+ DEDENT      # capabilities:
+ *   use_decl := "@use" NEWLINE INDENT use_entry+ DEDENT          # 02-deck-app §4
+ *   use_entry:= DOTTED ("as" IDENT)? ("optional" | "when" ":" expr)? NEWLINE
  *   on_decl  := "@on" IDENT ":" suite
  *   machine_decl := "@machine" IDENT NEWLINE INDENT state+ DEDENT
  *   state    := "state" IDENT ":" NEWLINE INDENT state_hook+ DEDENT

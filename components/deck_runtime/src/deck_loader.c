@@ -331,19 +331,30 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
 }
 
 /* DL2 F23 — collect declared @use names so fn !effect annotations can
- * be cross-checked. The deck_arena is convenient scratch. */
+ * be cross-checked. Post-concept-#9 the AST_USE node carries a list of
+ * entries (spec 02-deck-app §4 block form); match the queried alias
+ * against each entry's alias, module, or last dotted segment. */
 static bool use_declared(const ast_node_t *mod, const char *alias)
 {
     if (!alias) return false;
     for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
         const ast_node_t *it = mod->as.module.items.items[i];
-        if (!it || it->kind != AST_USE || !it->as.use.module) continue;
-        const char *u = it->as.use.module;
-        /* @use foo.bar declares alias `bar` (last dotted segment) and `foo` (root). */
-        if (strcmp(u, alias) == 0) return true;
-        const char *dot = strrchr(u, '.');
-        if (dot && strcmp(dot + 1, alias) == 0) return true;
-        /* DL1 builtin caps (math/text/log/...) are implicitly available. */
+        if (!it || it->kind != AST_USE) continue;
+        for (uint32_t j = 0; j < it->as.use.n_entries; j++) {
+            const ast_use_entry_t *e = &it->as.use.entries[j];
+            if (e->alias  && strcmp(e->alias,  alias) == 0) return true;
+            if (e->module && strcmp(e->module, alias) == 0) return true;
+            if (e->module) {
+                const char *dot = strrchr(e->module, '.');
+                if (dot && strcmp(dot + 1, alias) == 0) return true;
+            }
+        }
+        /* Metadata stubs (parse_metadata_block / parse_opaque_block)
+         * set the mirror `module` field without building an entries
+         * array. Keep them matchable. */
+        if (it->as.use.n_entries == 0 && it->as.use.module) {
+            if (strcmp(it->as.use.module, alias) == 0) return true;
+        }
     }
     /* Implicit caps that don't need @use (DL1 baseline). */
     static const char *IMPLICIT[] = {

@@ -70,10 +70,22 @@ static const parser_case_t CASES[] = {
       "(if (ident x) (int 1) (int 2))" },
 
     /* --- module-level --- */
-    { "mod_use",      TEST_MODULE, "@use log",
-      "(module (use log))" },
-    { "mod_use_dot",  TEST_MODULE, "@use system.time",
-      "(module (use system.time))" },
+    /* Spec 02-deck-app §4 — @use is a block annotation. A single
+     * binding is expressed as a one-entry block. The alias defaults
+     * to the last dotted segment when `as alias` is omitted. */
+    { "mod_use",      TEST_MODULE, "@use\n  log as log\n",
+      "(module (use (log as log)))" },
+    { "mod_use_dot",  TEST_MODULE, "@use\n  system.time as systime\n",
+      "(module (use (system.time as systime)))" },
+    { "mod_use_block", TEST_MODULE,
+      "@use\n"
+      "  nvs as nvs\n"
+      "  fs as fs\n",
+      "(module (use (nvs as nvs) (fs as fs)))" },
+    { "mod_use_optional", TEST_MODULE,
+      "@use\n"
+      "  crypto.aes as aes  optional\n",
+      "(module (use (crypto.aes as aes optional)))" },
     { "mod_app_min",  TEST_MODULE,
       "@app\n"
       "  name: \"X\"\n"

@@ -960,28 +960,155 @@ static bool parse_requires_fields(deck_parser_t   *p,
     return true;
 }
 
+/* Spec 02-deck-app §4 — `@use` is a block annotation. Its body holds
+ * one entry per line:
+ *   capability.path  as alias
+ *   capability.path  as alias   optional
+ *   ./relative/path
+ *
+ * `@use.optional` (DL2 F23.4) is a vestigial decorator form where the
+ * block-wide `optional` flag applies to every entry. Accepted for
+ * backwards compat but prefer the per-entry `optional` trailer.
+ *
+ * Returns one AST_USE node whose `entries` array holds every binding
+ * declared in the block. When the block has a single entry, the
+ * top-level mirror fields (`module`/`alias`/`is_optional`) are also
+ * populated so older single-binding walkers keep working.
+ */
+static bool parse_dotted_or_relative(deck_parser_t *p, char *scratch,
+                                     size_t cap, uint32_t *out_k);
+static const char *default_alias_of(const char *module);
+
 static ast_node_t *parse_use_decl(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_USE); if (!n) return NULL;
-    /* DL2 F23.4 — @use.optional reuses this path with a flag. */
-    n->as.use.is_optional = (p->cur.text && strcmp(p->cur.text, "use.optional") == 0);
+    bool block_wide_optional =
+        (p->cur.text && strcmp(p->cur.text, "use.optional") == 0);
     advance(p); /* @use or @use.optional */
-    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected module name after @use"); return NULL; }
-    /* collect dotted module name into a scratch */
-    char scratch[128];
+
+    if (!expect(p, TOK_NEWLINE, "expected newline after @use; spec §4 "
+                                "requires a block body with one entry "
+                                "per line")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @use body")) return NULL;
+
+    ast_use_entry_t buf[32];
+    uint32_t n_entries = 0;
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n_entries < 32) {
+        char scratch[160];
+        uint32_t k = 0;
+        if (!parse_dotted_or_relative(p, scratch, sizeof(scratch), &k)) return NULL;
+        const char *module = deck_intern(scratch, k);
+
+        const char *alias = NULL;
+        bool is_optional = block_wide_optional;
+
+        /* Optional `as alias` clause. */
+        if (at(p, TOK_IDENT) && p->cur.text && strcmp(p->cur.text, "as") == 0) {
+            advance(p);
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "expected alias after `as` in @use entry");
+                return NULL;
+            }
+            alias = deck_intern(p->cur.text, (uint32_t)strlen(p->cur.text));
+            advance(p);
+        }
+
+        /* Optional trailing `optional` keyword. */
+        if (at(p, TOK_IDENT) && p->cur.text &&
+            strcmp(p->cur.text, "optional") == 0) {
+            is_optional = true;
+            advance(p);
+        }
+
+        /* `when: condition_expr` — parsed and discarded for now.
+         * `when` is TOK_KW_WHEN in the lexer, so match the keyword
+         * token rather than a bare identifier. Runtime gating by
+         * `when:` is a post-DL1 feature; the spec allows it and the
+         * loader records it as graceful-degradation optional. */
+        if (at(p, TOK_KW_WHEN)) {
+            advance(p);
+            if (!expect(p, TOK_COLON, "expected ':' after `when` in @use entry")) return NULL;
+            ast_node_t *cond = parse_expr_prec(p, 0);
+            if (!cond) return NULL;
+            (void)cond;   /* parsed for syntax; runtime gating is post-DL1. */
+            is_optional = true;
+        }
+
+        while (at(p, TOK_NEWLINE)) advance(p);
+
+        if (!alias) alias = default_alias_of(module);
+
+        buf[n_entries].module      = module;
+        buf[n_entries].alias       = alias;
+        buf[n_entries].is_optional = is_optional;
+        n_entries++;
+    }
+
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @use block")) return NULL;
+
+    if (n_entries == 0) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "@use block is empty; spec §4 requires at least one entry");
+        return NULL;
+    }
+
+    n->as.use.entries   = deck_arena_memdup(p->arena, buf,
+                                            n_entries * sizeof(ast_use_entry_t));
+    n->as.use.n_entries = n_entries;
+    n->as.use.module      = (n_entries == 1) ? buf[0].module      : NULL;
+    n->as.use.alias       = (n_entries == 1) ? buf[0].alias       : NULL;
+    n->as.use.is_optional = (n_entries == 1) ? buf[0].is_optional : false;
+    return n;
+}
+
+/* Accepts a dotted capability path (`a.b.c`) in an @use entry.
+ *
+ * Spec 02-deck-app §4.2 also allows relative local-module paths
+ * (`./relative/path`) but the current runtime does not resolve those;
+ * attempting to use one yields a clear load-time error. */
+static bool parse_dotted_or_relative(deck_parser_t *p, char *scratch,
+                                     size_t cap, uint32_t *out_k)
+{
     uint32_t k = 0;
-    k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k, "%s", p->cur.text);
+    if (at(p, TOK_DOT)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "relative module paths in @use (spec §4.2) are not yet "
+                "supported by this runtime; use dotted capability paths");
+        return false;
+    }
+    if (!at(p, TOK_IDENT)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "expected capability path in @use entry");
+        return false;
+    }
+    k += (uint32_t)snprintf(scratch + k, cap - k, "%s", p->cur.text);
     advance(p);
     while (at(p, TOK_DOT)) {
         advance(p);
-        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected ident after '.' in @use"); return NULL; }
-        if (k < sizeof(scratch) - 1) scratch[k++] = '.';
-        k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k, "%s", p->cur.text);
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "expected ident after '.' in @use path");
+            return false;
+        }
+        if (k < cap - 1) scratch[k++] = '.';
+        k += (uint32_t)snprintf(scratch + k, cap - k, "%s", p->cur.text);
         advance(p);
     }
-    n->as.use.module = deck_intern(scratch, k);
-    while (at(p, TOK_NEWLINE)) advance(p);
-    return n;
+    *out_k = k;
+    return true;
+}
+
+static const char *default_alias_of(const char *module)
+{
+    if (!module) return NULL;
+    const char *dot = strrchr(module, '.');
+    const char *slash = strrchr(module, '/');
+    const char *tail = dot > slash ? dot : slash;
+    if (!tail) return module;
+    return deck_intern(tail + 1, (uint32_t)strlen(tail + 1));
 }
 
 static ast_node_t *parse_on_decl(deck_parser_t *p)

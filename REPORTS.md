@@ -433,3 +433,34 @@ Session #3 — 2026-04-18.
 **Why this matters (A → B pattern)**: the prior arrangement is a textbook case of the user's diagnosis — tests passed because the parser accepted the non-spec form, and the spec's own worked examples taught the non-spec form. The loader's capability check was written against a list-literal `[unknown_cap]` shape that the spec never prescribed. The fact that *every* fixture had to be migrated shows the divergence was systemic, not local. Fixing the spec examples + parser shape + loader shape + fixture shape as one coherent unit kills the self-reinforcing loop.
 
 **Next natural concept**: `@use` shape has similar drift — `lang_metadata.deck` uses `@use\n  crypto.aes as aes  optional` (block form with alias + optional trailer), which the current `parse_use_decl` does not accept (it only handles single-line `@use dotted.name`). §02 §4 is the authoritative shape. Noted for a future session; not expanded here to keep this concept focused.
+
+### Concept #9 — `@use` is a block annotation with `as alias` per entry (spec §4)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery (layer 4 ↔ layer 6 ↔ layer 2)**: `parse_use_decl` accepted only the non-spec single-line form `@use dotted.name` (no alias, no block). Spec `02-deck-app §4` describes `@use` as a **block** annotation; each line is `capability.path as alias [optional | when: cond]` or `./relative/path`. Every annex (a/b/c/d/xx) uses block form with `as alias`; `lang_metadata.deck` uses block form with alias + optional. That fixture cannot parse against the current parser — it was silently broken. Two unit tests (`mod_use`, `mod_use_dot` in `deck_parser_test.c`) exercised the non-spec single-line shape and passed, reinforcing the wrong shape.
+
+**Cascade source**: the parser implemented the minimal form needed by an early demo and never grew to match spec §4. Unit tests were built against the minimal form. Annexes stayed spec-canonical but would not load on the actual runtime. `@use.optional` was split into its own decorator (`TOK_DECORATOR` text == "use.optional") to carry the optional flag — which §4 expresses per-entry inside the block.
+
+**Fix applied**:
+
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/include/deck_ast.h` — new `ast_use_entry_t` struct `{module, alias, is_optional}` declared at file scope. AST_USE union payload gained `entries: ast_use_entry_t*` + `n_entries: uint32_t`, plus mirror fields (`module`/`alias`/`is_optional`) that reflect `entries[0]` when n_entries == 1 so legacy single-entry walkers keep working.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_parser.c`:
+  * Rewrote `parse_use_decl` to require NEWLINE + INDENT after `@use`, then loop over entries. Each entry parses a dotted path, optional `as alias`, optional trailing `optional` keyword, optional `when: condition_expr`. `@use.optional` decorator (vestigial) propagates as a block-wide optional flag. Default alias = last dotted segment of the module path.
+  * Split path parsing into `parse_dotted_or_relative`. Relative `./path` parsing currently returns a clear "not yet supported by this runtime; use dotted capability paths" error — the spec allows it, no fixture uses it yet, so the deferred gap is stated honestly rather than silently accepted.
+  * `when:` uses `TOK_KW_WHEN` (lexer reserves the keyword), not the bare identifier text path — would have been a subtle bug if left unchecked.
+  * Empty `@use` blocks are rejected with a spec §4 pointer.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_loader.c` — `use_declared` walks `entries[]` checking alias first, then module, then last dotted segment. Metadata stub nodes (`parse_metadata_block`, `parse_opaque_block` set `module = "__metadata"` without entries) are handled via mirror-field fallback for backward compat.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_ast.c` — `ast_print` for AST_USE prints each entry as `(module as alias [optional])` or falls back to mirror-field print when entries is empty.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/include/deck_parser.h` — grammar comment at top-of-file updated: `use_decl` now shows the §4 block form; added `requires_decl` grammar from concept #8 that was missing.
+- 2026-04-18 · layer 5 edit · `components/deck_runtime/src/deck_parser_test.c` — `mod_use`, `mod_use_dot` rewritten to block form with explicit `as` aliases; added `mod_use_block` (two-entry block) and `mod_use_optional` (entry with `optional` trailer). Golden S-expr reflects the new `(use (module as alias [optional]))` print format.
+
+**Scope check**:
+- `grep -rnE "^@use(\.optional)?( |$)"` across `apps/`, `components/`, `main/` — only `lang_metadata.deck` (block form, already spec-canonical) uses `@use`; no fixture relies on the removed single-line shape. The bulk rewrite from concept #8 already left fixtures parsing correctly; no fixture touched here.
+- Lexer reserves `when` as TOK_KW_WHEN; `as`, `optional` are bare identifiers — the parser's text-based keyword matching for the latter two is correct.
+
+**Consequence**: apps that copy the annex pattern (`@use\n  cap.path as alias optional`) now load on the real runtime. `@use.optional crypto` legacy form still parses but maps to an equivalent `optional` per-entry. Single-line `@use name` is rejected with a spec §4 pointer; the two unit tests that exercised it have been migrated.
+
+**Deferred, stated**:
+- Relative `./path` resolution (spec §4.2) is a real feature the runtime doesn't implement yet. The parser rejects it with a specific error rather than silently producing a non-functioning AST node. Layer-4 follow-up to add local-module resolution when the local-module graph (spec §01 §748) is wired.
+- `when: cond` expression is parsed but discarded. Runtime-evaluated gating (spec §4.1 "re-evaluated continuously by the runtime") is a post-DL1 feature. Current impl treats `when:` as graceful-degradation optional — the call returns `:err :unavailable` when the capability can't be honored, consistent with `optional` semantics.
