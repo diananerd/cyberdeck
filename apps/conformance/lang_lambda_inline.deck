@@ -3,8 +3,9 @@
   id: "conf.lang.lambda.inline"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: immediately-invoked lambda expressions — (f)(args).
 -- Old version had 3 cases; deepened to cover both lambda forms,

@@ -3,8 +3,9 @@
   id: "conf.lang.lambda.anon"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: anonymous `fn (…) = body` form (§6.1 with name
 -- omitted; §6.5 lambda). Old version tested 2 cases. This covers

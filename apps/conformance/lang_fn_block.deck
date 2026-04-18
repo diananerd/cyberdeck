@@ -3,8 +3,9 @@
   id: "conf.lang.fn.block"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: fn body as indented block with multiple `let`
 -- bindings; the final expression is the return value (§5.1, §6.1).

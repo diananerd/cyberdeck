@@ -74,6 +74,11 @@ typedef enum {
 
     AST_MODULE,
     AST_TYPE_DEF,    /* DL2 F22.2 — @type X { fields } */
+    AST_ASSETS,      /* DL2 F28.5 — @assets name: "path" ... */
+    AST_MIGRATION,   /* DL2 F28.4 — @migration from N: body ... */
+    AST_REQUIRES,    /* Spec 02-deck-app §4A — top-level @requires block.
+                      * Shares ast_app_field_t layout with AST_APP; parsed
+                      * as a sibling to @app, not as a nested field. */
 } ast_kind_t;
 
 typedef enum {
@@ -172,6 +177,27 @@ struct ast_node {
             const char **fields;     /* field names (interned), arena */
             uint32_t     n_fields;
         } typedef_;
+
+        /* DL2 F28.5 — @assets name: "path" pairs. names and paths are
+         * parallel arrays of length n_entries, arena-owned. Looked up by
+         * the asset.path(name) builtin at call time. */
+        struct {
+            const char **names;
+            const char **paths;
+            uint32_t     n_entries;
+        } assets;
+
+        /* DL2 F28.4 — @migration from N: <body> entries. from_versions
+         * is an int64 array of the N keys in source order; bodies is a
+         * parallel array of AST bodies (each a AST_DO or single stmt).
+         * At app_load the runtime reads the NVS-stored version for this
+         * app and runs bodies whose key >= stored_version in ascending
+         * order, then writes back max(key)+1. */
+        struct {
+            int64_t     *from_versions;
+            ast_node_t **bodies;
+            uint32_t     n_entries;
+        } migration;
     } as;
 };
 

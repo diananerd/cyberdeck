@@ -3,9 +3,10 @@
   id: "conf.err.deck_os"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
-    deck_os: 99
+
+@requires
+  deck_level: 1
+  deck_os: 99
 
 @on launch:
   log.info("unreachable")

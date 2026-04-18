@@ -3,8 +3,9 @@
   id: "conf.edge.long_ident"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 @on launch:
   let this_is_a_deliberately_long_identifier_to_ensure_the_lexer_parser_handle_it = 42

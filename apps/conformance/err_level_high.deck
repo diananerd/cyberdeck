@@ -3,8 +3,9 @@
   id: "conf.err.level"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 3
+
+@requires
+  deck_level: 3
 
 @on launch:
   log.info("DECK_CONF_FAIL:err.level_should_have_failed_load")

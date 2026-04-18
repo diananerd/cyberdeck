@@ -3,9 +3,11 @@
   id: "conf.err.required.cap"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
-    capabilities: [unknown_cap_xxx]
+
+@requires
+  deck_level: 1
+  capabilities:
+    unknown_cap_xxx: "any"
 
 @on launch:
   log.info("never reached")

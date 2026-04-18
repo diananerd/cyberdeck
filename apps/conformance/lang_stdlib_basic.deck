@@ -3,8 +3,9 @@
   id: "conf.lang.stdlib.basic"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: `§11` Standard Vocabulary — list ops (§11.2), Result
 -- helpers (§11.5), Optional helpers (§11.6), Type inspection (§11.8).

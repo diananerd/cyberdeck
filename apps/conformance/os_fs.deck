@@ -3,8 +3,9 @@
   id: "conf.os.fs"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: every method of the `fs` capability (03-deck-os §4.2 /
 -- 05-deck-os-api §4). Old version only exercised `exists` — a one-method

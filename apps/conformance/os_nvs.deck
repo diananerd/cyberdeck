@@ -3,8 +3,9 @@
   id: "conf.os.nvs"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: every method of `nvs` (03-deck-os §4.2 / 05-deck-os-api
 -- §3). Old version exercised only set/get/delete for a single string

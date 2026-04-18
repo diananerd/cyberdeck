@@ -3,8 +3,9 @@
   id: "conf.lang.utility"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: utility builtins that span text + time. Old version
 -- relied on `time.now_us()` and `os.sleep_ms()` — neither exists in

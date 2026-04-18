@@ -46,13 +46,28 @@ static const ast_node_t *find_app(const ast_node_t *mod)
     return NULL;
 }
 
-static const ast_app_field_t *find_field(const ast_node_t *app, const char *name)
+/* Spec 02-deck-app §4A — @requires is a top-level sibling of @app.
+ * The parser yields an AST_REQUIRES node whose `as.app.fields` layout
+ * mirrors AST_APP. */
+static const ast_node_t *find_requires(const ast_node_t *mod)
 {
-    if (!app || app->kind != AST_APP) return NULL;
-    for (uint32_t i = 0; i < app->as.app.n_fields; i++) {
-        if (app->as.app.fields[i].name &&
-            strcmp(app->as.app.fields[i].name, name) == 0)
-            return &app->as.app.fields[i];
+    if (!mod || mod->kind != AST_MODULE) return NULL;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (it && it->kind == AST_REQUIRES) return it;
+    }
+    return NULL;
+}
+
+/* Accepts AST_APP or AST_REQUIRES — both share the ast_app_field_t layout. */
+static const ast_app_field_t *find_field(const ast_node_t *node, const char *name)
+{
+    if (!node) return NULL;
+    if (node->kind != AST_APP && node->kind != AST_REQUIRES) return NULL;
+    for (uint32_t i = 0; i < node->as.app.n_fields; i++) {
+        if (node->as.app.fields[i].name &&
+            strcmp(node->as.app.fields[i].name, name) == 0)
+            return &node->as.app.fields[i];
     }
     return NULL;
 }
@@ -78,10 +93,11 @@ static void extract_app_metadata(deck_loader_t *l, const ast_node_t *app)
     l->required_deck_level = 1;   /* default if not specified */
     l->required_deck_os    = 1;
 
-    const ast_app_field_t *req = find_field(app, "requires");
-    if (req && req->value && req->value->kind == AST_APP) {
-        const ast_app_field_t *dlf = find_field(req->value, "deck_level");
-        const ast_app_field_t *dof = find_field(req->value, "deck_os");
+    /* 02-deck-app §4A — @requires is a top-level sibling of @app. */
+    const ast_node_t *req = find_requires(l->module);
+    if (req) {
+        const ast_app_field_t *dlf = find_field(req, "deck_level");
+        const ast_app_field_t *dof = find_field(req, "deck_os");
         if (dlf) l->required_deck_level = as_int_or(dlf->value, 1);
         if (dof) l->required_deck_os    = as_int_or(dof->value, 1);
     }
@@ -186,6 +202,8 @@ static const cap_entry_t DL1_CAPS[] = {
     { "os",     DL1_CAP_OS     },
     { "list",   DL1_CAP_LIST   },
     { "map",    DL1_CAP_MAP    },
+    { "bridge", DL1_CAP_BRIDGE },
+    { "asset",  DL1_CAP_ASSET  },
     { NULL, 0 },
 };
 
@@ -226,7 +244,7 @@ static void check_call_cap(deck_loader_t *l, const ast_node_t *call)
     if (!root || root->kind != AST_IDENT) return;
     if (lookup_cap(root->as.s)) return;
     set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, fn->line, fn->col,
-            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map)",
+            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map, bridge, asset)",
             root->as.s ? root->as.s : "?");
 }
 
@@ -329,7 +347,7 @@ static bool use_declared(const ast_node_t *mod, const char *alias)
     }
     /* Implicit caps that don't need @use (DL1 baseline). */
     static const char *IMPLICIT[] = {
-        "math","text","bytes","log","time","system","nvs","fs","os","list","map",NULL
+        "math","text","bytes","log","time","system","nvs","fs","os","list","map","bridge","asset",NULL
     };
     for (const char **e = IMPLICIT; *e; e++) if (strcmp(*e, alias) == 0) return true;
     return false;
@@ -463,31 +481,37 @@ static bool cap_advertised(const char *name)
     return false;
 }
 
-static void check_required_capabilities(deck_loader_t *l, const ast_node_t *app)
+static void check_required_capabilities(deck_loader_t *l)
 {
-    const ast_app_field_t *req = find_field(app, "requires");
-    if (!req || !req->value || req->value->kind != AST_APP) return;
-    const ast_app_field_t *caps = find_field(req->value, "capabilities");
+    /* Spec 02-deck-app §4A — capabilities: nested block of
+     *   capability.path: "version_range"
+     * The parser yields an AST_REQUIRES child whose fields carry the
+     * dotted capability names. */
+    const ast_node_t *req = find_requires(l->module);
+    if (!req) return;
+    const ast_app_field_t *caps = find_field(req, "capabilities");
     if (!caps || !caps->value) return;
-    const ast_node_t *list = caps->value;
-    if (list->kind != AST_LIT_LIST) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 6, list->line, list->col,
-                "@app.requires.capabilities must be a list literal");
+    const ast_node_t *block = caps->value;
+    if (block->kind != AST_REQUIRES) {
+        set_err(l, DECK_LOAD_TYPE_ERROR, 6, block->line, block->col,
+                "@requires.capabilities must be an indented block of "
+                "`name: \"version_range\"` entries (see 02-deck-app §4A)");
         return;
     }
-    for (uint32_t i = 0; i < list->as.list.items.len; i++) {
-        const ast_node_t *it = list->as.list.items.items[i];
-        const char *name = NULL;
-        if      (it && it->kind == AST_LIT_ATOM) name = it->as.s;
-        else if (it && it->kind == AST_IDENT)    name = it->as.s;
+    for (uint32_t i = 0; i < block->as.app.n_fields; i++) {
+        const ast_app_field_t *f = &block->as.app.fields[i];
+        const char *name = f->name;
         if (!name) {
-            set_err(l, DECK_LOAD_TYPE_ERROR, 6, it ? it->line : 0, it ? it->col : 0,
-                    "capability list must contain atoms or idents");
+            set_err(l, DECK_LOAD_TYPE_ERROR, 6,
+                    f->value ? f->value->line : 0,
+                    f->value ? f->value->col  : 0,
+                    "@requires.capabilities entry missing name");
             return;
         }
         if (!cap_advertised(name)) {
             set_err(l, DECK_LOAD_CAPABILITY_MISSING, 6,
-                    it->line, it->col,
+                    f->value ? f->value->line : 0,
+                    f->value ? f->value->col  : 0,
                     "@requires.capabilities lists '%s' which is not advertised",
                     name);
             return;
@@ -534,8 +558,7 @@ static void stage6_compat(deck_loader_t *l)
      * Wiring left here for when DL2 caps are added (http, wifi, etc.). */
 
     /* DL2 F23.5 — verify @requires.capabilities list against runtime. */
-    const ast_node_t *app = find_app(l->module);
-    if (app) check_required_capabilities(l, app);
+    check_required_capabilities(l);
 }
 
 /* ================================================================

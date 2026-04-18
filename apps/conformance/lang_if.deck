@@ -3,8 +3,9 @@
   id: "conf.lang.if"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- NOTE: `01-deck-lang §1` states explicitly: "`match` is the only
 -- branching construct — exhaustive, multi-arm, with guards.

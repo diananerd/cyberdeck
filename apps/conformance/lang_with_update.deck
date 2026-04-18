@@ -3,8 +3,9 @@
   id: "conf.lang.with.update"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: `with` record update (§4.3). Produces a new value
 -- with specified fields changed; original is unchanged. Old version:

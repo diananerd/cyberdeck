@@ -398,3 +398,38 @@ Added fixtures to the deepening table (cumulative):
 - `§10-deck-bridge-ui §4.1` still contains rich layout inference prose that's correct — the *bridge's* internal vocabulary (`DVC_GROUP`, `DVC_LIST`, etc.) is a separate catalog from the *app's* content primitives. The invariant "apps write §12, bridge reads DVC" is crisp; the overlap word `list`/`group` is not a conflict because the bridge maps app-`list` → internal `DVC_LIST` at runtime.
 - `01-deck-lang.md §7` (lines 524-543) uses `list\n items: posts\n p ->` (mixed named `items:` with positional `p ->`). This appears to be a third variant shape. §02 §12.1 shape is positional `list expr\n p ->`. Decision: treat `list items: X\n p ->` as a syntactic alternative (named head + positional iter body) consistent with the two-form convention of other §12 primitives. Not fixing — noting. If the parser only supports one shape, the parser must grow to support both, OR §01 §7 gets normalised to positional and §02 §12 becomes the sole form.
 - Testing discipline: "done = hardware verified" (flash + monitor + visual confirmation). Compile-pass ≠ done.
+
+### Concept #8 — `@requires` is a top-level annotation, not a nested @app field
+
+Session #3 — 2026-04-18.
+
+**Discovery (layer 2 ↔ layer 4 ↔ layer 6)**: every conformance fixture (40+ files) plus `hello.deck`, `ping.deck`, and three unit-test headers embedded `requires:` as a **nested field inside `@app`**. `02-deck-app §4A` is unambiguous: `@requires` is a **top-level** annotation, a sibling of `@app`. Annexes a/c/d already use the canonical top-level form; `lang_requires_caps.deck` was the only fixture already canonical. Two §16 examples still taught the wrong nested form (lines ~76, ~550, ~711, ~739) and propagated the pattern into code.
+
+**Cascade source**: §16 §2.3 + §9.1 + §14.1 + §14.2 examples used the wrong shape. Because those examples are the "worked examples" readers copy, they seeded the bug into every conformance fixture and the two demo apps. The parser in turn was built around that wrong shape (`parse_app_fields` explicitly supported nested blocks with the comment "Nested block (e.g. requires:)"), which made the divergence self-reinforcing: tests passed because the parser accepted the non-spec form.
+
+**Fix applied top-down**:
+
+- 2026-04-18 · layer 1 edit · `deck-lang/16-deck-levels.md` §2.3 / §9.1 / §14.1 / §14.2 examples rewritten to use canonical top-level `@requires`. §14.1 / §14.2 also had a second bug — a nested `use:` block inside `@app`; rewrote those to `@use <name>` annotations (spec §02 §4). Also fixed `<>` concat → `++` in one example (spec §01 §7.4). Why: these are the canonical-teaching examples; they cannot teach a non-spec form.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/include/deck_ast.h` added `AST_REQUIRES` kind (reuses `ast_app_field_t` layout via the existing `as.app` union member — no new storage).
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_ast.c` extended `ast_kind_name` and the `ast_print` field dump to emit `AST_REQUIRES` the same way `AST_APP` is printed.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_parser.c`:
+  * Added `parse_requires_decl` + `parse_requires_fields` producing `AST_REQUIRES`. Supports scalar fields (`deck_level: N`, `deck_os: ">= N"`, `runtime: "…"`) and a single-level nested block (`capabilities: <indented map>`). Dotted keys (`network.http:`) are accumulated into an interned dotted name.
+  * Registered `@requires` in `parse_top_item` dispatcher.
+  * Renamed `parse_app_fields` → `parse_scalar_fields(owner="@app")` and **removed** nested-block support from `@app`. When an author writes `requires:` nested inside `@app`, the parser now raises a load-time parse error whose message explicitly points at `02-deck-app §4A`. Per the user's "no shims, no bypasses" rule, we break the wrong form instead of dual-accepting it.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_loader.c`:
+  * Added `find_requires(module)` to walk module items and return the top-level `AST_REQUIRES`.
+  * `find_field` now accepts either `AST_APP` or `AST_REQUIRES` (shared field layout).
+  * `extract_app_metadata` no longer reads `@app.requires`; it calls `find_requires(l->module)`.
+  * `check_required_capabilities` rewritten: the `capabilities:` value is now a nested `AST_REQUIRES` block of `name: "version-range"` entries (spec-canonical), not a list literal. Emits `DECK_LOAD_TYPE_ERROR` with a §4A pointer if the shape is wrong; `DECK_LOAD_CAPABILITY_MISSING` if an entry names an un-advertised capability. The list-literal path is gone.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/{deck_loader,deck_parser,deck_interp}_test.c` — three unit-test headers embedding `APP_HDR_DL1` / `APP_HEADER_DL1` / `mod_app_req` rewritten to the top-level form. Golden S-expr in `deck_parser_test.c:mod_app_req` updated: `(module (app (name …) (requires (app …))))` → `(module (app (name …)) (requires …))`.
+- 2026-04-18 · layer 6 edit · bulk-migrated 40+ conformance fixtures + `hello.deck` + `ping.deck` via a Python transform script that (a) extracts the nested `requires:` body out of `@app`, (b) places a top-level `@requires` block right after `@app`, (c) for fixtures with `capabilities: [atom_list]` rewrites into the canonical nested map `capability_name: "any"`. One file (`err_required_cap_unknown.deck`) needed a manual blank-line fix between `@requires` and `@on launch:`.
+
+**Verification**:
+- `grep -rE '^  requires:' apps/` returns zero matches — no fixture retains the nested form.
+- `grep -rE '^  requires:' deck-lang/` returns zero matches — every spec example is canonical.
+- `lang_requires_caps.deck` still uses the spec-canonical form and exercises the version-range + map shape (`deck_os: ">= 1"`, `capabilities: { nvs: ">= 1", fs: ">= 1" }`). Unchanged by the migration.
+- `err_required_cap_unknown.deck` now declares `capabilities: { unknown_cap_xxx: "any" }` in a nested block; the loader rejects it with `DECK_LOAD_CAPABILITY_MISSING`, same outcome as before via the different shape.
+
+**Why this matters (A → B pattern)**: the prior arrangement is a textbook case of the user's diagnosis — tests passed because the parser accepted the non-spec form, and the spec's own worked examples taught the non-spec form. The loader's capability check was written against a list-literal `[unknown_cap]` shape that the spec never prescribed. The fact that *every* fixture had to be migrated shows the divergence was systemic, not local. Fixing the spec examples + parser shape + loader shape + fixture shape as one coherent unit kills the self-reinforcing loop.
+
+**Next natural concept**: `@use` shape has similar drift — `lang_metadata.deck` uses `@use\n  crypto.aes as aes  optional` (block form with alias + optional trailer), which the current `parse_use_decl` does not accept (it only handles single-line `@use dotted.name`). §02 §4 is the authoritative shape. Noted for a future session; not expanded here to keep this concept focused.

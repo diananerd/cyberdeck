@@ -3,8 +3,9 @@
   id: "conf.os.time"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: the `time` surface (03-deck-os §3 @builtin time). Old
 -- version exercised ONLY `now()` monotonicity — 2 assertions for a

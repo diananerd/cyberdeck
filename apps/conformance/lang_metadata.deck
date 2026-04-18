@@ -3,8 +3,9 @@
   id: "conf.lang.metadata"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: spec-canonical metadata annotations —
 -- `@use`, `@permissions`, `@errors`, `@private` (§02 §4–§7, §10.2).

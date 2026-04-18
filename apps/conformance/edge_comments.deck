@@ -4,8 +4,9 @@
   id: "conf.edge.comments"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 # between app and on launch
 @on launch:

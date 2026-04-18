@@ -95,8 +95,8 @@ static bool t_time_duration(const char *name)
     "  id: \"y\"\n" \
     "  version: \"1.0.0\"\n" \
     "  edition: 2026\n" \
-    "  requires:\n" \
-    "    deck_level: 1\n"
+    "\n@requires\n" \
+    "  deck_level: 1\n"
 
 static bool t_hello(const char *name)
 {
@@ -275,6 +275,128 @@ static bool t_tco_mutual(const char *name)
     return true;
 }
 
+/* DL2 F28 — persistent app handle + @on event dispatch. Load the app,
+ * verify id/name accessors, fire @on resume (which logs), then fire an
+ * event the module doesn't handle (silent no-op), then unload. */
+static bool t_app_dispatch(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "@on launch:\n"
+        "  log.info(\"app_test:launch\")\n"
+        "@on resume:\n"
+        "  log.info(\"app_test:resume\")\n"
+        "@on terminate:\n"
+        "  log.info(\"app_test:terminate\")\n";
+    deck_runtime_app_t *app = NULL;
+    deck_err_t rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK, "load");
+    CHECK(app != NULL, "handle");
+    const char *id = deck_runtime_app_id(app);
+    CHECK(id != NULL, "id");
+
+    rc = deck_runtime_app_dispatch(app, "resume");
+    CHECK(rc == DECK_RT_OK, "dispatch resume");
+
+    /* Unknown event → no-op, no error. */
+    rc = deck_runtime_app_dispatch(app, "network_change");
+    CHECK(rc == DECK_RT_OK, "dispatch unknown");
+
+    /* launch is reserved: dispatching it is a no-op (load already ran it). */
+    rc = deck_runtime_app_dispatch(app, "launch");
+    CHECK(rc == DECK_RT_OK, "dispatch launch reserved");
+
+    deck_runtime_app_unload(app);
+    return true;
+}
+
+/* DL2 F28.4 — @migration runs at app_load, driven by NVS-stored version.
+ * Delete the migration tracking key first to get a clean run; then load
+ * an app that has `@migration from 0:` setting a sentinel NVS value, and
+ * assert the sentinel was written.
+ *
+ * The app_id hash for "mig.test" is deterministic (FNV32), so the
+ * migration tracking key is stable across runs — we just delete it to
+ * reset state. */
+#include "drivers/deck_sdi_nvs.h"
+static bool t_migration(const char *name)
+{
+    /* Reset state so the test is idempotent across boots. "mig.test" is
+     * a fixed app_id; the migration tracking key is stable as
+     * "v_" + FNV32("mig.test") = "v_a829200e" (precomputed so we don't
+     * duplicate the hash function across interp.c and this test). */
+    (void)deck_sdi_nvs_del("conf.mig", "ran");
+    (void)deck_sdi_nvs_del("deck.mig", "v_a829200e");
+
+    const char *src =
+        "@app\n"
+        "  name: \"mig\"\n"
+        "  id: \"mig.test\"\n"
+        "  version: \"1.0.0\"\n"
+        "  edition: 2026\n"
+        "\n@requires\n"
+        "  deck_level: 1\n"
+        "\n"
+        "@migration\n"
+        "  from 0:\n"
+        "    nvs.set(\"conf.mig\", \"ran\", \"v0\")\n"
+        "\n"
+        "@on launch:\n"
+        "  log.info(\"mig.test launched\")\n";
+
+    /* First load: migration `from 0` should fire. */
+    deck_runtime_app_t *app = NULL;
+    deck_err_t rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK && app != NULL, "app_load first");
+
+    char val[16] = {0};
+    deck_sdi_err_t gr = deck_sdi_nvs_get_str("conf.mig", "ran", val, sizeof(val));
+    CHECK(gr == DECK_SDI_OK, "migration effect not in nvs");
+    CHECK(strcmp(val, "v0") == 0, "migration wrote wrong value");
+
+    deck_runtime_app_unload(app);
+
+    /* Second load: stored version is now 1, from=0 should NOT re-run.
+     * We prove this by clearing the effect key and reloading; if the
+     * migration re-ran, the effect key would re-appear. */
+    (void)deck_sdi_nvs_del("conf.mig", "ran");
+    app = NULL;
+    rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK && app != NULL, "app_load second");
+
+    val[0] = 0;
+    gr = deck_sdi_nvs_get_str("conf.mig", "ran", val, sizeof(val));
+    CHECK(gr == DECK_SDI_ERR_NOT_FOUND, "migration re-ran when it shouldn't");
+
+    deck_runtime_app_unload(app);
+    return true;
+}
+
+/* DL2 F28.1 — @machine.before / .after run around each transition. The
+ * test machine does boot → ready, and @machine.after sets a log marker
+ * that we cannot verify here (no log capture in the interp test harness),
+ * so we only assert the runtime executes without error. */
+static bool t_machine_hooks(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "@machine lifecycle\n"
+        "  state boot:\n"
+        "    on enter:\n"
+        "      log.info(\"t_mh: boot\")\n"
+        "    transition :ready\n"
+        "  state ready:\n"
+        "    on enter:\n"
+        "      log.info(\"t_mh: ready\")\n"
+        "\n"
+        "@machine.before:\n"
+        "  log.info(\"t_mh: before\")\n"
+        "\n"
+        "@machine.after:\n"
+        "  log.info(\"t_mh: after\")\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "machine hooks");
+    return true;
+}
+
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
 
@@ -324,6 +446,9 @@ static const case_t CASES[] = {
     { "tco_self_deep",       t_tco_self_deep },
     { "tco_self_acc",        t_tco_self_acc },
     { "tco_mutual",          t_tco_mutual },
+    { "app_dispatch",        t_app_dispatch },
+    { "machine_hooks",       t_machine_hooks },
+    { "migration",           t_migration },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

@@ -3,8 +3,9 @@
   id: "conf.lang.tco.deep"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: `§6.4` tail-call optimization. The spec says "Tail
 -- calls are optimized via trampolining. Non-tail recursion is limited

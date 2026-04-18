@@ -3,8 +3,9 @@
   id: "conf.lang.lambda.basic"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 @on launch:
   let dbl = x -> x * 2

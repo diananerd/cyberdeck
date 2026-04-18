@@ -3,8 +3,9 @@
   id: "conf.os.conv"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: every conversion global builtin (01-deck-lang §11.1).
 -- Spec signatures:

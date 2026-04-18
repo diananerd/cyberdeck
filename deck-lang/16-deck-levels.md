@@ -73,10 +73,11 @@ An app opts in with a single line:
   id:      "local.notes"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 2         # requires a DL2 or higher runtime
-    deck_os:    ">= 1"
-    runtime:    ">= 1.0"
+
+@requires
+  deck_level: 2           # requires a DL2 or higher runtime
+  deck_os:    ">= 1"
+  runtime:    ">= 1.0"
 ```
 
 The loader refuses to run this app on a DL1 runtime and produces error `E_LEVEL_BELOW_REQUIRED` (see §10).
@@ -547,13 +548,14 @@ The rule: the app declares the minimum in `@requires.deck_level`, and platforms 
   id:      "local.notes"
   version: "1.2.0"
   edition: 2026
-  requires:
-    deck_level: 2          # requires DL2 or higher
-    deck_os:    ">= 1"     # which surface API level
-    runtime:    ">= 1.0"
-    capabilities:
-      http:      ">= 1"
-      storage.fs: ">= 1"
+
+@requires
+  deck_level: 2            # requires DL2 or higher
+  deck_os:    ">= 1"       # which surface API level
+  runtime:    ">= 1.0"
+  capabilities:
+    http:       ">= 1"
+    storage.fs: ">= 1"
 ```
 
 `deck_level` is a *separate* key from `deck_os`. `deck_os` tells you *which capabilities* are defined. `deck_level` tells you *whether the runtime is big enough to host them*.
@@ -706,12 +708,13 @@ A minimal board that reads a temperature sensor every minute and writes the read
   id:      "local.templog"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
-  use:
-    nvs
-    time
-    log
+
+@requires
+  deck_level: 1
+
+@use nvs
+@use time
+@use log
 
 @machine logger
   state running:
@@ -719,7 +722,7 @@ A minimal board that reads a temperature sensor every minute and writes the read
       do
         let t = read_temp()               # platform-provided pure function
         nvs.set("last", to_str(t))
-        log.info("Logged: " <> to_str(t))
+        log.info("Logged: " ++ to_str(t))
 ```
 
 Runs on a DL1 platform with **≤ 256 KB flash, ≤ 128 KB SRAM**.
@@ -734,13 +737,14 @@ A pocket device with a small screen, WiFi, and the Notes app.
   id:      "local.notes"
   version: "1.2.0"
   edition: 2026
-  requires:
-    deck_level: 2
-  use:
-    nvs
-    fs
-    http
-    crypto.aes
+
+@requires
+  deck_level: 2
+
+@use nvs
+@use fs
+@use http
+@use crypto.aes
 ```
 
 Runs on a DL2 platform — 4 MB flash, 512 KB SRAM, optional PSRAM.

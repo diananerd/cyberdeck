@@ -3,8 +3,9 @@
   id: "conf.edge.empty_strings"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 @on launch:
   let e        = ""

@@ -795,19 +795,33 @@ static bool dec_is(const deck_token_t *t, const char *name)
 }
 
 static ast_node_t *parse_app_block(deck_parser_t *p);
+static ast_node_t *parse_requires_decl(deck_parser_t *p);
 static ast_node_t *parse_use_decl(deck_parser_t *p);
 static ast_node_t *parse_on_decl(deck_parser_t *p);
 static ast_node_t *parse_machine_decl(deck_parser_t *p);
+static ast_node_t *parse_machine_hook_decl(deck_parser_t *p, const char *event);
+static ast_node_t *parse_assets_decl(deck_parser_t *p);
+static ast_node_t *parse_flow_decl(deck_parser_t *p);
+static ast_node_t *parse_migration_decl(deck_parser_t *p);
 
 /* @app
  *   name:    "..."
  *   id:      "..."
  *   version: "..."
  *   edition: 2026
- *   requires:
- *     deck_level: 1
+ *
+ * Spec 02-deck-app §3: @app is identity-only. Every field is a scalar
+ * expression (str/int/list literal). Version contracts live in a sibling
+ * `@requires` block (§4A), never nested inside @app. The parser rejects
+ * nested blocks inside @app with a clear spec pointer so authors migrate.
  */
-static bool parse_app_fields(deck_parser_t *p, ast_app_field_t **out, uint32_t *out_n);
+static bool parse_scalar_fields(deck_parser_t   *p,
+                                ast_app_field_t **out,
+                                uint32_t         *out_n,
+                                const char       *owner);
+static bool parse_requires_fields(deck_parser_t   *p,
+                                  ast_app_field_t **out,
+                                  uint32_t         *out_n);
 
 static ast_node_t *parse_app_block(deck_parser_t *p)
 {
@@ -816,37 +830,128 @@ static ast_node_t *parse_app_block(deck_parser_t *p)
     if (!expect(p, TOK_NEWLINE, "expected newline after @app")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented @app body")) return NULL;
-    if (!parse_app_fields(p, &n->as.app.fields, &n->as.app.n_fields)) return NULL;
+    if (!parse_scalar_fields(p, &n->as.app.fields, &n->as.app.n_fields, "@app")) return NULL;
     if (!expect(p, TOK_DEDENT, "expected dedent closing @app")) return NULL;
     return n;
 }
 
-static bool parse_app_fields(deck_parser_t *p, ast_app_field_t **out, uint32_t *out_n)
+/* @requires
+ *   deck_level: 2
+ *   deck_os:    ">= 2"
+ *   runtime:    ">= 1.0"
+ *   capabilities:
+ *     network.http: ">= 2"
+ *     storage.local: "any"
+ *
+ * Top-level per 02-deck-app §4A. Fields may be scalars or a single-level
+ * nested block (`capabilities:`). The parser produces an AST_REQUIRES
+ * node reusing AST_APP's ast_app_field_t layout; the nested block is
+ * stored as a child AST_REQUIRES value. The loader reads whichever
+ * arrangement the source uses. */
+static ast_node_t *parse_requires_decl(deck_parser_t *p)
+{
+    ast_node_t *n = mknode(p, AST_REQUIRES); if (!n) return NULL;
+    advance(p); /* @requires */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @requires")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @requires body")) return NULL;
+    if (!parse_requires_fields(p, &n->as.app.fields, &n->as.app.n_fields)) return NULL;
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @requires")) return NULL;
+    return n;
+}
+
+static bool parse_scalar_fields(deck_parser_t    *p,
+                                ast_app_field_t **out,
+                                uint32_t         *out_n,
+                                const char       *owner)
 {
     ast_app_field_t buf[32];
     uint32_t n = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
-        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected app field name"); return false; }
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name");
+            return false;
+        }
         const char *name = p->cur.text;
         advance(p);
-        if (!expect(p, TOK_COLON, "expected ':' after app field name")) return false;
+        if (!expect(p, TOK_COLON, "expected ':' after field name")) return false;
+        if (at(p, TOK_NEWLINE)) {
+            /* Reject nested blocks — spec §3 @app is identity-only.
+             * The common mistake is writing `requires:` nested inside
+             * @app; point authors at §4A's top-level @requires form. */
+            if (strcmp(owner, "@app") == 0 &&
+                strcmp(name, "requires") == 0) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "`requires:` must be a top-level `@requires` "
+                        "annotation (see 02-deck-app §4A), not a nested "
+                        "field inside @app");
+            } else {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "nested blocks are not allowed in this context");
+            }
+            return false;
+        }
+        ast_node_t *val = parse_expr_prec(p, 0);
+        if (!val) return false;
+        while (at(p, TOK_NEWLINE)) advance(p);
+        buf[n].name  = name;
+        buf[n].value = val;
+        n++;
+    }
+    *out   = deck_arena_memdup(p->arena, buf, n * sizeof(ast_app_field_t));
+    *out_n = n;
+    return true;
+}
+
+static bool parse_requires_fields(deck_parser_t   *p,
+                                  ast_app_field_t **out,
+                                  uint32_t         *out_n)
+{
+    ast_app_field_t buf[32];
+    uint32_t n = 0;
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name in @requires");
+            return false;
+        }
+        const char *name = p->cur.text;
+        advance(p);
+        /* Support dotted keys for capability paths like `network.http:`. */
+        char scratch[128];
+        uint32_t k = (uint32_t)snprintf(scratch, sizeof(scratch), "%s", name);
+        while (at(p, TOK_DOT)) {
+            advance(p);
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "expected ident after '.' in @requires key");
+                return false;
+            }
+            if (k < sizeof(scratch) - 1) scratch[k++] = '.';
+            k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k,
+                                    "%s", p->cur.text);
+            advance(p);
+        }
+        const char *full_name = deck_intern(scratch, k);
+        if (!expect(p, TOK_COLON, "expected ':' after @requires field name")) return false;
         ast_node_t *val = NULL;
         if (at(p, TOK_NEWLINE)) {
-            /* Nested block (e.g. requires:). */
+            /* Nested block (capabilities:). One level of nesting only. */
             advance(p);
             while (at(p, TOK_NEWLINE)) advance(p);
-            if (!expect(p, TOK_INDENT, "expected indented nested block")) return false;
-            ast_node_t *nested = ast_new(p->arena, AST_APP, p->cur.line, p->cur.col);
+            if (!expect(p, TOK_INDENT, "expected indented nested block in @requires")) return false;
+            ast_node_t *nested = ast_new(p->arena, AST_REQUIRES,
+                                         p->cur.line, p->cur.col);
             if (!nested) return false;
-            if (!parse_app_fields(p, &nested->as.app.fields, &nested->as.app.n_fields)) return false;
-            if (!expect(p, TOK_DEDENT, "expected dedent in nested app block")) return false;
+            if (!parse_requires_fields(p, &nested->as.app.fields,
+                                       &nested->as.app.n_fields)) return false;
+            if (!expect(p, TOK_DEDENT, "expected dedent in @requires nested block")) return false;
             val = nested;
         } else {
             val = parse_expr_prec(p, 0);
             if (!val) return false;
             while (at(p, TOK_NEWLINE)) advance(p);
         }
-        buf[n].name  = name;
+        buf[n].name  = full_name;
         buf[n].value = val;
         n++;
     }
@@ -893,6 +998,241 @@ static ast_node_t *parse_on_decl(deck_parser_t *p)
     if (!expect(p, TOK_COLON, "expected ':' after @on event")) return NULL;
     n->as.on.body = parse_suite(p);
     if (!n->as.on.body) return NULL;
+    return n;
+}
+
+/* DL2 F28.1 — `@machine.before` / `@machine.after` parse as AST_ON with a
+ * reserved event name ("__machine_before" / "__machine_after"). The runtime
+ * machine loop (run_machine) looks these up and runs the body around each
+ * transition. The leading "__" prefix prevents collision with user-defined
+ * @on events, which are all bare identifiers. */
+static ast_node_t *parse_machine_hook_decl(deck_parser_t *p, const char *event)
+{
+    ast_node_t *n = mknode(p, AST_ON); if (!n) return NULL;
+    advance(p); /* @machine.before or @machine.after */
+    /* Optional newline(s) then the body. Some sources use ':' directly, some
+     * skip it — accept both to be permissive with hand-written code. */
+    if (at(p, TOK_COLON)) advance(p);
+    n->as.on.event = deck_intern_cstr(event);
+    n->as.on.body  = parse_suite(p);
+    if (!n->as.on.body) return NULL;
+    return n;
+}
+
+/* DL2 F28.5 — `@assets` block.
+ *
+ *   @assets
+ *     icon: "icon.png"
+ *     font: "mono.ttf"
+ *
+ * Each line binds a name (ident) to a path (string literal). The parser
+ * collects the pairs into an AST_ASSETS node; `asset.path(name)` walks
+ * these at call time. Max 32 entries per block (sufficient for a typical
+ * DL2 app; DL3 may raise this if needed). */
+#define DECK_ASSETS_MAX   32
+static ast_node_t *parse_assets_decl(deck_parser_t *p)
+{
+    ast_node_t *n = mknode(p, AST_ASSETS); if (!n) return NULL;
+    advance(p); /* @assets */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @assets")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @assets body")) return NULL;
+
+    const char *names[DECK_ASSETS_MAX];
+    const char *paths[DECK_ASSETS_MAX];
+    uint32_t    k = 0;
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (k >= DECK_ASSETS_MAX) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @assets entries (max 32)");
+            return NULL;
+        }
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected asset name");
+            return NULL;
+        }
+        names[k] = p->cur.text;
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after asset name")) return NULL;
+        if (!at(p, TOK_STRING)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected string literal path for asset");
+            return NULL;
+        }
+        paths[k] = p->cur.text;
+        advance(p);
+        k++;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @assets body")) return NULL;
+
+    if (k > 0) {
+        n->as.assets.names = deck_arena_memdup(p->arena, names, k * sizeof(char *));
+        n->as.assets.paths = deck_arena_memdup(p->arena, paths, k * sizeof(char *));
+        if (!n->as.assets.names || !n->as.assets.paths) return NULL;
+    }
+    n->as.assets.n_entries = k;
+    return n;
+}
+
+/* DL2 F28.2 — `@flow name` desugars at parse time into an AST_MACHINE.
+ *
+ *   @flow signup
+ *     step welcome:
+ *       log.info("hi")
+ *     step collect:
+ *       log.info("email")
+ *     step done:
+ *       log.info("ok")
+ *
+ * produces the equivalent of:
+ *
+ *   @machine signup
+ *     state welcome:
+ *       on enter:
+ *         log.info("hi")
+ *       transition :collect
+ *     state collect:
+ *       on enter:
+ *         log.info("email")
+ *       transition :done
+ *     state done:
+ *       on enter:
+ *         log.info("ok")
+ *
+ * The last step carries no transition and the machine terminates in it.
+ * Steps see the machine name + each other via the normal @machine runtime
+ * (enter hooks, before/after machine hooks also apply). */
+#define DECK_FLOW_MAX_STEPS  32
+static ast_node_t *parse_flow_decl(deck_parser_t *p)
+{
+    ast_node_t *m = mknode(p, AST_MACHINE); if (!m) return NULL;
+    advance(p); /* @flow */
+    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected flow name"); return NULL; }
+    m->as.machine.name = p->cur.text;
+    advance(p);
+    /* Allow optional colon for symmetry with @machine syntax. */
+    if (at(p, TOK_COLON)) advance(p);
+    if (!expect(p, TOK_NEWLINE, "expected newline after @flow name")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @flow body")) return NULL;
+    ast_list_init(&m->as.machine.states);
+
+    /* Remember each step's body so we can attach the transition to the
+     * next step only after we know its name. */
+    typedef struct { ast_node_t *state; } step_ref_t;
+    step_ref_t refs[DECK_FLOW_MAX_STEPS];
+    uint32_t   n_steps = 0;
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (n_steps >= DECK_FLOW_MAX_STEPS) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @flow steps (max 32)");
+            return NULL;
+        }
+        /* `step <name>:` */
+        if (!at(p, TOK_IDENT) || strcmp(p->cur.text, "step") != 0) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "expected 'step' in @flow body");
+            return NULL;
+        }
+        advance(p); /* step */
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected step name"); return NULL;
+        }
+        ast_node_t *state = ast_new(p->arena, AST_STATE, p->cur.line, p->cur.col);
+        if (!state) return NULL;
+        state->as.state.name = p->cur.text;
+        ast_list_init(&state->as.state.hooks);
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after step name")) return NULL;
+
+        /* Body becomes the `on enter` hook. */
+        ast_node_t *hook = ast_new(p->arena, AST_STATE_HOOK, p->cur.line, p->cur.col);
+        if (!hook) return NULL;
+        hook->as.state_hook.kind = deck_intern_cstr("enter");
+        hook->as.state_hook.body = parse_suite(p);
+        if (!hook->as.state_hook.body) return NULL;
+        ast_list_push(p->arena, &state->as.state.hooks, hook);
+
+        ast_list_push(p->arena, &m->as.machine.states, state);
+        refs[n_steps++].state = state;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @flow body")) return NULL;
+    if (n_steps == 0) {
+        set_err(p, DECK_LOAD_PARSE_ERROR, "@flow must have at least one step");
+        return NULL;
+    }
+
+    /* Wire auto-transitions: step[i] → step[i+1]. Last step terminates. */
+    for (uint32_t i = 0; i + 1 < n_steps; i++) {
+        ast_node_t *tr = ast_new(p->arena, AST_TRANSITION,
+                                  refs[i].state->line, refs[i].state->col);
+        if (!tr) return NULL;
+        tr->as.transition.target = refs[i + 1].state->as.state.name;
+        ast_list_push(p->arena, &refs[i].state->as.state.hooks, tr);
+    }
+    return m;
+}
+
+/* DL2 F28.4 — `@migration from N: <body>` blocks.
+ *
+ *   @migration
+ *     from 0:
+ *       log.info("0 → 1")
+ *     from 1:
+ *       nvs.set("app", "schema", "v2")
+ *
+ * Each `from N:` entry attaches a body that runs when the app was last
+ * observed at version N. The runtime reads the stored version from NVS
+ * at load time (see deck_runtime_app_load), runs every `from K >= stored`
+ * body in ascending order of K, then stores `max(K) + 1`. App version
+ * is tracked as a simple int (not the semver string in @app.version).
+ *
+ * Max 16 entries per block — 16 migration steps is plenty for any app
+ * that ships over a reasonable lifetime. */
+#define DECK_MIGRATION_MAX   16
+static ast_node_t *parse_migration_decl(deck_parser_t *p)
+{
+    ast_node_t *n = mknode(p, AST_MIGRATION); if (!n) return NULL;
+    advance(p); /* @migration */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @migration")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!expect(p, TOK_INDENT, "expected indented @migration body")) return NULL;
+
+    int64_t      versions[DECK_MIGRATION_MAX];
+    ast_node_t  *bodies[DECK_MIGRATION_MAX];
+    uint32_t     k = 0;
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (k >= DECK_MIGRATION_MAX) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @migration entries (max 16)");
+            return NULL;
+        }
+        if (!at(p, TOK_IDENT) || strcmp(p->cur.text, "from") != 0) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'from' in @migration body");
+            return NULL;
+        }
+        advance(p); /* from */
+        if (!at(p, TOK_INT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected integer version after 'from'");
+            return NULL;
+        }
+        versions[k] = p->cur.as.i;
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after 'from N'")) return NULL;
+        bodies[k] = parse_suite(p);
+        if (!bodies[k]) return NULL;
+        k++;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @migration body")) return NULL;
+
+    if (k > 0) {
+        n->as.migration.from_versions = deck_arena_memdup(p->arena, versions, k * sizeof(int64_t));
+        n->as.migration.bodies        = deck_arena_memdup(p->arena, bodies,   k * sizeof(ast_node_t *));
+        if (!n->as.migration.from_versions || !n->as.migration.bodies) return NULL;
+    }
+    n->as.migration.n_entries = k;
     return n;
 }
 
@@ -1202,16 +1542,17 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
     }
     if (at(p, TOK_DECORATOR)) {
         if      (dec_is(&p->cur, "app"))            return parse_app_block(p);
+        else if (dec_is(&p->cur, "requires"))       return parse_requires_decl(p); /* 02-deck-app §4A */
         else if (dec_is(&p->cur, "use"))            return parse_use_decl(p);
         else if (dec_is(&p->cur, "use.optional"))   return parse_use_decl(p);   /* DL2 F23.4 */
         else if (dec_is(&p->cur, "on"))             return parse_on_decl(p);
         else if (dec_is(&p->cur, "machine"))        return parse_machine_decl(p);
-        else if (dec_is(&p->cur, "machine.before")) return parse_opaque_block(p);  /* F28.1 */
-        else if (dec_is(&p->cur, "machine.after"))  return parse_opaque_block(p);  /* F28.1 */
-        else if (dec_is(&p->cur, "flow"))           return parse_opaque_block(p);  /* F28.2 */
-        else if (dec_is(&p->cur, "flow.step"))      return parse_opaque_block(p);  /* F28.2 */
-        else if (dec_is(&p->cur, "migration"))      return parse_opaque_block(p);  /* F28.4 */
-        else if (dec_is(&p->cur, "assets"))         return parse_opaque_block(p);  /* F28.5 */
+        else if (dec_is(&p->cur, "machine.before")) return parse_machine_hook_decl(p, "__machine_before");  /* F28.1 */
+        else if (dec_is(&p->cur, "machine.after"))  return parse_machine_hook_decl(p, "__machine_after");   /* F28.1 */
+        else if (dec_is(&p->cur, "flow"))           return parse_flow_decl(p);     /* F28.2 */
+        else if (dec_is(&p->cur, "flow.step"))      return parse_opaque_block(p);  /* F28.2 — unused outside @flow */
+        else if (dec_is(&p->cur, "migration"))      return parse_migration_decl(p); /* F28.4 */
+        else if (dec_is(&p->cur, "assets"))         return parse_assets_decl(p);   /* F28.5 */
         else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
         else if (dec_is(&p->cur, "permissions"))    return parse_metadata_block(p);  /* F23.6 */
         else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */

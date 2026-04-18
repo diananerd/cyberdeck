@@ -3,8 +3,9 @@
   id: "conf.lang.fn.typed"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: fn with full type annotations on parameters and
 -- return (§6.1). At DL2 type annotations are spec'd as documentation

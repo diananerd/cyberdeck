@@ -3,8 +3,9 @@
   id: "conf.os.lifecycle"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: @on lifecycle hooks (02-deck-app §11: launch, resume,
 -- suspend, terminate, back, open_url). Old version called `os.resume()`,

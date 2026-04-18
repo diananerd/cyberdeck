@@ -82,9 +82,9 @@ static const parser_case_t CASES[] = {
     { "mod_app_req",  TEST_MODULE,
       "@app\n"
       "  name: \"X\"\n"
-      "  requires:\n"
-      "    deck_level: 1\n",
-      "(module (app (name (str \"X\")) (requires (app (deck_level (int 1))))))" },
+      "\n@requires\n"
+      "  deck_level: 1\n",
+      "(module (app (name (str \"X\"))) (requires (deck_level (int 1))))" },
     { "mod_on",       TEST_MODULE,
       "@on launch:\n"
       "  log.info(\"hi\")\n",
@@ -120,34 +120,38 @@ static const parser_case_t CASES[] = {
       "  if n <= 1 then 1 else n * fact(n - 1)\n",
       "(module (fn fact (params n) (do (if (binop <= (ident n) (int 1)) (int 1) (binop * (ident n) (call (ident fact) (binop - (ident n) (int 1))))))))" },
 
-    /* --- DL2 F28: opaque blocks (parsed, not yet executed) --- */
-    /* @machine.before / @machine.after — body is Deck statements */
+    /* --- DL2 F28: opaque blocks (@flow/@migration/@assets still parse-only,
+     * @machine.before / @machine.after now produce AST_ON with reserved
+     * event names and are executed around each machine transition) --- */
     { "mod_machine_before", TEST_MODULE,
       "@machine.before\n"
       "  log.info(\"about to transition\")\n",
-      "(module (use __metadata))" },
+      "(module (on :__machine_before (do (call (dot (ident log) info) (str \"about to transition\")))))" },
     { "mod_machine_after", TEST_MODULE,
       "@machine.after\n"
       "  log.info(\"transition complete\")\n",
-      "(module (use __metadata))" },
-    /* @flow / @flow.step — sugar that desugars to @machine post-DL2 */
+      "(module (on :__machine_after (do (call (dot (ident log) info) (str \"transition complete\")))))" },
+    /* @flow / @flow.step — sugar that desugars to @machine at parse time
+     * (F28.2). Each step becomes a state; transitions chain in order. */
     { "mod_flow", TEST_MODULE,
       "@flow signup\n"
       "  step welcome:\n"
       "    log.info(\"hi\")\n",
-      "(module (use __metadata))" },
-    /* @migration — version migration block */
+      "(module (machine signup (state welcome (state_hook enter (do (call (dot (ident log) info) (str \"hi\")))))))" },
+    /* @migration — version migration block (F28.4: fully parsed; runtime
+     * runs bodies whose N >= stored NVS version at app_load). */
     { "mod_migration", TEST_MODULE,
       "@migration\n"
       "  from 1:\n"
       "    log.info(\"migrating\")\n",
-      "(module (use __metadata))" },
-    /* @assets — asset bundle declarations */
+      "(module (migration (from 1 (do (call (dot (ident log) info) (str \"migrating\"))))))" },
+    /* @assets — asset bundle declarations (F28.5: now fully parsed and
+     * exposed at runtime via asset.path(name)). */
     { "mod_assets", TEST_MODULE,
       "@assets\n"
       "  icon: \"icon.png\"\n"
       "  font: \"mono.ttf\"\n",
-      "(module (use __metadata))" },
+      "(module (assets (icon \"icon.png\") (font \"mono.ttf\")))" },
 
     /* --- errors --- */
     { "err_no_decorator", TEST_ERROR, "foo",        "expected @app" },

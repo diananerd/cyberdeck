@@ -3,8 +3,9 @@
   id: "conf.lang.variant.pat"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: atom variant patterns (§3.7: `:some x`, `:none`,
 -- `:ok v`, `:err e`, custom named-field variants). Old version used

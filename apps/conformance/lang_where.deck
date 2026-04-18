@@ -3,8 +3,9 @@
   id: "conf.lang.where"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: `where` bindings (§5.2) — attach named sub-
 -- expressions to the tail of a larger expression. Old version had 3

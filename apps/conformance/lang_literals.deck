@@ -3,8 +3,9 @@
   id: "conf.lang.literals"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: every literal form in `01-deck-lang §2.5-2.9`.
 -- Old version tested 4 scalar types (int/float/bool/str). Missing:

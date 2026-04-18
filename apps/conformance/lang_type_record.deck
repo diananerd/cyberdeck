@@ -3,8 +3,9 @@
   id: "conf.lang.type.record"
   version: "1.0.0"
   edition: 2026
-  requires:
-    deck_level: 1
+
+@requires
+  deck_level: 1
 
 -- Coverage goal: `@type` record declarations + construction + field
 -- access + pattern matching (§4.1–§4.4). Old version used an ad-hoc
