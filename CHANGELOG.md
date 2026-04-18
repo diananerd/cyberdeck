@@ -2,6 +2,45 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.6.0] — 2026-04-17 — DL1 rock solid
+
+Profundiza aún más DL1: latency percentiles, fuzz testing, edge cases avanzados, SDI drivers bajo stress. **66 named checks** en hardware.
+
+### Added
+
+**Latency percentiles (F16):**
+- `deck_test_t.samples[5]` + `n_samples` — cada positive test corre 5 veces, sort + compute min/p50/p99/max.
+- Log per-test muestra distribución + OUTLIER flag si max > 2*p50.
+- JSON gana `deck_outliers`.
+
+**Fuzz testing (F17):**
+- `stress.fuzz_random_inputs` — 200 iter con xorshift32 seed 0xDECAFBAD. 100 iter bytes aleatorios puros + 100 iter bit-flips de sanity.deck.
+- Silencia runtime logs durante el loop (restore al final).
+- Asserta 0 crashes, 0 "other" return codes, heap drift bounded.
+
+**Edge cases lang adicionales (F18):**
+- `edge.match_when` — match guards `when n < x`
+- `edge.match_deep` — match con 20 arms
+- `edge.int_limits` — int64 max/min
+- `edge.float_special` — floats negativos/pequeños, suma imprecisa
+- `edge.unicode` — UTF-8 bytes en string literal (día/ñ/á)
+- `edge.long_ident` — identifier de 70+ chars
+- `edge.deep_let` — 51 let encadenados
+
+**SDI drivers stress (F19):**
+- `stress.sdi_nvs_churn` — 20 × set/get/del, avg 1.5ms/iter, 0 leak
+- `stress.sdi_fs_read_hammer` — 100 reads, avg 196us, 0 leak
+- `stress.sdi_time_monotonic` — 1000 reads, 0 regressions, avg 1.1us/call
+
+### Stats en hardware (v0.6.0)
+
+- **66 named checks verdes**: 5 C-side suites + 49 .deck tests (35 positivos + 14 negativos) + 12 stress/memory/perf/fuzz/SDI.
+- Suite runtime: ~230 ms (5 samples por positive test).
+- Fuzz: 200 iter, 0 crashes, 0 unexpected return codes.
+- rerun_sanity_x100: live delta 0 bytes (allocator rock solid).
+- NVS churn: 20 iter clean, FS hammer: 100 iter clean, Time monotonic: 1000 iter 0 regressions.
+- `deck_alloc_peak`: 15.8 KB (vs budget 64 KB).
+
 ## [0.5.0] — 2026-04-17 — DL1 hardened
 
 Endurece DL1 más allá del happy path: cobertura exhaustiva de errores, edge cases, concurrencia, corrupt-input rejection, heap pressure, y regression guards build+runtime.
