@@ -6,10 +6,71 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every conversion global builtin (01-deck-lang §11.1).
+-- Spec signatures:
+--   str   (v: any) -> str
+--   int   (s: str) -> int?
+--   float (s: str) -> float?
+--   bool  (s: str) -> bool?
+--
+-- Old version did one simple input per converter and no invalid-input
+-- case. This version hits happy-path for each target type, edge cases,
+-- and the :none branch that `int?`/`float?`/`bool?` MUST produce on
+-- garbage input.
 @on launch:
-  let ok_i = int("42") == 42
-  let ok_f = float("3.5") > 3.49 && float("3.5") < 3.51
-  let ok_s = str(123) == "123"
-  let ok_b = bool(1) == true && bool(0) == false
-  let ok = ok_i && ok_f && ok_s && ok_b
+  -- str() — converts any value to its canonical printable form.
+  let ok_str = str(42)     == "42"
+            && str(-7)     == "-7"
+            && str(0)      == "0"
+            && str(3.14)   == "3.14"
+            && str(true)   == "true"
+            && str(false)  == "false"
+            && str(:ok)    == ":ok"
+            && str(:some 5) == ":some 5"
+            && str(unit)   == "unit"
+
+  -- int() — parse decimal integer from string.
+  let ok_int_pos  = int("42")   == :some 42
+  let ok_int_neg  = int("-7")   == :some -7
+  let ok_int_zero = int("0")    == :some 0
+  let ok_int_big  = int("1000000") == :some 1000000
+  -- Invalid input → :none.
+  let ok_int_bad  = int("abc")   == :none
+                 && int("")       == :none
+                 && int("3.5")    == :none   -- non-integer
+                 && int("  ")     == :none
+                 && int("1e5")    == :none
+
+  -- float() — parse decimal float from string.
+  let ok_f_pos   = match float("3.5")
+                     | :some f -> f > 3.49 && f < 3.51
+                     | :none    -> false
+  let ok_f_neg   = match float("-0.25")
+                     | :some f -> f > -0.251 && f < -0.249
+                     | :none    -> false
+  let ok_f_int   = match float("0")
+                     | :some f -> f == 0.0
+                     | :none    -> false
+  let ok_f_bad   = float("not-a-number") == :none
+                && float("")              == :none
+
+  -- bool() — parse "true"/"false" literals.
+  let ok_bool_s  = bool("true")  == :some true
+                && bool("false") == :some false
+  let ok_bool_bad= bool("nope")  == :none
+                && bool("")      == :none
+                && bool("TRUE")  == :none    -- case-sensitive per spec
+
+  -- Round-trip via str + parse.
+  let ok_rt_int  = int(str(1337))   == :some 1337
+  let ok_rt_neg  = int(str(-42))    == :some -42
+  let ok_rt_bool = bool(str(true))  == :some true
+                && bool(str(false)) == :some false
+
+  let ok = ok_str
+        && ok_int_pos && ok_int_neg && ok_int_zero && ok_int_big && ok_int_bad
+        && ok_f_pos && ok_f_neg && ok_f_int && ok_f_bad
+        && ok_bool_s && ok_bool_bad
+        && ok_rt_int && ok_rt_neg && ok_rt_bool
+
   log.info(if ok then "DECK_CONF_OK:os.conv" else "DECK_CONF_FAIL:os.conv")
