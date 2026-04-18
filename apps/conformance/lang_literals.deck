@@ -6,14 +6,85 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every literal form in `01-deck-lang §2.5-2.9`.
+-- Old version tested 4 scalar types (int/float/bool/str). Missing:
+-- atom, unit, string interpolation, multi-line strings, duration,
+-- range. A→B: "scalars parse → all literals work" (false).
 @on launch:
-  let i    = 42
-  let f    = 3.14
-  let b    = true
-  let s    = "hello"
-  let ok_i = i == 42
-  let ok_f = f > 3.13 && f < 3.15
-  let ok_b = b
-  let ok_s = text.len(s) == 5
-  let ok   = ok_i && ok_f && ok_b && ok_s
+  -- Integer.
+  let ok_int  = 42 == 42 && -7 == -7 && 0 == 0
+             && 1_000_000 == 1000000
+             && 0x7F == 127 && 0b1010 == 10
+
+  -- Float.
+  let ok_flt  = 3.14 > 3.13 && 3.14 < 3.15
+             && 0.0 == 0.0
+             && -0.5 == -0.5
+             && 1e3 == 1000.0 && 2.5e-1 == 0.25
+
+  -- Bool.
+  let ok_bool = true && not false
+
+  -- Unit.
+  let ok_unit = unit == unit
+
+  -- String.
+  let s       = "hello"
+  let ok_str  = text.length(s) == 5
+             && "" == ""
+             && text.length("") == 0
+
+  -- Atom (plain).
+  let ok_atom = :ok == :ok
+             && :ok != :err
+             && :some != :none
+
+  -- Atom variant (with payload).
+  let v1      = :some 42
+  let v2      = :err :timeout
+  let v3      = :active (temp: 25.0, max: 30.0)
+  let ok_atv  = match v1 | :some n -> n == 42         | _ -> false
+  let ok_atv2 = match v2 | :err :timeout -> true       | _ -> false
+  let ok_atv3 = match v3
+                  | :active s -> s.temp == 25.0 && s.max == 30.0
+                  | _         -> false
+
+  -- List.
+  let ok_list = [1, 2, 3] == [1, 2, 3]
+             && [] == []
+             && ["a", "b"] != ["a"]
+
+  -- Tuple.
+  let ok_tup  = (1, "two", 3.0) == (1, "two", 3.0)
+
+  -- Map.
+  let m       = {"a": 1, "b": 2}
+  let ok_map  = m.a == 1 && m.b == 2
+
+  -- String interpolation.
+  let name    = "Deck"
+  let ok_interp = "Hello, {name}!" == "Hello, Deck!"
+               && "Value: {1 + 2}" == "Value: 3"
+
+  -- Multi-line string.
+  let multi   = """
+line one
+line two
+"""
+  let ok_multi = text.contains(multi, "line one")
+              && text.contains(multi, "line two")
+
+  -- Duration literals.
+  let ok_dur  = 1s > 0 && 1m > 1s && 1h > 1m && 500ms > 0ms
+
+  -- Range literals.
+  let r       = 0..5
+  let ok_range = list.len(list.of(r)) == 5   -- [0, 1, 2, 3, 4]
+
+  let ok = ok_int && ok_flt && ok_bool && ok_unit && ok_str
+        && ok_atom && ok_atv && ok_atv2 && ok_atv3
+        && ok_list && ok_tup && ok_map
+        && ok_interp && ok_multi
+        && ok_dur && ok_range
+
   log.info(if ok then "DECK_CONF_OK:lang.literals" else "DECK_CONF_FAIL:lang.literals")

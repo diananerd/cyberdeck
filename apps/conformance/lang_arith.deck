@@ -6,11 +6,51 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §7.1` full arithmetic surface, including
+-- edge cases. Old version tested each of +/-/*/%/ with one simple pair
+-- of small positive ints — classic A→B: "1+2==3 → arithmetic works".
 @on launch:
-  let a = 1 + 2 == 3
-  let b = 10 - 4 == 6
-  let c = 5 * 6 == 30
-  let d = 20 / 5 == 4
-  let e = 17 % 5 == 2
-  let ok = a && b && c && d && e
+  -- Integer add/sub/mul (positives, negatives, zero, identity).
+  let ok_add  = 1 + 2 == 3 && -1 + 1 == 0 && 0 + 0 == 0 && 100 + 0 == 100
+  let ok_sub  = 10 - 4 == 6 && 0 - 5 == -5 && 5 - 5 == 0
+  let ok_mul  = 5 * 6 == 30 && -3 * 4 == -12 && 0 * 100 == 0 && 1 * 1 == 1
+
+  -- Integer division — §7.1: truncated toward zero.
+  let ok_div_pos = 20 / 5 == 4
+  let ok_div_tr  = 7 / 2 == 3           -- truncate (not round)
+  let ok_div_neg = -7 / 2 == -3         -- truncation toward zero, not -4
+
+  -- Integer modulo — §7.1: sign follows dividend.
+  let ok_mod_pos = 17 % 5 == 2
+  let ok_mod_neg = -17 % 5 == -2        -- sign follows dividend
+  let ok_mod_zer = 10 % 5 == 0
+
+  -- Float arithmetic.
+  let ok_fadd = 1.5 + 2.5 == 4.0
+  let ok_fsub = 5.0 - 2.5 == 2.5
+  let ok_fmul = 1.5 * 2.0 == 3.0
+  let ok_fdiv = 10.0 / 4.0 == 2.5
+
+  -- Operator precedence (expect standard BODMAS).
+  let ok_prec1 = 2 + 3 * 4 == 14         -- * before +
+  let ok_prec2 = (2 + 3) * 4 == 20       -- parens override
+  let ok_prec3 = 10 - 2 - 3 == 5         -- left-associative
+  let ok_prec4 = 16 / 4 / 2 == 2         -- left-associative
+  let ok_prec5 = 2 * 3 + 4 * 5 == 26     -- two mults, one add
+
+  -- Unary negation.
+  let ok_neg  = -(3) == -3 && -(-5) == 5 && -0 == 0
+
+  -- Float + int mixing (spec-implicit promotion to float).
+  let ok_mix  = match (3 + 1.0)         -- if runtime auto-promotes
+                  | v when v == 4.0 -> true
+                  | _                -> false
+
+  let ok = ok_add && ok_sub && ok_mul
+        && ok_div_pos && ok_div_tr && ok_div_neg
+        && ok_mod_pos && ok_mod_neg && ok_mod_zer
+        && ok_fadd && ok_fsub && ok_fmul && ok_fdiv
+        && ok_prec1 && ok_prec2 && ok_prec3 && ok_prec4 && ok_prec5
+        && ok_neg && ok_mix
+
   log.info(if ok then "DECK_CONF_OK:lang.arith" else "DECK_CONF_FAIL:lang.arith")
