@@ -6,12 +6,72 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §7.2` comparison operators across every
+-- type where they are defined:
+--   `==` / `!=` work on ALL types
+--   `<` / `>` / `<=` / `>=` work on int, float, str
+--   Comparing incompatible types is a runtime error (we don't trigger
+--   one here — that's the err_type_mismatch fixture's job).
+--
+-- Old version tested one int pair for each operator. A→B on steroids.
 @on launch:
-  let eq = 3 == 3
-  let ne = 3 != 4
-  let lt = 2 < 3
-  let le = 3 <= 3
-  let gt = 4 > 3
-  let ge = 3 >= 3
-  let ok = eq && ne && lt && le && gt && ge
+  -- Integers.
+  let ok_int_eq = 3 == 3 && -1 == -1 && 0 == 0
+  let ok_int_ne = 3 != 4 && 0 != -1
+  let ok_int_lt = 2 < 3 && -5 < 0 && -10 < -1
+  let ok_int_gt = 4 > 3 && 0 > -5
+  let ok_int_le = 3 <= 3 && 2 <= 3 && -1 <= 0
+  let ok_int_ge = 3 >= 3 && 4 >= 3 && 0 >= -1
+
+  -- Floats.
+  let ok_flt_eq = 3.0 == 3.0 && 0.0 == 0.0
+  let ok_flt_lt = 1.5 < 1.6 && -0.5 < 0.0
+  let ok_flt_gt = 2.0 > 1.99 && 0.0 > -0.1
+
+  -- Strings: equality for all; ordering is lexicographic.
+  let ok_str_eq = "foo" == "foo" && "" == ""
+  let ok_str_ne = "foo" != "bar"
+  let ok_str_lt = "apple" < "banana" && "A" < "B"
+  let ok_str_gt = "banana" > "apple"
+  let ok_str_le = "apple" <= "apple" && "apple" <= "banana"
+
+  -- Bool equality (ordering undefined).
+  let ok_bool_eq = true == true && false == false
+  let ok_bool_ne = true != false
+
+  -- Atom equality.
+  let ok_atom_eq = :ok == :ok && :none == :none
+  let ok_atom_ne = :ok != :err && :some != :none
+
+  -- Atom variant equality (deep structural).
+  let ok_av_eq  = :some 5 == :some 5
+  let ok_av_ne  = :some 5 != :some 6
+  let ok_av_t   = :ok != :err :x
+
+  -- unit equality.
+  let ok_unit = unit == unit
+
+  -- List equality (structural).
+  let ok_list_eq = [1, 2, 3] == [1, 2, 3] && [] == []
+  let ok_list_ne = [1, 2, 3] != [1, 2] && [1] != [2]
+
+  -- Map equality (structural; key order irrelevant).
+  let ok_map_eq = {"a": 1, "b": 2} == {"b": 2, "a": 1}
+  let ok_map_ne = {"a": 1} != {"a": 2}
+
+  -- Tuple equality.
+  let ok_tup_eq = (1, "x") == (1, "x")
+  let ok_tup_ne = (1, "x") != (1, "y")
+
+  let ok = ok_int_eq && ok_int_ne && ok_int_lt && ok_int_gt && ok_int_le && ok_int_ge
+        && ok_flt_eq && ok_flt_lt && ok_flt_gt
+        && ok_str_eq && ok_str_ne && ok_str_lt && ok_str_gt && ok_str_le
+        && ok_bool_eq && ok_bool_ne
+        && ok_atom_eq && ok_atom_ne
+        && ok_av_eq && ok_av_ne && ok_av_t
+        && ok_unit
+        && ok_list_eq && ok_list_ne
+        && ok_map_eq && ok_map_ne
+        && ok_tup_eq && ok_tup_ne
+
   log.info(if ok then "DECK_CONF_OK:lang.compare" else "DECK_CONF_FAIL:lang.compare")

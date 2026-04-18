@@ -6,12 +6,54 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `01-deck-lang §7.3` logical operators — spec uses
+-- `and` / `or` / `not` keywords (§2.10), NOT `&&` / `||`.
+-- Short-circuit evaluation: `and` skips rhs if lhs is false; `or` skips
+-- rhs if lhs is true.
+--
+-- Old version used `&&` / `||` — not in §2.10 keyword list. This version
+-- uses spec-canonical keywords exclusively. (lang_and_or_kw.deck is
+-- redundant with this; kept as a thinner companion that confirms the
+-- keyword form loads.)
 @on launch:
-  let and_tt = true && true
-  let and_tf = true && false
-  let or_ft  = false || true
-  let or_ff  = false || false
+  -- Truth tables.
+  let and_tt = true and true
+  let and_tf = true and false
+  let and_ft = false and true
+  let and_ff = false and false
+  let or_tt  = true or true
+  let or_tf  = true or false
+  let or_ft  = false or true
+  let or_ff  = false or false
   let not_t  = not true
   let not_f  = not false
-  let ok = and_tt && (not and_tf) && or_ft && (not or_ff) && (not not_t) && not_f
+
+  let ok_and = and_tt and (not and_tf) and (not and_ft) and (not and_ff)
+  let ok_or  = or_tt and or_tf and or_ft and (not or_ff)
+  let ok_not = (not not_t) and not_f
+
+  -- Short-circuit: rhs of `and` is skipped when lhs is false; rhs of
+  -- `or` is skipped when lhs is true. We probe this by using an
+  -- expression on the rhs that would be a runtime error if evaluated
+  -- — e.g. division by zero. If short-circuit works, the error never
+  -- occurs and the expression evaluates to the lhs.
+  let ok_sc_and = (false and (1 / 0 == 0)) == false
+  let ok_sc_or  = (true  or  (1 / 0 == 0)) == true
+
+  -- Precedence: `and` binds tighter than `or`; `not` binds tighter
+  -- than both. Standard.
+  let ok_prec1  = (true or false and false) == true     -- or( true, and(false, false) )
+  let ok_prec2  = (not false and true)      == true     -- and( not(false), true )
+  let ok_prec3  = (not (false and true))    == true     -- not( and(false, true) )
+
+  -- Logical ops return a bool; expressions are pure.
+  let ok_return = (true and true) == true
+              and (false or true) == true
+              and (not false)     == true
+
+  let ok = ok_and and ok_or and ok_not
+       and ok_sc_and and ok_sc_or
+       and ok_prec1 and ok_prec2 and ok_prec3
+       and ok_return
+
   log.info(if ok then "DECK_CONF_OK:lang.logic" else "DECK_CONF_FAIL:lang.logic")
