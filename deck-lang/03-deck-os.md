@@ -482,14 +482,21 @@ Four complementary storage primitives — choose based on data size, durability 
 @capability nvs
   get       (key: str)                -> str?
   get_int   (key: str)                -> int?
+  get_float (key: str)                -> float?
+  get_bool  (key: str)                -> bool?
+  get_bytes (key: str)                -> [byte]?
+
   set       (key: str, value: str)    -> Result unit nvs.Error
   set_int   (key: str, value: int)    -> Result unit nvs.Error
+  set_float (key: str, value: float)  -> Result unit nvs.Error
+  set_bool  (key: str, value: bool)   -> Result unit nvs.Error
+  set_bytes (key: str, value: [byte]) -> Result unit nvs.Error
+
   delete    (key: str)                -> Result unit nvs.Error
   keys      ()                        -> Result [str] nvs.Error
   clear     ()                        -> Result unit nvs.Error
   @errors
     :full        "NVS partition full"
-    :not_found   "Key does not exist"
     :invalid_key "Key exceeds 15 characters (ESP32 NVS limit)"
     :write_fail  "Flash write failed"
 

@@ -6,11 +6,83 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: every method of `nvs` (03-deck-os §4.2 / 05-deck-os-api
+-- §3). Old version exercised only set/get/delete for a single string
+-- value and claimed to cover the capability — classic A→B. This version
+-- exercises all five value types (str/int/float/bool/bytes), the `keys`
+-- listing, `clear`, key-length constraint, and the :invalid_key error
+-- atom. Uses spec-canonical (key) surface — no namespace positional.
+-- If the runtime currently requires a namespace, the test fails and
+-- that is the divergence to surface.
 @on launch:
-  let ns  = "conftest"
-  let k   = "probe"
-  let w1  = nvs.set(ns, k, "hello-1337")
-  let v   = nvs.get(ns, k)
-  let w2  = nvs.delete(ns, k)
-  let ok  = v == "hello-1337"
+  -- Clean slate.
+  let _ = nvs.clear()
+
+  -- String round-trip.
+  let ok_s = nvs.set("str_k", "hello") == :ok unit
+         && nvs.get("str_k") == :some "hello"
+
+  -- Int round-trip (positive, negative, zero, large).
+  let ok_i = nvs.set_int("int_pos",  1337) == :ok unit
+         && nvs.get_int("int_pos") == :some 1337
+         && nvs.set_int("int_neg", -42) == :ok unit
+         && nvs.get_int("int_neg") == :some -42
+         && nvs.set_int("int_zero", 0) == :ok unit
+         && nvs.get_int("int_zero") == :some 0
+
+  -- Float round-trip.
+  let ok_f = nvs.set_float("f_k", 3.14) == :ok unit
+         && nvs.get_float("f_k") == :some 3.14
+
+  -- Bool round-trip.
+  let ok_b = nvs.set_bool("b_t", true)  == :ok unit
+         && nvs.get_bool("b_t") == :some true
+         && nvs.set_bool("b_f", false) == :ok unit
+         && nvs.get_bool("b_f") == :some false
+
+  -- Bytes round-trip.
+  let ok_bs = nvs.set_bytes("bytes_k", [0xDE, 0xAD, 0xBE, 0xEF]) == :ok unit
+          && nvs.get_bytes("bytes_k") == :some [0xDE, 0xAD, 0xBE, 0xEF]
+
+  -- keys() enumerates what we just wrote.
+  let ok_keys = match nvs.keys()
+                  | :ok ks ->
+                      text.len(ks) >= 7   -- str_k int_pos int_neg int_zero f_k b_t b_f bytes_k
+                  | :err _  -> false
+
+  -- Missing key returns :none (not :err).
+  let ok_miss = nvs.get("absent_key")       == :none
+             && nvs.get_int("absent_key")   == :none
+             && nvs.get_float("absent_key") == :none
+             && nvs.get_bool("absent_key")  == :none
+             && nvs.get_bytes("absent_key") == :none
+
+  -- delete removes the key; subsequent get is :none.
+  let ok_del = nvs.delete("str_k") == :ok unit && nvs.get("str_k") == :none
+
+  -- delete of missing key: runtime may return :ok or :err :not_found —
+  -- we accept either (spec omitted :not_found in §05 but §03 includes
+  -- it; normalize by accepting both).
+  let ok_del_missing = match nvs.delete("absent_key")
+                        | :ok _            -> true
+                        | :err :not_found  -> true
+                        | _                -> false
+
+  -- Key-length constraint: 16+ characters must yield :invalid_key.
+  let bad_key = "this_key_is_way_too_long"
+  let ok_invalid = match nvs.set(bad_key, "x")
+                     | :err :invalid_key -> true
+                     | _                  -> false
+
+  -- clear() wipes the namespace.
+  let ok_clear = nvs.clear() == :ok unit
+              && match nvs.keys()
+                   | :ok [] -> true
+                   | _       -> false
+
+  let ok = ok_s && ok_i && ok_f && ok_b && ok_bs
+        && ok_keys && ok_miss
+        && ok_del && ok_del_missing
+        && ok_invalid && ok_clear
+
   log.info(if ok then "DECK_CONF_OK:os.nvs" else "DECK_CONF_FAIL:os.nvs")
