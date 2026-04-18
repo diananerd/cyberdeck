@@ -215,6 +215,77 @@ deck_value_t *deck_new_none(void)
     return val;
 }
 
+/* --- map (DL2 F21.6) --------------------------------------------- */
+
+static bool map_keys_equal(const deck_value_t *a, const deck_value_t *b)
+{
+    if (!a || !b || a->type != b->type) return false;
+    switch (a->type) {
+        case DECK_T_INT:   return a->as.i == b->as.i;
+        case DECK_T_STR:   return a->as.s.ptr == b->as.s.ptr;     /* interned */
+        case DECK_T_ATOM:  return a->as.atom  == b->as.atom;       /* interned */
+        case DECK_T_BOOL:  return a->as.b == b->as.b;
+        default:           return false;
+    }
+}
+
+deck_value_t *deck_new_map(uint32_t initial_cap)
+{
+    deck_value_t *val = alloc_value(DECK_T_MAP);
+    if (!val) return NULL;
+    val->as.map.len = 0;
+    val->as.map.cap = initial_cap;
+    if (initial_cap > 0) {
+        val->as.map.entries = alloc_bytes(initial_cap * sizeof(deck_map_entry_t));
+        if (!val->as.map.entries) { free_value(val); return NULL; }
+        memset(val->as.map.entries, 0, initial_cap * sizeof(deck_map_entry_t));
+    }
+    return val;
+}
+
+deck_err_t deck_map_put(deck_value_t *m, deck_value_t *key, deck_value_t *val)
+{
+    if (!m || m->type != DECK_T_MAP || !key) return DECK_RT_TYPE_MISMATCH;
+    /* Update existing key if present. */
+    for (uint32_t i = 0; i < m->as.map.len; i++) {
+        if (m->as.map.entries[i].used &&
+            map_keys_equal(m->as.map.entries[i].key, key)) {
+            deck_release(m->as.map.entries[i].val);
+            m->as.map.entries[i].val = deck_retain(val);
+            return DECK_RT_OK;
+        }
+    }
+    /* Grow if needed. */
+    if (m->as.map.len >= m->as.map.cap) {
+        uint32_t new_cap = m->as.map.cap ? m->as.map.cap * 2 : 4;
+        deck_map_entry_t *ne = alloc_bytes(new_cap * sizeof(deck_map_entry_t));
+        if (!ne) return DECK_RT_NO_MEMORY;
+        memset(ne, 0, new_cap * sizeof(deck_map_entry_t));
+        if (m->as.map.entries) {
+            memcpy(ne, m->as.map.entries, m->as.map.len * sizeof(deck_map_entry_t));
+            free_bytes(m->as.map.entries, m->as.map.cap * sizeof(deck_map_entry_t));
+        }
+        m->as.map.entries = ne;
+        m->as.map.cap = new_cap;
+    }
+    deck_map_entry_t *e = &m->as.map.entries[m->as.map.len++];
+    e->key  = deck_retain(key);
+    e->val  = deck_retain(val);
+    e->used = true;
+    return DECK_RT_OK;
+}
+
+deck_value_t *deck_map_get(deck_value_t *m, deck_value_t *key)
+{
+    if (!m || m->type != DECK_T_MAP || !key) return NULL;
+    for (uint32_t i = 0; i < m->as.map.len; i++) {
+        if (m->as.map.entries[i].used &&
+            map_keys_equal(m->as.map.entries[i].key, key))
+            return m->as.map.entries[i].val;
+    }
+    return NULL;
+}
+
 deck_value_t *deck_new_some(deck_value_t *inner)
 {
     if (!inner) return NULL;
@@ -280,6 +351,17 @@ static void release_children(deck_value_t *v)
             break;
         case DECK_T_OPTIONAL:
             if (v->as.opt.inner) deck_release(v->as.opt.inner);
+            break;
+        case DECK_T_MAP:
+            for (uint32_t i = 0; i < v->as.map.len; i++) {
+                if (v->as.map.entries[i].used) {
+                    deck_release(v->as.map.entries[i].key);
+                    deck_release(v->as.map.entries[i].val);
+                }
+            }
+            if (v->as.map.entries)
+                free_bytes(v->as.map.entries,
+                           v->as.map.cap * sizeof(deck_map_entry_t));
             break;
         case DECK_T_FN:
             deck_env_release(v->as.fn.closure);

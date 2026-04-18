@@ -76,6 +76,13 @@ deck_value_t *deck_new_tuple(deck_value_t **items, uint32_t arity);
 deck_value_t *deck_new_none(void);
 deck_value_t *deck_new_some(deck_value_t *inner);
 
+/* DL2 F21.6 — map. Linear-scan implementation (small maps). put inserts
+ * or updates by key equality (interned ptr for str/atom, value for int);
+ * the value is retained. get returns the retained value or NULL. */
+deck_value_t *deck_new_map(uint32_t initial_cap);
+deck_err_t    deck_map_put(deck_value_t *m, deck_value_t *key, deck_value_t *val);
+deck_value_t *deck_map_get(deck_value_t *m, deck_value_t *key);    /* borrowed */
+
 /* DL2 F21.1: function value. Callee-owned references into the runtime
  * arena (params/body/closure/name); release does NOT free those. */
 deck_value_t *deck_new_fn(const char *name,

@@ -326,6 +326,70 @@ static deck_value_t *b_list_get(deck_value_t **args, uint32_t n, deck_interp_ctx
     return deck_new_some(args[0]->as.list.items[(uint32_t)i]);
 }
 
+/* ---- map.* (DL2 F21.6) ---- */
+static deck_value_t *b_map_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.len expects map"); return NULL;
+    }
+    return deck_new_int((int64_t)args[0]->as.map.len);
+}
+static deck_value_t *b_map_get_b(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.get(map, key)"); return NULL;
+    }
+    deck_value_t *v = deck_map_get(args[0], args[1]);
+    if (!v) return deck_new_none();
+    return deck_new_some(v);
+}
+static deck_value_t *b_map_put_b(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.put(map, key, val)"); return NULL;
+    }
+    /* Immutable update: copy the map then put. Small maps make this cheap;
+     * F22 may add a real persistent structure. */
+    deck_value_t *m = args[0];
+    deck_value_t *out = deck_new_map(m->as.map.cap > 0 ? m->as.map.cap : 4);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.put alloc"); return NULL; }
+    for (uint32_t i = 0; i < m->as.map.len; i++) {
+        if (m->as.map.entries[i].used)
+            deck_map_put(out, m->as.map.entries[i].key, m->as.map.entries[i].val);
+    }
+    deck_map_put(out, args[1], args[2]);
+    return out;
+}
+static deck_value_t *b_map_keys(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.keys(map)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.map.len);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.keys alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++)
+        if (args[0]->as.map.entries[i].used)
+            deck_list_push(out, args[0]->as.map.entries[i].key);
+    return out;
+}
+static deck_value_t *b_map_values(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.values(map)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.map.len);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.values alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++)
+        if (args[0]->as.map.entries[i].used)
+            deck_list_push(out, args[0]->as.map.entries[i].val);
+    return out;
+}
+
 /* ---- bytes.* ---- */
 static deck_value_t *b_bytes_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -580,6 +644,13 @@ static const builtin_t BUILTINS[] = {
     { "list.head",              b_list_head,         1, 1 },
     { "list.get",               b_list_get,          2, 2 },
 
+    /* map (DL2 F21.6) */
+    { "map.len",                b_map_len,           1, 1 },
+    { "map.get",                b_map_get_b,         2, 2 },
+    { "map.put",                b_map_put_b,         3, 3 },
+    { "map.keys",               b_map_keys,          1, 1 },
+    { "map.values",             b_map_values,        1, 1 },
+
     /* bytes */
     { "bytes.len",              b_bytes_len,         1, 1 },
 
@@ -752,6 +823,28 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
             }
             if (ok) r = deck_new_tuple(items, arity);
             for (uint32_t i = 0; i < arity; i++) if (items[i]) deck_release(items[i]);
+            break;
+        }
+
+        case AST_LIT_MAP: {
+            /* DL2 F21.6: build a map from {k: v} entries. */
+            uint32_t entries = n->as.map_lit.keys.len;
+            r = deck_new_map(entries);
+            if (!r) { set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "map alloc"); break; }
+            c->tail_pos = false;
+            for (uint32_t i = 0; i < entries; i++) {
+                deck_value_t *k = deck_interp_run(c, env, n->as.map_lit.keys.items[i]);
+                if (!k) { deck_release(r); r = NULL; break; }
+                deck_value_t *v = deck_interp_run(c, env, n->as.map_lit.vals.items[i]);
+                if (!v) { deck_release(k); deck_release(r); r = NULL; break; }
+                deck_err_t pr = deck_map_put(r, k, v);
+                deck_release(k); deck_release(v);
+                if (pr != DECK_RT_OK) {
+                    deck_release(r); r = NULL;
+                    set_err(c, pr, n->line, n->col, "map put failed");
+                    break;
+                }
+            }
             break;
         }
 

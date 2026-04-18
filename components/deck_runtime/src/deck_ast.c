@@ -48,6 +48,7 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_LIT_LIST:    return "list";
         case AST_LIT_TUPLE:   return "tuple";
         case AST_TUPLE_GET:   return "tuple_get";
+        case AST_LIT_MAP:     return "map";
         case AST_IDENT:       return "ident";
         case AST_BINOP:       return "binop";
         case AST_UNARY:       return "unary";
@@ -177,6 +178,15 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
         case AST_TUPLE_GET:
             sp_putc(p, ' '); print_node(p, n->as.tuple_get.obj);
             sp_printf(p, " %u", (unsigned)n->as.tuple_get.idx);
+            break;
+        case AST_LIT_MAP:
+            for (uint32_t i = 0; i < n->as.map_lit.keys.len; i++) {
+                sp_puts(p, " (");
+                print_node(p, n->as.map_lit.keys.items[i]);
+                sp_putc(p, ' ');
+                print_node(p, n->as.map_lit.vals.items[i]);
+                sp_putc(p, ')');
+            }
             break;
         case AST_IDENT:      sp_printf(p, " %s", n->as.s ? n->as.s : ""); break;
         case AST_BINOP:

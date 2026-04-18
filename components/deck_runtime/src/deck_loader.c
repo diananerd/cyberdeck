@@ -185,6 +185,7 @@ static const cap_entry_t DL1_CAPS[] = {
     { "fs",     DL1_CAP_FS     },
     { "os",     DL1_CAP_OS     },
     { "list",   DL1_CAP_LIST   },
+    { "map",    DL1_CAP_MAP    },
     { NULL, 0 },
 };
 
@@ -285,6 +286,10 @@ static void walk_expr(deck_loader_t *l, const ast_node_t *n)
             break;
         case AST_TUPLE_GET:
             walk_expr(l, n->as.tuple_get.obj);
+            break;
+        case AST_LIT_MAP:
+            walk_list(l, &n->as.map_lit.keys);
+            walk_list(l, &n->as.map_lit.vals);
             break;
         default: break;
     }

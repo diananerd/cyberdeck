@@ -1,0 +1,33 @@
+@app
+  name: "Conf lang.map.basic"
+  id: "conf.lang.map.basic"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+@on launch:
+  let m = {:name: "diana", :age: 30, :role: :admin}
+  let r1 = map.len(m) == 3
+  let name = match map.get(m, :name)
+    none => "?"
+    _    => "diana"
+  let r2 = name == "diana"
+  let mising = match map.get(m, :missing)
+    none => :nope
+    _    => :found
+  let r3 = mising == :nope
+  let m2 = map.put(m, :role, :user)
+  let role2 = match map.get(m2, :role)
+    none => :nope
+    _    => :user
+  let r4 = role2 == :user
+  let role_orig = match map.get(m, :role)
+    none => :nope
+    _    => :admin
+  let r5 = role_orig == :admin
+  let r6 = list.len(map.keys(m)) == 3
+  let empty = {}
+  let r7 = map.len(empty) == 0
+  let ok = r1 && r2 && r3 && r4 && r5 && r6 && r7
+  log.info(if ok then "DECK_CONF_OK:lang.map.basic" else "DECK_CONF_FAIL:lang.map.basic")

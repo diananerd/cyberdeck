@@ -133,6 +133,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F21.5 — tuple literals + .N field access. */
     { "lang.tuple.basic", "/conformance/lang_tuple_basic.deck", "DECK_CONF_OK:lang.tuple.basic", DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F21.6 — map literals + map.get/put/keys/values/len. */
+    { "lang.map.basic",   "/conformance/lang_map_basic.deck",   "DECK_CONF_OK:lang.map.basic",   DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },

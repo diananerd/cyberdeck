@@ -36,6 +36,7 @@ typedef enum {
     AST_LIT_LIST,    /* DL2 F21.4 — [e1, e2, ...] */
     AST_LIT_TUPLE,   /* DL2 F21.5 — (e1, e2, ...) */
     AST_TUPLE_GET,   /* DL2 F21.5 — tuple.<N> */
+    AST_LIT_MAP,     /* DL2 F21.6 — {k: v, ...} */
 
     /* expressions */
     AST_IDENT,
@@ -124,6 +125,7 @@ struct ast_node {
         struct { ast_list_t items; }                             list;  /* DL2 F21.4 list literal */
         struct { ast_list_t items; }                             tuple_lit; /* DL2 F21.5 tuple literal */
         struct { ast_node_t *obj; uint32_t idx; }                tuple_get; /* DL2 F21.5 tuple field */
+        struct { ast_list_t keys; ast_list_t vals; }             map_lit;   /* DL2 F21.6 {k:v, ...} */
         struct { ast_node_t *scrut; ast_arm_t *arms; uint32_t n_arms; } match;
 
         ast_node_t         *pat_lit;                 /* AST_PAT_LIT -> inner literal */

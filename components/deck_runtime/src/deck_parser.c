@@ -178,6 +178,31 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             }
             break;
         }
+        case TOK_LBRACE: {
+            /* DL2 F21.6: map literal `{k1: v1, k2: v2, ...}` (also `{}`).
+             * Keys may be any expression (typically atom/string/int). */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            advance(p);
+            n = ast_new(p->arena, AST_LIT_MAP, ln, co); if (!n) return NULL;
+            ast_list_init(&n->as.map_lit.keys);
+            ast_list_init(&n->as.map_lit.vals);
+            if (!at(p, TOK_RBRACE)) {
+                for (;;) {
+                    ast_node_t *k = parse_expr_prec(p, 0);
+                    if (!k) return NULL;
+                    if (!expect(p, TOK_COLON, "expected ':' in map literal")) return NULL;
+                    ast_node_t *v = parse_expr_prec(p, 0);
+                    if (!v) return NULL;
+                    ast_list_push(p->arena, &n->as.map_lit.keys, k);
+                    ast_list_push(p->arena, &n->as.map_lit.vals, v);
+                    if (!at(p, TOK_COMMA)) break;
+                    advance(p);
+                    if (at(p, TOK_RBRACE)) break;   /* trailing comma */
+                }
+            }
+            if (!expect(p, TOK_RBRACE, "expected '}' to close map")) return NULL;
+            break;
+        }
         case TOK_LBRACKET: {
             /* DL2 F21.4: list literal `[e1, e2, ...]` (also empty `[]`). */
             uint32_t ln = p->cur.line, co = p->cur.col;
