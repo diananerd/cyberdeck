@@ -6,24 +6,75 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: `§11` Standard Vocabulary — list ops (§11.2), Result
+-- helpers (§11.5), Optional helpers (§11.6), Type inspection (§11.8).
+-- Old version:
+--   - `ok(42)` / `err("boom")` as constructor fns — non-spec; §3.7
+--     uses atom variants :ok/:err.
+--   - `!is_int` — non-spec negation (§7.3 is `not`).
+--   - list.reduce signature: (xs, fn, init) in old; §11.2 is
+--     (xs, init, fn) — order matters.
 @on launch:
-  let xs = [1, 2, 3, 4, 5]
+  -- ---- list ops (§11.2) ----
+  let xs      = [1, 2, 3, 4, 5]
   let doubled = list.map(xs, x -> x * 2)
-  let evens = list.filter(xs, x -> x % 2 == 0)
-  let sum = list.reduce(xs, (a, b) -> a + b, 0)
-  let r1 = list.len(doubled) == 5
-  let r2 = list.len(evens) == 2
-  let r3 = sum == 15
-  let res_ok = ok(42)
-  let res_err = err("boom")
-  let r4 = is_ok(res_ok) && is_err(res_err)
-  let r5 = unwrap(res_ok) == 42
-  let mapped = map_ok(res_ok, x -> x + 1)
-  let r6 = unwrap(mapped) == 43
-  let mapped_err = map_ok(res_err, x -> x + 1)
-  let r7 = is_err(mapped_err)
-  let r8 = type_of(42) == :int
-  let r9 = type_of("x") == :str
-  let r10 = is_int(42) && (!is_int("x"))
-  let ok_all = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10
-  log.info(if ok_all then "DECK_CONF_OK:lang.stdlib.basic" else "DECK_CONF_FAIL:lang.stdlib.basic")
+  let evens   = list.filter(xs, x -> x % 2 == 0)
+  let sum     = list.reduce(xs, 0, (acc, n) -> acc + n)
+
+  let ok_list = list.len(doubled) == 5
+           and doubled == [2, 4, 6, 8, 10]
+           and list.len(evens) == 2
+           and evens == [2, 4]
+           and sum == 15
+
+  -- list.contains / list.head / list.get (§11.2).
+  let ok_list_q = list.contains(xs, 3)
+             and not list.contains(xs, 99)
+             and list.head(xs) == :some 1
+             and list.get(xs, 2) == :some 3
+
+  -- ---- Result helpers (§11.5) ----
+  let res_ok  = :ok 42
+  let res_err = :err "boom"
+
+  let ok_q     = is_ok(res_ok) and is_err(res_err)
+             and not is_ok(res_err) and not is_err(res_ok)
+
+  -- unwrap: :ok v -> v (spec §11.5); :err runs runtime error — we
+  -- test only the happy path here, error-path lives in err_* fixtures.
+  let ok_unwr  = unwrap(res_ok) == 42
+
+  -- map_ok transforms :ok, passes :err through.
+  let mapped1  = map_ok(res_ok,  x -> x + 1)
+  let mapped2  = map_ok(res_err, x -> x + 1)
+  let ok_mapok = unwrap(mapped1) == 43 and is_err(mapped2)
+
+  -- and_then chains Result operations.
+  let chained = and_then(:ok 10, n -> :ok (n * 2))
+  let ok_chain = unwrap(chained) == 20
+
+  -- ---- Optional helpers (§11.6) ----
+  let ok_unwrap_or = unwrap_or(:some 7, 0) == 7
+                and unwrap_or(:none, 99)   == 99
+
+  -- ---- Type inspection (§11.8) ----
+  let ok_tof  = type_of(42)       == :int
+           and type_of("x")       == :str
+           and type_of(3.14)      == :float
+           and type_of(true)      == :bool
+           and type_of([1, 2])    == :list
+           and type_of((1, 2))    == :tuple
+           and type_of({"k": 1})  == :map
+           and type_of(:ok)       == :atom
+           and type_of(unit)      == :unit
+
+  let ok_iis  = is_int(42)  and not is_int("x")
+           and is_str("x") and not is_str(42)
+           and is_bool(true) and not is_bool(1)
+
+  let ok = ok_list and ok_list_q
+        and ok_q and ok_unwr and ok_mapok and ok_chain
+        and ok_unwrap_or
+        and ok_tof and ok_iis
+
+  log.info(if ok then "DECK_CONF_OK:lang.stdlib.basic" else "DECK_CONF_FAIL:lang.stdlib.basic")

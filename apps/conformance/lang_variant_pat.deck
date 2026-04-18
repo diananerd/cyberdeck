@@ -6,27 +6,61 @@
   requires:
     deck_level: 1
 
+-- Coverage goal: atom variant patterns (§3.7: `:some x`, `:none`,
+-- `:ok v`, `:err e`, custom named-field variants). Old version used
+-- `some()` / `err()` as constructor *functions* — §3.7 makes them
+-- atom variants constructed via `:name payload`, destructured in
+-- `match | :name binder -> …`. All arrows were `=>` (non-spec) — §8.1
+-- uses `-> `. Rewritten with canonical syntax and deeper probes.
+
 fn safe_div (a, b) =
-  if b == 0 then err("div0") else ok(a / b)
+  if b == 0 then :err "div0" else :ok (a / b)
 
 @on launch:
-  let r1 = match some(42)
-    some(x) => x
-    none    => -1
-    _       => -2
-  let r2 = match none
-    some(x) => x
-    none    => 99
-    _       => -1
+  -- :some / :none destructure with binder.
+  let r1 = match :some 42
+             | :some x -> x
+             | :none   -> -1
+  let ok_r1 = r1 == 42
+
+  let r2 = match :none
+             | :some x -> x
+             | :none   -> 99
+  let ok_r2 = r2 == 99
+
+  -- :ok / :err destructure.
   let r3 = match safe_div(10, 2)
-    ok(v)  => v
-    err(e) => -1
-    _      => 0
+             | :ok v  -> v
+             | :err _ -> -1
+  let ok_r3 = r3 == 5
+
   let r4 = match safe_div(10, 0)
-    ok(v)  => v
-    err(e) => 999
-    _      => 0
-  let xs = list.map([1, 2, 3], n -> some(n * n))
-  let r5 = list.len(xs) == 3
-  let ok_all = r1 == 42 && r2 == 99 && r3 == 5 && r4 == 999 && r5
-  log.info(if ok_all then "DECK_CONF_OK:lang.variant.pat" else "DECK_CONF_FAIL:lang.variant.pat")
+             | :ok _   -> false
+             | :err e  -> text.length(e) > 0
+  let ok_r4 = r4
+
+  -- Plain atom pattern (no payload).
+  let r5 = match :ready
+             | :ready -> "go"
+             | :idle  -> "wait"
+             | _      -> "?"
+  let ok_r5 = r5 == "go"
+
+  -- Named-field variant.
+  let user = :active (temp: 25.0, max: 30.0)
+  let r6   = match user
+               | :active s -> s.temp + s.max
+               | _         -> 0.0
+  let ok_r6 = r6 == 55.0
+
+  -- Nested variant (variant-of-variant).
+  let nested = :ok (:some 10)
+  let r7 = match nested
+             | :ok (:some v) -> v
+             | :ok :none     -> -1
+             | :err _        -> -2
+  let ok_r7 = r7 == 10
+
+  let ok = ok_r1 and ok_r2 and ok_r3 and ok_r4 and ok_r5 and ok_r6 and ok_r7
+
+  log.info(if ok then "DECK_CONF_OK:lang.variant.pat" else "DECK_CONF_FAIL:lang.variant.pat")
