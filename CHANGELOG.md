@@ -2,6 +2,52 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [0.9.1] — 2026-04-17 — F28 App model DL2 (parse-only)
+
+Extiende el parser para aceptar la sintaxis app-model DL2 completa.
+Todos los nuevos decoradores se parsean a un AST opaco (`__metadata`
+stub) y son no-op en runtime — la ejecución real cae post-DL2 cuando
+la persistencia de módulos cargados (necesaria para lifecycle hooks)
+esté implementada.
+
+### Added
+
+**F28.1 @machine.before / @machine.after.** Decorators con cuerpo de
+statements (no key:value), parsed via `parse_opaque_block`. Stub
+runtime — bodies parsed pero no ejecutados alrededor de transitions.
+
+**F28.2 @flow + @flow.step.** `@flow name` con cuerpo indentado de
+`step name:` blocks. Sugar DL2 que en F28 post-release se desugars a
+`@machine` equivalente. Hoy parsed-only.
+
+**F28.3 @on lifecycle nombres adicionales.** El parser ya aceptaba
+`@on <ident>` con cualquier nombre — `@on resume`, `@on pause`,
+`@on suspend`, `@on terminate`, `@on low_memory`, `@on network_change`
+parsean sin cambios. Wiring runtime → app instances queda pendiente
+(requiere persistencia de módulo cargado, no parte del parser).
+
+**F28.4 @migration.** Parsed via opaque block. Body keyed por
+`from N:` con cuerpo de migration code. Stub.
+
+**F28.5 @assets.** Parsed via opaque block. Body keyed por nombre con
+path string. Stub — `deck_asset_get(name)` builtin queda para post-DL2.
+
+**parse_opaque_block helper.** Generic skip-body parser que consume
+cualquier `@decorator [name]<NEWLINE><INDENT>...<DEDENT>` y devuelve un
+stub `(use __metadata)`. Usado por todos los nuevos decoradores arriba.
+
+### Changed
+
+- Parser selftest crece a 56 cases (+5 nuevas para F28 syntax)
+- Sin cambios en bin size
+
+### Stats hardware
+
+- 56/56 parser selftest PASS
+- 18/18 loader selftest PASS
+- 45/45 interp selftest PASS
+- DL1 conformance suite sigue verde
+
 ## [0.9.0] — 2026-04-17 — F27 Shell DL2
 
 Sobre el bridge UI de F26 aterriza el shell DL2: lockscreen PIN, intent

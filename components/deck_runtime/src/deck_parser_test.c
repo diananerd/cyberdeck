@@ -120,6 +120,35 @@ static const parser_case_t CASES[] = {
       "  if n <= 1 then 1 else n * fact(n - 1)\n",
       "(module (fn fact (params n) (do (if (binop <= (ident n) (int 1)) (int 1) (binop * (ident n) (call (ident fact) (binop - (ident n) (int 1))))))))" },
 
+    /* --- DL2 F28: opaque blocks (parsed, not yet executed) --- */
+    /* @machine.before / @machine.after — body is Deck statements */
+    { "mod_machine_before", TEST_MODULE,
+      "@machine.before\n"
+      "  log.info(\"about to transition\")\n",
+      "(module (use __metadata))" },
+    { "mod_machine_after", TEST_MODULE,
+      "@machine.after\n"
+      "  log.info(\"transition complete\")\n",
+      "(module (use __metadata))" },
+    /* @flow / @flow.step — sugar that desugars to @machine post-DL2 */
+    { "mod_flow", TEST_MODULE,
+      "@flow signup\n"
+      "  step welcome:\n"
+      "    log.info(\"hi\")\n",
+      "(module (use __metadata))" },
+    /* @migration — version migration block */
+    { "mod_migration", TEST_MODULE,
+      "@migration\n"
+      "  from 1:\n"
+      "    log.info(\"migrating\")\n",
+      "(module (use __metadata))" },
+    /* @assets — asset bundle declarations */
+    { "mod_assets", TEST_MODULE,
+      "@assets\n"
+      "  icon: \"icon.png\"\n"
+      "  font: \"mono.ttf\"\n",
+      "(module (use __metadata))" },
+
     /* --- errors --- */
     { "err_no_decorator", TEST_ERROR, "foo",        "expected @app" },
     { "err_unknown_dec",  TEST_ERROR, "@wtf",       "unknown top-level decorator" },

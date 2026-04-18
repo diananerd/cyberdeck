@@ -1065,6 +1065,36 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
 /* DL2 F23.6 / F23.7 — `@permissions` and `@errors` are documented as
  * indented blocks of `key: value` entries. F23 minimum: parse and
  * discard (metadata for future shell prompts / runtime cataloging). */
+/* DL2 F28 — opaque indented block: consumes tokens until matching DEDENT,
+ * returns a benign stub. Used for decorators whose body is not
+ * interpreted today (@machine.before/.after, @flow, @flow.step,
+ * @migration, @assets). The decorator name is logged for the loader
+ * to surface in `info` / debug. Runtime semantics land post-DL2. */
+static ast_node_t *parse_opaque_block(deck_parser_t *p)
+{
+    advance(p); /* the @decorator */
+    /* Some opaque blocks may have an inline name token (e.g. @flow user_signup). */
+    while (at(p, TOK_IDENT) || at(p, TOK_DOT)) advance(p);
+    if (!expect(p, TOK_NEWLINE, "expected newline after opaque decorator")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!at(p, TOK_INDENT)) {
+        /* No body — accept empty. */
+        ast_node_t *stub = mknode(p, AST_USE);
+        if (stub) { stub->as.use.module = "__metadata"; stub->as.use.is_optional = true; }
+        return stub;
+    }
+    advance(p); /* INDENT */
+    int depth = 1;
+    while (depth > 0 && !at(p, TOK_EOF)) {
+        if (at(p, TOK_INDENT))      { depth++; advance(p); }
+        else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+        else                         { advance(p); }
+    }
+    ast_node_t *stub = mknode(p, AST_USE);
+    if (stub) { stub->as.use.module = "__metadata"; stub->as.use.is_optional = true; }
+    return stub;
+}
+
 static ast_node_t *parse_metadata_block(deck_parser_t *p)
 {
     advance(p); /* @permissions or @errors */
@@ -1176,6 +1206,12 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         else if (dec_is(&p->cur, "use.optional"))   return parse_use_decl(p);   /* DL2 F23.4 */
         else if (dec_is(&p->cur, "on"))             return parse_on_decl(p);
         else if (dec_is(&p->cur, "machine"))        return parse_machine_decl(p);
+        else if (dec_is(&p->cur, "machine.before")) return parse_opaque_block(p);  /* F28.1 */
+        else if (dec_is(&p->cur, "machine.after"))  return parse_opaque_block(p);  /* F28.1 */
+        else if (dec_is(&p->cur, "flow"))           return parse_opaque_block(p);  /* F28.2 */
+        else if (dec_is(&p->cur, "flow.step"))      return parse_opaque_block(p);  /* F28.2 */
+        else if (dec_is(&p->cur, "migration"))      return parse_opaque_block(p);  /* F28.4 */
+        else if (dec_is(&p->cur, "assets"))         return parse_opaque_block(p);  /* F28.5 */
         else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
         else if (dec_is(&p->cur, "permissions"))    return parse_metadata_block(p);  /* F23.6 */
         else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */
