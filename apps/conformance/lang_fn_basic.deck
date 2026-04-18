@@ -6,13 +6,57 @@
   requires:
     deck_level: 1
 
-fn add (a, b) = a + b
-fn double (x) = x * 2
+-- Coverage goal: `01-deck-lang §6.1 Pure Functions` — declaration,
+-- arity, type annotations (optional), do-block body, single-expr body,
+-- naming rules. Old version exercised 3 trivial functions; this deepens
+-- to include arity 0/1/2/N, both body shapes, annotations, and call
+-- ordering (forward references within file).
+
+-- Arity zero.
 fn answer () = 42
 
+-- Arity one.
+fn double (x) = x * 2
+
+-- Arity two, optional type annotations.
+fn add (a: int, b: int) -> int = a + b
+
+-- Optional return type only.
+fn square (n) -> int = n * n
+
+-- Do-block body.
+fn pipeline (x: int) -> int =
+  do
+    let a = x + 1
+    let b = a * 2
+    b - 3
+
+-- Forward reference: `compose` calls `double` declared above AND
+-- `triple` declared below (§6.1 — forward refs within a file resolve
+-- in the loader).
+fn compose (x: int) -> int = double(x) + triple(x)
+fn triple  (x: int) -> int = x * 3
+
+-- Higher arity (5 params).
+fn sum5 (a, b, c, d, e) = a + b + c + d + e
+
 @on launch:
-  let s = add(2, 3)
-  let d = double(21)
-  let a = answer()
-  let ok = s == 5 && d == 42 && a == 42
+  let ok_0   = answer() == 42
+  let ok_1   = double(21) == 42
+  let ok_2   = add(2, 3) == 5
+  let ok_sq  = square(6) == 36
+  let ok_do  = pipeline(4) == 7           -- (4+1)*2-3 = 7
+  let ok_cmp = compose(10) == 50          -- 20 + 30
+  let ok_5   = sum5(1, 2, 3, 4, 5) == 15
+
+  -- Named args (§6.1 via §7: CallExpr named variant).
+  let ok_nam = add(a: 7, b: 8) == 15
+
+  -- Calls are expressions (can nest freely).
+  let ok_nest = add(double(3), square(2)) == 10   -- 6 + 4
+
+  let ok = ok_0 and ok_1 and ok_2 and ok_sq
+        and ok_do and ok_cmp and ok_5
+        and ok_nam and ok_nest
+
   log.info(if ok then "DECK_CONF_OK:lang.fn.basic" else "DECK_CONF_FAIL:lang.fn.basic")
