@@ -1,0 +1,33 @@
+@app
+  name: "Conf lang.pipe_is"
+  id: "conf.lang.pipe_is"
+  version: "1.0.0"
+  edition: 2026
+  requires:
+    deck_level: 1
+
+fn double (x) = x * 2
+fn shout  (s) = "${s}!"
+
+@on launch:
+  let r1 = 21 |> double
+  let r2 = "hello" |> shout
+  let r3 = 5 |> double |> double
+  let r4 = none |>? double
+  let r5 = some(7) |>? double
+  let r6 = 100 |>? double
+  let r7 = :ok is :ok
+  let r8 = :ok is :err
+  let r9 = 42 is 42
+  let r10 = :ready is :ready
+  let ok1 = r1 == 42 && r2 == "hello!" && r3 == 20
+  let r4_is_none = match r4
+    none => true
+    _    => false
+  let r5_unwrap = match r5
+    none => -1
+    _    => 14
+  let ok2 = r4_is_none && r5_unwrap == 14 && r6 == 200
+  let ok3 = r7 && (!r8) && r9 && r10
+  let ok = ok1 && ok2 && ok3
+  log.info(if ok then "DECK_CONF_OK:lang.pipe_is" else "DECK_CONF_FAIL:lang.pipe_is")

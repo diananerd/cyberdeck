@@ -80,6 +80,8 @@ static bool binop_for(deck_tok_t t, binop_info_t *out)
         case TOK_GE:      *out = (binop_info_t){ BINOP_GE,     4, false }; return true;
         case TOK_CONCAT:  *out = (binop_info_t){ BINOP_CONCAT, 5, false }; return true;
         case TOK_PIPE:    *out = (binop_info_t){ BINOP_PIPE,   5, false }; return true;
+        case TOK_PIPE_OPT:*out = (binop_info_t){ BINOP_PIPE_OPT, 5, false }; return true;
+        case TOK_KW_IS:   *out = (binop_info_t){ BINOP_IS,     3, false }; return true;
         case TOK_PLUS:    *out = (binop_info_t){ BINOP_ADD,    6, false }; return true;
         case TOK_MINUS:   *out = (binop_info_t){ BINOP_SUB,    6, false }; return true;
         case TOK_STAR:    *out = (binop_info_t){ BINOP_MUL,    7, false }; return true;
@@ -238,6 +240,14 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         case TOK_ATOM:
             n = mknode(p, AST_LIT_ATOM); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
+        case TOK_KW_SOME: {
+            /* DL2 F21.9 — `some` is a callable Optional constructor.
+             * Treat as a bare ident so call dispatch finds the builtin. */
+            n = mknode(p, AST_IDENT); if (!n) return NULL;
+            n->as.s = deck_intern_cstr("some");
+            advance(p);
+            break;
+        }
         case TOK_IDENT:
             /* DL2 F21.2: single-ident lambda `x -> body`. We commit
              * before consuming the ident, then take the lambda branch

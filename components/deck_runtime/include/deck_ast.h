@@ -79,6 +79,8 @@ typedef enum {
     BINOP_AND, BINOP_OR,
     BINOP_CONCAT,
     BINOP_PIPE,
+    BINOP_PIPE_OPT,    /* DL2 F21.10 — `x |>? f` short-circuits on none */
+    BINOP_IS,          /* DL2 F21.9  — `x is y` value/atom equality */
 } binop_t;
 
 typedef enum {

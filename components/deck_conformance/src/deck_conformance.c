@@ -139,6 +139,9 @@ static deck_test_t DECK_TESTS[] = {
     /* DL2 F21.7 — string interpolation `"...${expr}..."`. */
     { "lang.interp.basic","/conformance/lang_interp_basic.deck","DECK_CONF_OK:lang.interp.basic",DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
 
+    /* DL2 F21.9 + F21.10 — `is` operator + pipe operators. */
+    { "lang.pipe_is",     "/conformance/lang_pipe_is.deck",     "DECK_CONF_OK:lang.pipe_is",     DECK_RT_OK, false, 0, 0, 0, {0}, 0 },
+
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
       DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, {0}, 0 },

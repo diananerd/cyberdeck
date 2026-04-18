@@ -680,12 +680,20 @@ static const builtin_t BUILTINS[] = {
     { NULL, NULL, 0, 0 },
 };
 
+static deck_value_t *b_to_some(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0]) return deck_new_none();
+    return deck_new_some(args[0]);
+}
+
 /* Bare-ident builtins: str(), int(), float(), bool() type conversions. */
 static const builtin_t BARE_BUILTINS[] = {
     { "str",   b_to_str,   1, 1 },
     { "int",   b_to_int,   1, 1 },
     { "float", b_to_float, 1, 1 },
     { "bool",  b_to_bool,  1, 1 },
+    { "some",  b_to_some,  1, 1 },   /* DL2 F21.9 — Optional constructor */
     { NULL, NULL, 0, 0 },
 };
 
@@ -1132,6 +1140,60 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
         bool rt = deck_is_truthy(R); deck_release(R);
         return deck_retain(deck_new_bool(rt));
     }
+
+    /* DL2 F21.10 — pipe operators rewrite shape to a call.
+     *   x |>  f  →  f(x)
+     *   x |>? f  →  none if x is none; else f(some-unwrapped(x) or x)
+     * We don't want to synthesise AST_CALL nodes at runtime, so dispatch
+     * via the same call machinery: evaluate the callee expression, then
+     * invoke. When `|>?` and L is a none Optional, short-circuit. */
+    if (op == BINOP_PIPE || op == BINOP_PIPE_OPT) {
+        deck_value_t *L = deck_interp_run(c, env, n->as.binop.lhs); if (!L) return NULL;
+        if (op == BINOP_PIPE_OPT &&
+            L->type == DECK_T_OPTIONAL && L->as.opt.inner == NULL) {
+            deck_release(L);
+            return deck_new_none();
+        }
+        if (op == BINOP_PIPE_OPT &&
+            L->type == DECK_T_OPTIONAL && L->as.opt.inner != NULL) {
+            deck_value_t *inner = deck_retain(L->as.opt.inner);
+            deck_release(L);
+            L = inner;
+        }
+        deck_value_t *R = deck_interp_run(c, env, n->as.binop.rhs);
+        if (!R) { deck_release(L); return NULL; }
+        if (R->type != DECK_T_FN) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                    "right side of |> must be a function (got %s)",
+                    deck_type_name(R->type));
+            deck_release(L); deck_release(R);
+            return NULL;
+        }
+        /* Build a synthetic call invocation reusing invoke_user_fn — but
+         * invoke_user_fn evaluates args from an AST. Inline a lightweight
+         * dispatch here that uses the already-evaluated L. */
+        if (R->as.fn.n_params != 1) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                    "fn '%s' takes %u args, pipe supplies 1",
+                    R->as.fn.name ? R->as.fn.name : "<anon>",
+                    (unsigned)R->as.fn.n_params);
+            deck_release(L); deck_release(R);
+            return NULL;
+        }
+        deck_env_t *call_env = deck_env_new(c->arena, R->as.fn.closure);
+        if (!call_env) {
+            set_err(c, DECK_RT_NO_MEMORY, n->line, n->col, "pipe env alloc");
+            deck_release(L); deck_release(R);
+            return NULL;
+        }
+        deck_env_bind(c->arena, call_env, R->as.fn.params[0], L);
+        deck_release(L);
+        deck_value_t *result = deck_interp_run(c, call_env, R->as.fn.body);
+        deck_env_release(call_env);
+        deck_release(R);
+        return result;
+    }
+
     deck_value_t *L = deck_interp_run(c, env, n->as.binop.lhs); if (!L) return NULL;
     deck_value_t *R = deck_interp_run(c, env, n->as.binop.rhs); if (!R) { deck_release(L); return NULL; }
     deck_value_t *r = NULL;
@@ -1143,6 +1205,12 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
         case BINOP_GE: case BINOP_EQ: case BINOP_NE:
             r = do_compare(c, op, L, R); break;
         case BINOP_CONCAT: r = do_concat(c, L, R, n->line, n->col); break;
+        case BINOP_IS:
+            /* DL2 F21.9: `is` is value/atom equality with strict typing.
+             * Reuse the comparison machinery (which also handles atoms
+             * via interned-pointer equality). */
+            r = do_compare(c, BINOP_EQ, L, R);
+            break;
         default: set_err(c, DECK_RT_INTERNAL, n->line, n->col, "unhandled binop");
     }
     deck_release(L); deck_release(R);
