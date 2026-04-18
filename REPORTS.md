@@ -289,6 +289,39 @@ Between sessions, re-read `REPORTS.md` top-to-bottom. The User framing at the to
 - 2026-04-18 · session #2+ continuing · 11 commits in this push. Remaining layer-1 axes are largely aligned on the content-body + capability + hook + event axes. Naming-convention flat-vs-prefixed for capabilities (`mqtt` vs `network.http`) identified as a latent inconsistency — deferred, requires design decision on whether to normalize to `network.mqtt` (consistent) or keep flat (ergonomic).
 - 2026-04-18 · layer 6 edit · `apps/conformance/os_math.deck` deepened from 6 probes to ~34 probes covering the full `@builtin math` surface from `03-deck-os §3` (int helpers: abs_int/min_int/max_int/clamp_int/gcd/lcm; float scalars: abs/floor/ceil/round with n/sign/min/max/clamp/lerp; power: sqrt/pow; trig: sin/cos/tan/asin/acos/atan/atan2; exp/log: exp/ln/log2/log10; conversions: to_radians/to_degrees; predicates: is_nan/is_inf; constants: pi/e/tau). **Expected outcome on current runtime**: test FAILS (downgrades from 96/96 PASS to something less). That is the correct answer — the old shallow version lied about coverage; the new deep version reports reality. When a math function is missing from the interpreter, the fail log tells you which. Hardware-side rerun + fix is a future session's work. Closing: the user's A→B complaint manifests directly here — "abs/min/max/round work → all math works" was the lie; now it can't be told.
 
+### Deepening pass on `os_*` conformance fixtures (layer 6)
+
+The pattern applied to every `os_*.deck`:
+  1. Read the spec for the capability or builtin surface (§03 / §05).
+  2. Enumerate every method / field; group by semantic family.
+  3. For each method, write at least one happy-path probe + at least one error / edge probe.
+  4. Use spec-canonical names (`length` not `len`; `starts` not `starts_with`; etc.).
+  5. Use spec-canonical return shapes (`int?` yields `:some N` / `:none`; not unwrapped).
+  6. Sum all probes into `ok` with `&&`; if ANY fails, the sentinel `DECK_CONF_OK:<name>` is not emitted.
+
+Before → After coverage:
+
+| Fixture | Before | After | Surface |
+|---|---|---|---|
+| os_math.deck | 6 probes | ~34 probes | `@builtin math` 30+ methods incl. trig/exp/log/predicates/constants |
+| os_text.deck | 6 probes | ~36 probes | `@builtin text` 36 methods incl. encoding/query/JSON/bytes |
+| os_fs.deck   | 1 method | 10 methods | `fs` full CRUD + mkdir/move/list + :err :not_found path |
+| os_nvs.deck  | 1 type (str) | 5 types (str/int/float/bool/bytes) + :invalid_key + keys/clear | Full `nvs` surface (after §03 completeness fix) |
+| os_time.deck | 2 probes | ~15 probes | now/since/until/before/after/add/sub/to_iso/from_iso/format/parse/date_parts/epoch |
+| os_info.deck | 3 probes | 11 probes | device_id/model/os_name/version/app_id/version + uptime/cpu_freq + versions() record |
+| os_conv.deck | 4 cases | 15 cases | str/int/float/bool with explicit :some / :none expectations |
+
+**Expected consequence on hardware**: the suite count (currently "96/96 PASS") will drop sharply as each deepened test surfaces real gaps — spec-name divergence (`len` vs `length`), missing methods (trig, `gcd`, `get_float`, `get_bytes`, etc.), missing features (`:none` for invalid parse, `:err :not_found` for missing file), list destructuring, recursive fns, closure syntax. Each FAIL log message names the first offending probe — actionable for the layer-4 code fixes.
+
+Spec completeness cascades caught during this pass:
+  - `§03 @capability nvs` was missing get_float/get_bool/get_bytes + setters (§05 had them). Added.
+  - `§03 @capability system.info` was missing `deck_level()` (§16 referenced it). Added.
+  - `§03 @capability fs` already complete; no edit needed.
+  - `§03 @builtin text` already complete; no edit needed.
+  - `§01 §11.1 int/float/bool` return shapes are `X?` (Option) per spec; tests now reflect this strictly.
+
+Layer 6 remaining (next session's targets if this pattern continues): `os_lifecycle.deck`, `os_fs_list.deck`, `sanity.deck` (probably fine), `edge_*.deck` (already edge-case-focused by design), `err_*.deck` (already negative-path focused), `lang_*.deck` (language-level, separate audit), `app_*.deck` (bridge UI + flow + machine + assets — needs layer-4 fixes first).
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.
