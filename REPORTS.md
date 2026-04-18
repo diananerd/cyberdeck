@@ -205,6 +205,29 @@ User directive: "sigue iterando, no te detengas, esto es ad infinitum" — plus 
 - 2026-04-18 · record-type notes (not renamed — different concept) · `message:` as a **struct field** in LoadError (§11, §15 §9, §16 §10) and SysNotifOpts (§09 `shell.post_notification`) is a genuine record-schema field on structured error/notification types, not a content-body primitive. Those stay as `message:` — renaming would confuse the error-handling subsystem with the UI-intent subsystem. Only content-body primitives (`error` view marker, `confirm` intent, `@on back :confirm` directive) were renamed.
 - 2026-04-18 · verify · grep for stale: `^\s+(hint|message|scroll_to|accessibility|editor_state|more):\s` across `deck-lang/` — only remaining hits are (a) the rename-comments in §12.3 citing the OLD names for context, (b) LoadError/SysNotifOpts record fields (legitimate, different concept), (c) text-input `hint:` (placeholder guidance — different from the `media hint:` that was renamed to `role:`; this `hint:` stays because its semantic is truly "hint about what to type", user-facing guidance, not a bridge directive).
 
+### Concept #4 — `@machine` hook execution order + spec gap
+
+- 2026-04-18 · layer 1 discovery · `02-deck-app §8.5` "Hooks and Execution Order" documents only `transition before` / `on leave` / `on enter` / `transition after` — it does **not** describe `@machine.before:` / `@machine.after:`, which exist in the implementation (deck_interp.c `find_on_event` + `run_machine`) and are referenced in `16-deck-levels.md` as a DL2 feature. Undocumented load-bearing language form.
+- 2026-04-18 · layer 4 bug discovered (flagged for follow-up) · **runtime execution order for `@machine.before` / `@machine.after` does not match the intended semantic**. `deck_interp.c run_machine()` line 2272-2306 executes, per transition from state S to D:
+  1. source.on enter   (only on first iteration)
+  2. source.on leave
+  3. @machine.before
+  4. [state change S→D]
+  5. @machine.after
+  6. destination.on enter   (only on **next** iteration's enter call)
+
+  Spec-correct order (per the authoritative §8.5 rewrite below): `@machine.before → T.before → S.on leave → [state change] → D.on enter → T.after → @machine.after`. Two ordering errors in the impl:
+  - `@machine.before` runs **after** `source.on leave` (should run before)
+  - `@machine.after` runs **before** `destination.on enter` (should run after)
+
+  Why the conformance test (`app_machine_hooks.deck`) still PASSes despite this: the test's sentinel `DECK_CONF_OK:app.machine_hooks` is emitted from `@machine.after`; the test does not assert **position** of the sentinel relative to the `ready` state's `on enter` log. Classic A→B: sentinel present → test pass; even though hook ordering is wrong, the test doesn't see it.
+
+  Layer 4 fix (future session): reorder `run_machine` so `@machine.before` fires before the source.on leave, and `@machine.after` fires after the destination.on enter. Also move the first-iteration source.on enter outside the transition loop (enter-initial is a distinct hook point — see §8.5 note on `:__init` pseudo-transition).
+
+  Layer 5 fix: rewrite `app_machine_hooks.deck` to assert **order**, not just presence — e.g. emit `HOOK_ORDER:before, HOOK_ORDER:leave_boot, HOOK_ORDER:enter_ready, HOOK_ORDER:after, HOOK_ORDER:SENTINEL` and have the C-side harness parse the stream and reject if order is wrong.
+
+- 2026-04-18 · layer 1 edit · `02-deck-app §8.5` rewritten to (a) clearly distinguish the three hook kinds (state-scoped enter/leave, transition-scoped before/after, machine-scoped `@machine.before`/`@machine.after`), (b) document the full execution order across all seven hook points, (c) specify the `:__init` pseudo-transition rule for initial-state entry (only `state.on enter` and `@machine.after` fire; not before-hooks, because no event was sent), (d) specify termination semantics and error-rollback behavior. Why: without this explicit order, implementations drift and tests hide the drift behind presence-checks (as the current impl proves).
+
 ### Layer 1 / 2 open items (deferred, not blocking)
 
 - `@capability system.shell` in `09-deck-shell.md §7` still exports `set_status_bar`/`set_status_bar_style`/`set_navigation_bar` methods. Per `10-deck-bridge-ui §3.2-3.4`, the bridge renders both unconditionally. These capability methods are either redundant (apps never need them) or are for special modes (e.g. fullscreen game/media). Decision: leave for now; separate audit of §07-shell-capability consistency is a follow-up session. Noting here so it isn't lost.

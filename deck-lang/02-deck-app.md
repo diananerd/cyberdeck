@@ -439,17 +439,31 @@ transition :update (reading: float)
 
 ### 8.5 Hooks and Execution Order
 
-`on enter` and `on leave` are sugar: they apply to **every** transition that activates or deactivates a state. `before` / `after` on a specific transition apply only to **that** transition.
+Three hook kinds exist, each with a distinct scope:
 
-Execution order for a transition:
+| Hook | Scope | Declared as |
+|---|---|---|
+| `state … on enter` / `on leave` | State-scoped — fires for **every** transition that activates / deactivates this state | Inside the `state` block |
+| `transition :name before -> …` / `after -> …` | Transition-scoped — fires only for **that** transition | Inside the `transition` block |
+| `@machine.before:` / `@machine.after:` | Machine-scoped — fires around **every** transition of this machine | Top-level annotation in the same `.deck` file as `@machine` |
+
+Execution order for a transition — from source state `S` to destination state `D` via transition `T`:
 
 ```
-1. transition before    -- hook of the specific transition
-2. state    on leave    -- hook of the from-state
-3. [state changes]
-4. state    on enter    -- hook of the to-state
-5. transition after     -- hook of the specific transition
+1. @machine.before         -- machine-scoped, before any state change
+2. transition T    before  -- transition-scoped, before any state change
+3. state S         on leave -- source state
+4. [state changes: S → D, payload bound]
+5. state D         on enter -- destination state
+6. transition T    after   -- transition-scoped, after enter
+7. @machine.after          -- machine-scoped, after enter and transition.after
 ```
+
+**Entering the initial state** is treated as a transition from the pseudo-state `:__init` to the initial state: only hooks 4 (state changes), 5 (initial.on enter), and 7 (`@machine.after`) fire. `@machine.before` and `transition.before` do **not** fire on initial entry — the app did not send an event; initialization happened as part of `@on launch`.
+
+**Terminating state** (a state with no transitions) fires `state on leave` when the machine reaches end-of-life (e.g. app suspend / unload); `@machine.after` does not fire on termination.
+
+If a hook returns an error, subsequent hooks in the same transition are **not** run and the transition is rolled back: the machine remains in state `S`, the state payload is unchanged, and the error propagates up through `send()`.
 
 ### 8.6 Reactive Transitions (`watch:`)
 
