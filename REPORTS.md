@@ -704,3 +704,13 @@ Session #3 continued.
 **No fixture change**: no fixture uses `@migration` today (the interp_test.c has an integer-block example that continues to work), so migration is purely a spec-level fix.
 
 **Why this matters**: `@migration` is a load-time control-flow primitive — an app that can't migrate can't ship a data-schema update. If the spec teaches a shape the parser rejects, every real-world app shipping its v1.1 schema fix would hit a parse error at first load and the user would lose whatever state the new version depends on. This is exactly the kind of drift the combinatorial audit is designed to kill: the runtime had the right shape, the spec had the wrong shape, and no fixture exercised the gap because no fixture did migrations.
+
+### Concept #19 — `log.debug` added to runtime (spec §3 completeness)
+
+Session #3 continued.
+
+**Drift**: spec `03-deck-os §3 @builtin log` declares `debug / info / warn / error`. Runtime only registered `log.info / log.warn / log.error`. No fixture exercises `log.debug` today so the gap didn't bite — but any annex or app following the spec would hit "unknown function" at runtime.
+
+**Fix**: added `b_log_debug` backed by `ESP_LOGD` (no-op in production builds unless menuconfig opts in) and registered `log.debug` in the BUILTINS table.
+
+**One-line sister commit to close a full @builtin log surface**. No spec edit needed — spec was already correct. Completes the debug/info/warn/error quartet so every real-world annex author sees all four variants work.

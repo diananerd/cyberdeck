@@ -170,6 +170,16 @@ static deck_value_t *b_log_error(deck_value_t **args, uint32_t n, deck_interp_ct
         ESP_LOGE("deck.app", "%.*s", (int)args[0]->as.s.len, args[0]->as.s.ptr);
     return deck_retain(deck_unit());
 }
+/* Spec 03-deck-os §3 `@builtin log.debug`. Maps to ESP_LOGD — no-op in
+ * production builds (CONFIG_LOG_DEFAULT_LEVEL stops it by default) but
+ * visible via menuconfig when the developer opts in. */
+static deck_value_t *b_log_debug(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (args[0] && args[0]->type == DECK_T_STR)
+        ESP_LOGD("deck.app", "%.*s", (int)args[0]->as.s.len, args[0]->as.s.ptr);
+    return deck_retain(deck_unit());
+}
 static deck_value_t *b_time_now(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 { (void)a; (void)n; (void)c; return deck_new_int(deck_sdi_time_monotonic_us() / 1000); }
 static deck_value_t *b_info_device_id(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -792,6 +802,7 @@ static deck_value_t *b_to_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_
 
 static const builtin_t BUILTINS[] = {
     /* log */
+    { "log.debug",              b_log_debug,         1, 1 },
     { "log.info",               b_log_info,          1, 1 },
     { "log.warn",               b_log_warn,          1, 1 },
     { "log.error",              b_log_error,         1, 1 },
