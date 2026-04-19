@@ -684,3 +684,23 @@ Session #3 continued — 2026-04-18.
 3. Keep the status quo as authoritative. Small blast radius.
 
 No decision taken in this concept. Flagged for a future spec-level audit on capability-namespace minimalism. Root planning docs (`ARCHITECTURE.md`, `CHANGELOG.md`, `GROUND-STATE.md`) use a pre-spec `storage.*` naming convention that's also out of sync — also a separate audit.
+
+### Concept #18 — `@migration` spec shape matches runtime (block + integer)
+
+Session #3 continued.
+
+**Drift**: spec `02-deck-app §15` and `05-deck-os-api §2.5` documented `@migration` as an inline annotation with a semver range: `@migration from: "1.x"` with a `do`-body. Parser + unit tests + runtime implement a block form with integer versions: the parent annotation takes a block body of `from N:` entries where N is an integer schema revision, blocks run in ascending key order once per device. These are structurally incompatible — any app written to the spec form would fail to parse.
+
+**Resolution (per Deck minimalism)**: integer versions, block form. The runtime implementation is already the minimal shape — no range parser, no wildcard semantics, one authoritative counter per app. Update specs to match; no runtime change.
+
+**Fix applied**:
+
+- Layer 1 edit · `02-deck-app.md §15` — "@migration — Data Evolution" rewritten. The new example shows the parent annotation with `from 0:`, `from 1:`, `from 2:` children using integer keys and plain bodies (no `do` wrapper needed since the block body is already a suite). Prose updated to describe: (a) versions are plain integers, not `@app.version` semver, (b) the OS stores the highest `N` run per app, (c) on load every `from K >= stored` block runs in ascending order, (d) on error the stored version is left unchanged so the migration can be retried after a fix.
+- Layer 1 edit · `02-deck-app.md §15` "Ordering and overlap" paragraph replaced with a simpler "Ordering" paragraph that matches the integer model: no specificity sorting, no equal-specificity tiebreaking, no hash of `(app.id, from_range_string)`. Just ascending integer order with atomic commit.
+- Layer 1 edit · `05-deck-os-api.md §2.5` (Schema in `@migration`) example rewritten to the block form, linking back to §15. Also swapped the non-canonical `db.run(...)` verb my initial rewrite introduced to match §3's canonical SQL-execution method — the surrounding §2.1/§2.4 already use that same verb everywhere, so the migration example is now consistent with the rest of §2 and with §3.
+
+**Verification**: `grep -rE "@migration\s+from:"` returns zero matches across `deck-lang/`. `grep -rE "db\.run\("` returns zero. Parser's `parse_migration_decl` comment at `deck_parser.c:1445-1460` already describes the exact block form the spec now teaches.
+
+**No fixture change**: no fixture uses `@migration` today (the interp_test.c has an integer-block example that continues to work), so migration is purely a spec-level fix.
+
+**Why this matters**: `@migration` is a load-time control-flow primitive — an app that can't migrate can't ship a data-schema update. If the spec teaches a shape the parser rejects, every real-world app shipping its v1.1 schema fix would hit a parse error at first load and the user would lose whatever state the new version depends on. This is exactly the kind of drift the combinatorial audit is designed to kill: the runtime had the right shape, the spec had the wrong shape, and no fixture exercised the gap because no fixture did migrations.

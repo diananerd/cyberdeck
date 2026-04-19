@@ -1418,17 +1418,20 @@ Tasks are **app-level constructs**, not flow-level. Their lifecycle is tied to t
 
 ## 15. @migration — Data Evolution
 
-Runs when the app is updated before the new version starts. Each `@migration` runs only once per device (tracked by the OS).
+Runs when the app is updated before the new version starts. Migrations are indexed by integer schema version, tracked per-app by the OS. Each `from N:` block runs exactly once per device, in ascending key order, the first time the app is loaded with a schema version higher than `N`.
 
 ```
-@migration from: "semver_range"
-  do
+@migration
+  from 0:
     store.set("new_key", unwrap_opt_or(store.get("old_key"), ""))
     store.delete("old_key")
+  from 1:
     db.exec("ALTER TABLE posts ADD COLUMN score REAL DEFAULT 0.0")
+  from 2:
+    db.exec("CREATE INDEX IF NOT EXISTS idx_posts_score ON posts(score)")
 ```
 
-`from:` accepts semver ranges: `"1.x"`, `"1.2.x"`, `"<2.0"`.
+Migration versions are plain integers — not the `@app.version` semver. The OS stores the highest `N` run for each app; on next load, every `from K >= stored` block runs in ascending order, then stores `max(K) + 1`. Integer versioning keeps the model minimal: no range parser, no wildcard matching, one authoritative counter per app. The loader refuses to load the app if any `from N:` body returns an error — migration is all-or-nothing.
 
 **Migration execution context**: Migrations run before `@on launch`, before the app's capability aliases are in scope. The following capabilities are always available inside a `@migration` body under their canonical names, regardless of what aliases are declared in `@use`:
 
@@ -1445,7 +1448,7 @@ Available operations inside `@migration`:
 - `nvs.*` — NVS operations
 - `config.set(field: str, value: any)` — set a config field to a new default value
 
-**Ordering and overlap**: When updating, the OS identifies all `@migration` blocks whose `from:` range matches the installed version. They are sorted by specificity (most specific first: `"1.2.3"` before `"1.2.x"` before `"1.x"` before `"<2.0"`). If two blocks have equal specificity, they run in declaration order. Multiple blocks may match and all run. The OS tracks which blocks have run by a hash of `(app.id, from_range_string)` — a block never runs twice on the same device.
+**Ordering**: On each app load the OS reads the stored schema version `S` (default `0` for a newly installed app), then runs every `from N:` block where `N >= S` in ascending `N` order. After all bodies succeed, the OS stores `max(N) + 1` as the new schema version. If any body errors, the stored version is left at `S` — the migration can be retried on the next load after the bug is fixed, and no half-migrated state is committed.
 
 If a migration fails (returns `:err` or panics), the app does not start. The OS reports the failure with the migration's `from:` range and the error. The migration is not re-attempted on subsequent launches; the failed state is reported to the user until a new app version is installed.
 

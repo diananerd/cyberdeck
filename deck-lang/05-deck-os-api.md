@@ -99,9 +99,11 @@ let result = db.transaction(_ ->
 
 ### 2.5 Schema in @migration
 
+Schema migrations use `@migration`'s block-of-`from N:`-entries form (see `02-deck-app §15`). Integer versions run in ascending order once per device.
+
 ```
-@migration from: "1.x"
-  do
+@migration
+  from 1:
     db.exec("""
       ALTER TABLE posts ADD COLUMN score REAL DEFAULT 0.0
     """)
