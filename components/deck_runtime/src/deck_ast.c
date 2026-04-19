@@ -273,7 +273,18 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
             }
             break;
         case AST_ON:
-            sp_printf(p, " :%s ", n->as.on.event ? n->as.on.event : "");
+            sp_printf(p, " :%s", n->as.on.event ? n->as.on.event : "");
+            if (n->as.on.n_params > 0) {
+                sp_puts(p, " (");
+                for (uint32_t i = 0; i < n->as.on.n_params; i++) {
+                    if (i > 0) sp_putc(p, ' ');
+                    sp_printf(p, "%s:", n->as.on.params[i].field);
+                    sp_putc(p, ' ');
+                    print_node(p, n->as.on.params[i].pattern);
+                }
+                sp_putc(p, ')');
+            }
+            sp_putc(p, ' ');
             print_node(p, n->as.on.body);
             break;
         case AST_MACHINE:

@@ -101,6 +101,17 @@ static const parser_case_t CASES[] = {
       "@on launch:\n"
       "  log.info(\"hi\")\n",
       "(module (on :launch (do (call (dot (ident log) info) (str \"hi\")))))" },
+    /* Spec 02-deck-app §11 — dotted event path with named-binder clause
+     * and no trailing colon (spec-canonical form). */
+    { "mod_on_os_binders", TEST_MODULE,
+      "@on os.wifi_changed (ssid: s, connected: c)\n"
+      "  log.info(\"wifi\")\n",
+      "(module (on :os.wifi_changed (ssid: (pat_ident s) connected: (pat_ident c)) (do (call (dot (ident log) info) (str \"wifi\")))))" },
+    /* §11 — value-pattern clause (filters dispatch). */
+    { "mod_on_hw_pattern", TEST_MODULE,
+      "@on hardware.button (id: 0, action: :press):\n"
+      "  log.info(\"pressed\")\n",
+      "(module (on :hardware.button (id: (pat_lit (int 0)) action: (pat_lit (atom :press))) (do (call (dot (ident log) info) (str \"pressed\")))))" },
     { "mod_machine",  TEST_MODULE,
       "@machine m\n"
       "  state a:\n"

@@ -1190,18 +1190,80 @@ static const char *default_alias_of(const char *module)
     return deck_intern(tail + 1, (uint32_t)strlen(tail + 1));
 }
 
+/* Spec 02-deck-app §11 — `@on <dotted.event>` with optional parameter
+ * clause. Event names are dotted paths (e.g., `os.wifi_changed`), and
+ * the clause `(field: pattern, field: pattern)` after the name binds
+ * or pattern-matches payload fields. The trailing colon is optional
+ * (spec examples omit it; older fixtures include it — both accepted). */
 static ast_node_t *parse_on_decl(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_ON); if (!n) return NULL;
     advance(p); /* @on */
-    /* event is an identifier (launch/resume/terminate etc). */
-    if (at(p, TOK_IDENT)) {
-        n->as.on.event = p->cur.text; advance(p);
-    } else {
+    if (!at(p, TOK_IDENT)) {
         set_err(p, DECK_LOAD_PARSE_ERROR, "expected event name after @on");
         return NULL;
     }
-    if (!expect(p, TOK_COLON, "expected ':' after @on event")) return NULL;
+    /* Dotted path: os.wifi_changed, hardware.button, etc. */
+    char scratch[128];
+    uint32_t k = (uint32_t)snprintf(scratch, sizeof(scratch), "%s", p->cur.text);
+    advance(p);
+    while (at(p, TOK_DOT)) {
+        advance(p);
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "expected ident after '.' in @on event path");
+            return NULL;
+        }
+        if (k < sizeof(scratch) - 1) scratch[k++] = '.';
+        k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k,
+                                "%s", p->cur.text);
+        advance(p);
+    }
+    n->as.on.event = deck_intern(scratch, k);
+
+    /* Optional parameter clause `(field: pattern, field: pattern, ...)`.
+     * Each entry's pattern is parsed via parse_pattern so `s` is a
+     * binder, `0` is a literal-value filter, and `_` is accept-any. */
+    if (at(p, TOK_LPAREN)) {
+        advance(p);
+        ast_on_param_t buf[16];
+        uint32_t np = 0;
+        if (!at(p, TOK_RPAREN)) {
+            for (;;) {
+                if (np >= 16) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                            "@on parameter clause: too many fields (max 16)");
+                    return NULL;
+                }
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                            "expected field name in @on parameter clause");
+                    return NULL;
+                }
+                const char *field = p->cur.text;
+                advance(p);
+                if (!expect(p, TOK_COLON,
+                            "expected ':' after field name in @on clause"))
+                    return NULL;
+                ast_node_t *pat = parse_pattern(p);
+                if (!pat) return NULL;
+                buf[np].field   = field;
+                buf[np].pattern = pat;
+                np++;
+                if (!at(p, TOK_COMMA)) break;
+                advance(p);
+            }
+        }
+        if (!expect(p, TOK_RPAREN, "expected ')' closing @on parameter clause"))
+            return NULL;
+        n->as.on.params   = deck_arena_memdup(p->arena, buf,
+                                              np * sizeof(ast_on_param_t));
+        n->as.on.n_params = np;
+    }
+
+    /* Trailing `:` is optional (spec shows both forms). */
+    if (at(p, TOK_COLON)) advance(p);
+
     n->as.on.body = parse_suite(p);
     if (!n->as.on.body) return NULL;
     return n;

@@ -115,6 +115,19 @@ typedef struct {
     ast_node_t *value;
 } ast_app_field_t;
 
+/* Spec 02-deck-app §11 — one entry in an `@on` parameter clause.
+ * `field` is the payload field name the handler is binding or matching.
+ * `pattern` is an AST pattern node:
+ *   - AST_PAT_IDENT        →  binder (captures value into the name)
+ *   - AST_PAT_WILD         →  `_` (accept any value, no binding)
+ *   - AST_PAT_LIT / other  →  value-pattern filter (handler fires only
+ *                             when the incoming field equals the value)
+ */
+typedef struct {
+    const char *field;
+    ast_node_t *pattern;
+} ast_on_param_t;
+
 /* Spec 02-deck-app §4 — one entry in an `@use` block body:
  *   capability.path  as alias  [optional | when: cond]
  *   ./local/path
@@ -194,7 +207,22 @@ struct ast_node {
             const char      *alias;        /* = entries[0].alias  when n==1 */
             bool             is_optional;  /* = entries[0].is_optional when n==1 */
         } use;
-        struct { const char *event; ast_node_t *body; } on;
+        /* Spec 02-deck-app §11 — `@on <dotted.event>` with optional
+         * parameter clause. Three binding styles (documented in §11):
+         *   (a) no params      — `@on os.locked`             — payload via `event`
+         *   (b) named binders  — `@on os.wifi_changed (ssid: s, connected: c)`
+         *   (c) value patterns — `@on hardware.button (id: 0, action: :press)`
+         *
+         * `params` is an array of `ast_on_param_t {field, pattern}` pairs.
+         * `pattern` is parsed by parse_pattern, so an IDENT there is a
+         * binder, a literal/atom is a value-pattern filter, and `_` is
+         * wildcard-accept. n_params == 0 means no clause (style a). */
+        struct {
+            const char       *event;
+            ast_on_param_t   *params;
+            uint32_t          n_params;
+            ast_node_t       *body;
+        } on;
         struct { const char *name; ast_list_t states; }        machine;
         struct { const char *name; ast_list_t hooks; }         state;
         struct { const char *kind; ast_node_t *body; }         state_hook; /* "enter" | "leave" | atom for transition */

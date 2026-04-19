@@ -534,3 +534,30 @@ Session #3 continued — 2026-04-18.
 - Previously-passing `edge_empty_strings` / `edge_unicode` / `edge_long_string` continue to pass under the new operator via one-to-one substitution of the literal.
 
 **Why this matters (A → B pattern)**: yet another textbook case. The deepening work renamed the operator in the *fixtures* without touching the *lexer*, so the fixtures "looked right" but were silently un-parseable. Meanwhile the still-legacy fixtures continued to pass, giving the conformance harness green lights that implied more coverage than existed. Concept #12 closes the lexer/spec gap and rewrites the remaining legacy fixtures so there's exactly one operator in use everywhere. Backwards-compat would require dual acceptance (`++` and `<>`), which the no-shim rule rejects — removing `<>` forces anyone who reintroduces it to explicitly choose dual-accept, not copy-paste a stale lexer.
+
+### Concept #13 — `@on` with dotted event paths + parameter clauses (spec §11)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery (layer 4 ↔ layer 1)**: spec `02-deck-app §11` describes three binding styles for `@on`:
+- no params (implicit `event` payload): `@on os.locked`
+- named binders: `@on os.wifi_changed (ssid: s, connected: c)`
+- value-pattern filters: `@on hardware.button (id: 0, action: :press)`
+
+Event names can be dotted paths rooted in OS-provided events (`os.*`, `hardware.*`). The trailing `:` before the body is absent in spec examples. Current parser (`parse_on_decl`) accepts only a single bare IDENT followed by a mandatory `:` — so every dotted event name and every parameterised form from §11 raises a parse error silently. No fixture uses the spec form yet, so the harness reports green; but any annex or realistic app that follows §11 won't load.
+
+**Fix applied**:
+
+- 2026-04-18 · layer 4 edit · `include/deck_ast.h` — new `ast_on_param_t {field, pattern}` struct at file scope. `AST_ON` payload gained `params` + `n_params`; `pattern` is an AST pattern node so `parse_pattern` handles binder / literal / atom / wildcard uniformly (the match-side vocabulary reused for dispatch-time filtering).
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_on_decl` — rewritten to (a) accumulate a dotted event path into an interned string, (b) optionally parse a `(field: pattern, …)` clause of up to 16 entries, (c) make the trailing `:` optional so spec-canonical bodies parse. Each parameter value is parsed with `parse_pattern`: an IDENT is a binder, a literal/atom is a filter, `_` is accept-any.
+- 2026-04-18 · layer 4 edit · `src/deck_ast.c:print_node` — AST_ON printer emits `(on :<event> (f1: <pat> f2: <pat>) <body>)` when params are present, falling back to the pre-concept-#13 form `(on :<event> <body>)` when there are none. Existing `mod_on` parser golden unchanged.
+- 2026-04-18 · layer 5 edit · `src/deck_parser_test.c` — new cases:
+  * `mod_on_os_binders` — `@on os.wifi_changed (ssid: s, connected: c)` (no trailing colon, named binders) → `(module (on :os.wifi_changed (ssid: (pat_ident s) connected: (pat_ident c)) …))`
+  * `mod_on_hw_pattern` — `@on hardware.button (id: 0, action: :press):` (trailing colon, value patterns) → `(module (on :hardware.button (id: (pat_lit (int 0)) action: (pat_lit (atom :press))) …))`
+
+**Scope**:
+- Parsing only — the runtime dispatcher (`deck_interp.c` `run_on_launch` / `find_on_event`) still looks up handlers by exact event name string. Existing lifecycle events (`launch`, `resume`, `suspend`, `terminate`, etc.) continue to dispatch exactly as before.
+- OS event delivery (how `os.wifi_changed` actually invokes an `@on` handler with a payload record) is a layer-4 concept for the next step — requires wiring the `CYBERDECK_EVENT` bus into the interp via a new dispatch path. This concept closes the parse-time gap; the runtime-time gap is now the only remaining hurdle.
+- Binder / pattern semantics at dispatch time (bind `s` from `event.ssid`, or filter-reject when `event.action != :press`) follow from the existing pattern-match machinery plus a small helper that, given an event record, walks the `params[]` array and either extends the environment (binders) or fails the match (value patterns). Deferred to the same runtime-dispatch concept.
+
+**Why this matters (A → B pattern)**: §11 is the single most-referenced part of the app model in realistic Deck apps (every annex uses `@on os.*` or `@on hardware.*`). Leaving the parser stuck on single-IDENT form meant every annex-style app would have thrown a parse error at load — but the conformance harness only exercises lifecycle events, so the gap was invisible. This commit makes the spec-canonical form parse; the absence of runtime dispatch is now the explicit next step, tracked in this REPORTS entry rather than silently buried.
