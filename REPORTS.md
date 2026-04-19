@@ -833,3 +833,24 @@ Parser's `parse_machine_decl` body loop accepted only `state` and `initial` afte
 - **`from *` wildcard + `to history`** navigation semantics (§8.4).
 
 **Why this matters**: same as concept #22 — the annex set had not one but three parser-level blockers in the first 20 lines of each machine. With concepts #14 (`state :atom` + `initial :atom`), #22 (state payloads + composition + bodyless), and #23 (top-level transitions), every annex's `@machine`/`@flow` header + state list + transition list now parses cleanly. The substantive work of actually *executing* those machines is the next concept tranche; but at least the harness can now report "loaded; would execute" instead of "parse error at line 53".
+
+### Concept #24 — `content =` inside state body (parse-and-discard, spec §8.2)
+
+Session #3 continued.
+
+**Drift**: spec §8.2 declares state bodies as `on enter:` / `on leave:` / `transition :x` / `content =`. Concept #22 accepted the first three; `content =` hit the "expected on/transition" error. Every annex (a/b/c/d) defines a content body for its primary states — annex-a:108, annex-b:112, annex-c:231, annex-d:138. Without this concept, the state-machine body fails to parse at the first `content =` line.
+
+**Scope**: parse-and-discard, same pattern as #21/#22/#23. The runtime has not yet implemented declarative content evaluation — `hello.deck` / `ping.deck` still use the legacy `bridge.ui.*` imperative builtins. Consuming the content body here lets state-machine declarations parse so the rest of the loader runs.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_parser.c:parse_state_decl` body loop — added a branch for `TOK_IDENT("content") + TOK_ASSIGN`. Two body shapes supported:
+  * Usual: `content =\n  <indented nodes>` — consumed via the nesting depth counter from `parse_opaque_block`.
+  * Inline: `content = expr` on the same line — consumed to NEWLINE.
+- Error message updated to list all three accepted constructs (`on`, `transition`, `content =`).
+
+**Deferred for concept #25+**:
+- **Declarative content evaluation**: parse the content nodes as a proper AST (AST_CONTENT with children for list/group/form/trigger/navigate/media/status/markdown/rich_text/loading/error) and evaluate to a DVC tree that the bridge can render. This removes the dependency on the legacy `bridge.ui.*` imperative builtins.
+- **Content reactivity**: when content references a stream (e.g. `list installed_apps`) the runtime must re-evaluate on stream emission (spec §8.7 "Implicit Reactivity"). Requires stream wiring from concept #21's `@stream` deferred piece.
+
+**Why this matters**: concepts #14, #22, #23, #24 together close every state-machine-body parse blocker identified in the current audit. Every annex's `@machine`/`@flow` grammar — header, state list with payloads/composition/bodies containing content=, initial declaration, top-level transitions — now parses end-to-end. The runtime still treats most of these as no-ops, but the loader runs through. The substantive runtime implementation of state-machine behaviour (dispatch, payload binding, content evaluation, reactivity) is the next tranche.

@@ -1583,8 +1583,45 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
             if (!tr) return NULL;
             while (at(p, TOK_NEWLINE)) advance(p);
             ast_list_push(p->arena, &st->as.state.hooks, tr);
+        } else if (at(p, TOK_IDENT) && p->cur.text &&
+                   strcmp(p->cur.text, "content") == 0) {
+            /* Spec 02-deck-app §8.2 — `content = <declarative nodes>` inside
+             * a state body declares what the user perceives when the state
+             * is active. Nodes are the §12 semantic primitives (list, group,
+             * form, trigger, navigate, media, status, markdown, …); the
+             * bridge infers presentation (§10-deck-bridge-ui).
+             *
+             * Parse-and-discard today: the runtime doesn't yet evaluate
+             * declarative content into DVC trees (the legacy `bridge.ui.*`
+             * imperative builtins are still what hello.deck / ping.deck
+             * use). Consuming the block here lets annex-a/b/c/d state
+             * machines parse so the rest of the loader runs; the DVC
+             * content-evaluator is a separate concept. */
+            advance(p); /* content */
+            if (!expect(p, TOK_ASSIGN, "expected '=' after `content` in state body")) return NULL;
+            /* Body is either an indented block (usual case) or a single
+             * inline expression on the same line. Discard either shape. */
+            if (at(p, TOK_NEWLINE)) {
+                advance(p);
+                while (at(p, TOK_NEWLINE)) advance(p);
+                if (at(p, TOK_INDENT)) {
+                    advance(p);
+                    uint32_t depth = 1;
+                    while (depth > 0 && !at(p, TOK_EOF)) {
+                        if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                        else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+                        else                        { advance(p); }
+                    }
+                }
+            } else {
+                /* Inline RHS — consume to end of line. */
+                while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
+                    advance(p);
+                while (at(p, TOK_NEWLINE)) advance(p);
+            }
         } else {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected on/transition in state body");
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "expected `on`, `transition`, or `content =` in state body");
             return NULL;
         }
     }
