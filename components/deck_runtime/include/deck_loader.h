@@ -43,6 +43,8 @@ typedef enum {
     DL1_CAP_OS        = 1u << 8,   /* os.resume/suspend/terminate */
     DL1_CAP_LIST      = 1u << 9,   /* DL2 F21.4 — list.len/head/get */
     DL1_CAP_MAP       = 1u << 10,  /* DL2 F21.6 — map.* */
+    DL1_CAP_BRIDGE    = 1u << 11,  /* DL2 F28 Phase 2 — bridge.ui.* builders */
+    DL1_CAP_ASSET     = 1u << 12,  /* DL2 F28.5 — asset.path(name) */
 } deck_dl1_cap_t;
 
 typedef struct {

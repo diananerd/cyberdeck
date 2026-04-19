@@ -92,3 +92,11 @@ deck_sdi_err_t deck_bridge_ui_navbar_init(deck_bridge_ui_nav_cb_t back_cb,
     ESP_LOGI(TAG, "navbar mounted (%dpx)", NB_HEIGHT);
     return DECK_SDI_OK;
 }
+
+void deck_bridge_ui_navbar_relayout(void)
+{
+    /* Re-size + re-align after rotation. Caller holds the UI lock. */
+    if (!s_bar) return;
+    lv_obj_set_size(s_bar, lv_disp_get_hor_res(NULL), NB_HEIGHT);
+    lv_obj_align(s_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+}

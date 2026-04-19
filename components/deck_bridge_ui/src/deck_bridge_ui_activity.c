@@ -139,6 +139,12 @@ deck_bridge_ui_activity_t *deck_bridge_ui_activity_current(void)
 
 size_t deck_bridge_ui_activity_depth(void) { return s_depth; }
 
+deck_bridge_ui_activity_t *deck_bridge_ui_activity_at(size_t idx)
+{
+    if (idx >= s_depth) return NULL;
+    return &s_stack[idx];
+}
+
 void deck_bridge_ui_activity_set_state(void *state)
 {
     if (s_depth > 0) s_stack[s_depth - 1].state = state;

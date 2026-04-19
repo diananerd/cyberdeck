@@ -12,6 +12,7 @@
 #include "deck_shell_settings.h"
 #include "deck_shell_rotation.h"
 #include "deck_shell_apps.h"
+#include "deck_shell_deck_apps.h"
 
 #include "deck_bridge_ui.h"
 
@@ -112,7 +113,7 @@ static void launcher_on_create(deck_bridge_ui_activity_t *act, void *intent_data
     lv_obj_set_flex_align(area, LV_FLEX_ALIGN_CENTER,
                             LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    /* Bundled DL2 demo apps. */
+    /* Bundled DL2 demo apps (C-side). */
     make_app_card(area, "[#]", "SETTINGS",
                    launcher_navigate_cb, (void *)(uintptr_t)APP_ID_SETTINGS, true);
     make_app_card(area, "[+]", "COUNTER",
@@ -121,11 +122,29 @@ static void launcher_on_create(deck_bridge_ui_activity_t *act, void *intent_data
                    launcher_navigate_cb, (void *)(uintptr_t)APP_ID_TASKMAN, true);
     make_app_card(area, "[N]", "NET HELLO",
                    launcher_navigate_cb, (void *)(uintptr_t)APP_ID_NET_HELLO, true);
-    /* Stubs for visual variety / future apps. */
-    make_app_card(area, "[?]", "BOOKS",    launcher_card_stub_cb, NULL, false);
-    make_app_card(area, "[?]", "NOTES",    launcher_card_stub_cb, NULL, false);
-    make_app_card(area, "[?]", "FILES",    launcher_card_stub_cb, NULL, false);
-    make_app_card(area, "[?]", "WIFI",     launcher_card_stub_cb, NULL, false);
+
+    /* F28 Phase 2 — .deck source apps. Label is the app name (uppercased
+     * for the visual grammar); tapping fires @on resume on the loaded
+     * handle. Stubs fill remaining slots if fewer than 4 .deck apps. */
+    uint32_t n_deck = deck_shell_deck_apps_count();
+    if (n_deck > 4) n_deck = 4;
+    for (uint32_t i = 0; i < n_deck; i++) {
+        deck_shell_deck_app_info_t info;
+        deck_shell_deck_apps_info(i, &info);
+        char label[32];
+        const char *src = info.name ? info.name : (info.id ? info.id : info.path);
+        size_t k = 0;
+        for (; src && src[k] && k < sizeof(label) - 1; k++) {
+            char ch = src[k];
+            label[k] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+        }
+        label[k] = '\0';
+        make_app_card(area, "[*]", label,
+                       launcher_navigate_cb, (void *)(uintptr_t)info.app_id, true);
+    }
+    for (uint32_t i = n_deck; i < 4; i++) {
+        make_app_card(area, "[?]", "SLOT",  launcher_card_stub_cb, NULL, false);
+    }
 }
 
 static const deck_bridge_ui_lifecycle_t s_launcher_cbs = {
@@ -153,6 +172,12 @@ deck_err_t deck_shell_dl2_boot(void)
     /* Register intent resolvers for all bundled apps. */
     deck_shell_settings_register();
     deck_shell_apps_register();
+
+    /* F28 Phase 2 — scan the apps partition for *.deck files, load each
+     * via the persistent app runtime, and register an intent resolver so
+     * taps fire @on resume. Failures here are non-fatal — we boot the
+     * OS without user apps if none are present or any fail to parse. */
+    deck_shell_deck_apps_scan_and_register();
 
     /* Show lockscreen — fires on_unlocked synchronously if no PIN. */
     deck_shell_lockscreen_show(on_unlocked);

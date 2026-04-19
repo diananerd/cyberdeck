@@ -1,0 +1,22 @@
+@app
+  name: "Ping"
+  id: "sys.ping"
+  version: "1.0.0"
+  edition: 2026
+
+@requires
+  deck_level: 1
+
+@on launch:
+  log.info("ping.deck: loaded")
+
+@on resume:
+  let now   = time.now_us()
+  let title = bridge.ui.label("PING")
+  let info  = bridge.ui.data_row("TIME (US):", str(now))
+  let hint  = bridge.ui.label("Close with the BACK navbar gesture.")
+  let root  = bridge.ui.column([title, info, hint])
+  bridge.ui.render(root)
+
+@on pause:
+  log.info("ping.deck: paused")

@@ -116,36 +116,59 @@ typedef struct {
     lv_obj_t *backdrop;
     uint32_t  ok_intent_id;
     uint32_t  cancel_intent_id;
+    /* Optional callbacks (mutually exclusive with intent_id usage). */
+    deck_bridge_ui_overlay_cb_t on_ok;
+    deck_bridge_ui_overlay_cb_t on_cancel;
+    void                        *user_data;
 } confirm_state_t;
 
-static void confirm_dismiss(confirm_state_t *cs, uint32_t intent_id)
+static void confirm_dismiss(confirm_state_t *cs, bool is_ok)
 {
+    if (!cs) return;
+    /* Copy out everything we need before freeing — the callback may
+     * re-enter (push activity, pop, etc.) and we must not deref cs
+     * after we've freed it. */
+    uint32_t intent_id = is_ok ? cs->ok_intent_id : cs->cancel_intent_id;
+    deck_bridge_ui_overlay_cb_t cb = is_ok ? cs->on_ok : cs->on_cancel;
+    void *ud = cs->user_data;
+
+    /* Tear down the dialog BEFORE the callback runs, so a callback that
+     * pushes/pops activities doesn't interact with the dialog's widgets. */
+    if (cs->backdrop) lv_obj_del(cs->backdrop);
+    lv_mem_free(cs);
+
     if (intent_id != 0) {
         ESP_LOGI(TAG, "confirm intent fired: id=%u", (unsigned)intent_id);
     }
-    if (cs && cs->backdrop) lv_obj_del(cs->backdrop);
-    if (cs) lv_mem_free(cs);
+    if (cb) cb(ud);
 }
 
 static void confirm_ok_cb(lv_event_t *e)
 {
     confirm_state_t *cs = (confirm_state_t *)lv_event_get_user_data(e);
-    confirm_dismiss(cs, cs ? cs->ok_intent_id : 0);
+    confirm_dismiss(cs, true);
 }
 static void confirm_cancel_cb(lv_event_t *e)
 {
     confirm_state_t *cs = (confirm_state_t *)lv_event_get_user_data(e);
-    confirm_dismiss(cs, cs ? cs->cancel_intent_id : 0);
+    confirm_dismiss(cs, false);
 }
 
 static void confirm_show(const char *title, const char *message,
                           const char *ok_label, const char *cancel_label,
-                          uint32_t ok_intent, uint32_t cancel_intent)
+                          uint32_t ok_intent, uint32_t cancel_intent,
+                          deck_bridge_ui_overlay_cb_t on_ok,
+                          deck_bridge_ui_overlay_cb_t on_cancel,
+                          void *user_data)
 {
     confirm_state_t *cs = lv_mem_alloc(sizeof(*cs));
     if (!cs) return;
+    memset(cs, 0, sizeof(*cs));
     cs->ok_intent_id     = ok_intent;
     cs->cancel_intent_id = cancel_intent;
+    cs->on_ok            = on_ok;
+    cs->on_cancel        = on_cancel;
+    cs->user_data        = user_data;
 
     /* Backdrop. */
     cs->backdrop = lv_obj_create(lv_layer_top());
@@ -267,7 +290,8 @@ bool deck_bridge_ui_render_overlay(const deck_dvc_node_t *n)
             const char *cnclbl = (c && (c->type == DVC_ATTR_STR ||
                                           c->type == DVC_ATTR_ATOM))
                                      ? c->value.s : "CANCEL";
-            confirm_show(title, msg, oklbl, cnclbl, n->intent_id, 0);
+            confirm_show(title, msg, oklbl, cnclbl,
+                         n->intent_id, 0, NULL, NULL, NULL);
             return true;
         }
         default:
@@ -294,7 +318,20 @@ void deck_bridge_ui_overlay_confirm(const char *title, const char *message,
 {
     if (deck_bridge_ui_lock(200)) {
         confirm_show(title, message, ok_label, cancel_label,
-                     ok_intent, cancel_intent);
+                     ok_intent, cancel_intent, NULL, NULL, NULL);
+        deck_bridge_ui_unlock();
+    }
+}
+
+void deck_bridge_ui_overlay_confirm_cb(const char *title, const char *message,
+                                        const char *ok_label, const char *cancel_label,
+                                        deck_bridge_ui_overlay_cb_t on_ok,
+                                        deck_bridge_ui_overlay_cb_t on_cancel,
+                                        void *user_data)
+{
+    if (deck_bridge_ui_lock(200)) {
+        confirm_show(title, message, ok_label, cancel_label,
+                     0, 0, on_ok, on_cancel, user_data);
         deck_bridge_ui_unlock();
     }
 }

@@ -147,3 +147,12 @@ deck_sdi_err_t deck_bridge_ui_statusbar_init(void)
     ESP_LOGI(TAG, "statusbar mounted (%dpx, refresh=%dms)", SB_HEIGHT, SB_REFRESH_MS);
     return DECK_SDI_OK;
 }
+
+void deck_bridge_ui_statusbar_relayout(void)
+{
+    /* Re-size + re-align to the new display dimensions after a rotation.
+     * Must run with the UI lock already held (caller's responsibility). */
+    if (!s_bar) return;
+    lv_obj_set_size(s_bar, lv_disp_get_hor_res(NULL), SB_HEIGHT);
+    lv_obj_align(s_bar, LV_ALIGN_TOP_MID, 0, 0);
+}

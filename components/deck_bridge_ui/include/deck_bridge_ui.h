@@ -57,10 +57,29 @@ void deck_bridge_ui_overlay_confirm(const char *title, const char *message,
                                      uint32_t ok_intent,
                                      uint32_t cancel_intent);
 
+/* Callback-based confirm. Convenience for C consumers that want to run
+ * an action directly instead of routing through the DVC intent_id
+ * mechanism. Either/both callbacks may be NULL. The overlay is always
+ * dismissed first, then the callback fires — so the callback may push a
+ * new activity / pop the current one safely without touching the
+ * dialog's widget tree. */
+typedef void (*deck_bridge_ui_overlay_cb_t)(void *user_data);
+void deck_bridge_ui_overlay_confirm_cb(const char *title, const char *message,
+                                        const char *ok_label,
+                                        const char *cancel_label,
+                                        deck_bridge_ui_overlay_cb_t on_ok,
+                                        deck_bridge_ui_overlay_cb_t on_cancel,
+                                        void *user_data);
+
 /* ---------- Statusbar (top dock — time + WiFi + battery) ---------- */
 
 deck_sdi_err_t deck_bridge_ui_statusbar_init(void);
 void           deck_bridge_ui_statusbar_refresh(void);
+/* Resize + re-align the statusbar / navbar after a display rotation.
+ * Called internally by deck_bridge_ui_set_rotation; exposed for test
+ * harnesses and platforms that rotate the display through other paths. */
+void           deck_bridge_ui_statusbar_relayout(void);
+void           deck_bridge_ui_navbar_relayout(void);
 
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 
@@ -99,8 +118,23 @@ deck_sdi_err_t deck_bridge_ui_activity_pop(void);
 deck_sdi_err_t deck_bridge_ui_activity_pop_to_home(void);
 deck_bridge_ui_activity_t *deck_bridge_ui_activity_current(void);
 size_t        deck_bridge_ui_activity_depth(void);
+/* Read-only access to a specific activity by stack index. idx=0 is the
+ * launcher (bottom), idx=depth-1 is the top. Returns NULL for out-of-
+ * range. Pointer is valid until the next push/pop/recreate. */
+deck_bridge_ui_activity_t *deck_bridge_ui_activity_at(size_t idx);
 void          deck_bridge_ui_activity_set_state(void *state);
 void          deck_bridge_ui_activity_recreate_all(void);
+
+/* ---------- Intent hook ----------
+ *
+ * When a rendered widget with `intent_id != 0` is activated (trigger
+ * click, toggle change, slider release, …), the decoder invokes the
+ * registered hook so higher layers can route the intent. Passing NULL
+ * clears the hook; missing hook = no-op. Called from the LVGL task
+ * context with the UI lock held. */
+typedef void (*deck_bridge_ui_intent_hook_t)(uint32_t intent_id);
+
+void deck_bridge_ui_set_intent_hook(deck_bridge_ui_intent_hook_t hook);
 
 /* ---------- Rotation ---------- */
 

@@ -1,0 +1,27 @@
+@app
+  name: "Conf app.assets"
+  id: "conf.app.assets"
+  version: "1.0.0"
+  edition: 2026
+
+@requires
+  deck_level: 1
+
+@assets
+  icon: "/assets/icon.png"
+  font: "/assets/mono.ttf"
+
+@on launch:
+  let maybe = asset.path("icon")
+  let path = match maybe
+    | some(p) -> p
+    | none -> "missing"
+    | _ -> "unreachable"
+  let missing = asset.path("nonexistent")
+  let ok1 = path == "/assets/icon.png"
+  let ok2 = match missing
+    | none -> true
+    | some(_) -> false
+    | _ -> false
+  let all_ok = ok1 && ok2
+  log.info(if all_ok then "DECK_CONF_OK:app.assets" else "DECK_CONF_FAIL:app.assets")

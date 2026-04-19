@@ -1,0 +1,26 @@
+@app
+  name: "Conf app.machine_hooks"
+  id: "conf.app.machine_hooks"
+  version: "1.0.0"
+  edition: 2026
+
+@requires
+  deck_level: 1
+
+@on launch:
+  log.info("app.machine_hooks: launch")
+
+@machine lifecycle
+  state boot:
+    on enter:
+      log.info("app.machine_hooks: boot")
+    transition :ready
+  state ready:
+    on enter:
+      log.info("app.machine_hooks: ready")
+
+@machine.before:
+  log.info("app.machine_hooks:before")
+
+@machine.after:
+  log.info("DECK_CONF_OK:app.machine_hooks")

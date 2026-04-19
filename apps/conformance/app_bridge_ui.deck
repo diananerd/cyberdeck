@@ -1,0 +1,17 @@
+@app
+  name: "Conf app.bridge_ui"
+  id: "conf.app.bridge_ui"
+  version: "1.0.0"
+  edition: 2026
+
+@requires
+  deck_level: 1
+
+@on launch:
+  let title = bridge.ui.label("CONF")
+  let row   = bridge.ui.data_row("STATUS:", "ok")
+  let div   = bridge.ui.divider()
+  let body  = bridge.ui.column([title, div, row])
+  let root  = bridge.ui.group("CONF.APP.BRIDGE_UI", [body])
+  bridge.ui.render(root)
+  log.info("DECK_CONF_OK:app.bridge_ui")

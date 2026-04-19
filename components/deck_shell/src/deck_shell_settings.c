@@ -71,6 +71,14 @@ static void rot_btn_cb(lv_event_t *e)
     deck_shell_rotation_set((deck_bridge_ui_rotation_t)rot);
 }
 
+static void rot_unavailable_cb(lv_event_t *e)
+{
+    (void)e;
+    deck_bridge_ui_overlay_toast(
+        "Rotation 90/180/270 disabled — LVGL sw_rotate + partial buffer conflict. "
+        "See CHANGELOG Known Issues.", 2500);
+}
+
 static void display_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
 {
     (void)intent_data;
@@ -101,9 +109,21 @@ static void display_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
         lv_obj_t *b = lv_btn_create(row);
         lv_obj_set_size(b, 80, 48);
         lv_obj_set_style_radius(b, 12, LV_PART_MAIN);
-        lv_obj_set_style_border_color(b, CD_PRIMARY, LV_PART_MAIN);
+        bool is_cur = (i == (int)cur);
+        /* Non-0 rotations are currently disabled: LVGL sw_rotate needs
+         * a full-screen draw buffer to work, and our partial buffer
+         * (48 lines) doesn't support it — enabling sw_rotate crashes at
+         * boot. Plus the RGB LCD flush path doesn't translate rotated
+         * coordinates back to native panel orientation, so pixels would
+         * appear mis-placed even with a full buffer. Until a proper
+         * rotation-aware flush_cb lands, only 0° is selectable; other
+         * buttons render dim + tap shows a toast. */
+        bool disabled = !is_cur && i != 0;
+        lv_color_t border = is_cur ? CD_PRIMARY :
+                            (disabled ? CD_PRIMARY_DIM : CD_PRIMARY);
+        lv_obj_set_style_border_color(b, border, LV_PART_MAIN);
         lv_obj_set_style_border_width(b, 2, LV_PART_MAIN);
-        if (i == (int)cur) {
+        if (is_cur) {
             lv_obj_set_style_bg_color(b, CD_PRIMARY, LV_PART_MAIN);
             lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
         } else {
@@ -112,12 +132,13 @@ static void display_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, labels[i]);
         lv_obj_set_style_text_color(l,
-                                     i == (int)cur ? CD_BG_DARK : CD_PRIMARY,
+                                     is_cur    ? CD_BG_DARK :
+                                     disabled  ? CD_PRIMARY_DIM : CD_PRIMARY,
                                      LV_PART_MAIN);
         lv_obj_center(l);
         lv_obj_clear_flag(b, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-        lv_obj_add_event_cb(b, rot_btn_cb, LV_EVENT_CLICKED,
-                             (void *)(intptr_t)i);
+        lv_obj_add_event_cb(b, disabled ? rot_unavailable_cb : rot_btn_cb,
+                             LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
 }
 

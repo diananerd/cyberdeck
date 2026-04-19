@@ -184,6 +184,13 @@ deck_sdi_err_t deck_bridge_ui_lvgl_init(void)
     s_disp_drv.flush_cb = lvgl_flush_cb;
     s_disp_drv.draw_buf = &s_disp_buf;
     s_disp_drv.full_refresh = false;
+    /* NOTE: sw_rotate=1 would be required for LVGL to rotate the
+     * framebuffer, but the default LVGL sw-rotate path expects a full
+     * screen-size draw buffer; we only allocate 48 lines (partial
+     * refresh). Enabling sw_rotate with partial buffers triggers boot
+     * crashes in LVGL 8.4. The indev coordinate transform (which reads
+     * disp->driver->rotated) works regardless of sw_rotate — so touch
+     * rotates correctly as long as `lv_disp_set_rotation` runs. */
     s_disp = lv_disp_drv_register(&s_disp_drv);
     if (!s_disp) {
         ESP_LOGE(TAG, "lv_disp_drv_register failed");
@@ -238,13 +245,20 @@ deck_sdi_err_t deck_bridge_ui_lvgl_init(void)
 
 static deck_bridge_ui_rotation_t s_rotation = DECK_BRIDGE_UI_ROT_0;
 
-deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t rot)
+/* Worker that actually applies the rotation + recreates activities.
+ * Scheduled via lv_async_call so it runs on a clean LVGL tick *after*
+ * the triggering event handler has returned. Otherwise recreate_all
+ * deletes the LVGL screen (and widget tree) whose own event callback
+ * we're currently inside — classic use-after-free crash surfaced by
+ * tapping a rotation button in Settings. */
+static void rotation_apply_async(void *user_data)
 {
-    if (!s_inited || !s_disp) return DECK_SDI_ERR_FAIL;
-    if (rot > DECK_BRIDGE_UI_ROT_270) return DECK_SDI_ERR_INVALID_ARG;
-    if (!deck_bridge_ui_lock(500)) return DECK_SDI_ERR_BUSY;
-
-    /* Map our enum to LVGL's. v8 uses LV_DISP_ROT_NONE..270 (degrees). */
+    deck_bridge_ui_rotation_t rot = (deck_bridge_ui_rotation_t)(uintptr_t)user_data;
+    if (!s_inited || !s_disp) return;
+    if (!deck_bridge_ui_lock(500)) {
+        ESP_LOGW(TAG, "rotation: lock timeout");
+        return;
+    }
     lv_disp_rot_t lv_rot;
     switch (rot) {
         default:
@@ -259,12 +273,32 @@ deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t rot)
     lv_disp_set_rotation(s_disp, lv_rot);
     s_rotation = rot;
 
+    /* Chrome (statusbar + navbar) lives on lv_layer_top with a fixed
+     * width baked in at init time from hor_res. After rotation the
+     * display dimensions swap; resize + re-align so the chrome spans
+     * the new horizontal axis. */
+    deck_bridge_ui_statusbar_relayout();
+    deck_bridge_ui_navbar_relayout();
+
     deck_bridge_ui_unlock();
 
-    /* Rebuild every activity for the new dimensions. recreate_all
-     * takes the lock itself. */
+    /* Rebuild every activity for the new dimensions. recreate_all takes
+     * the lock itself. Safe here because (a) we're already on the LVGL
+     * task via lv_async_call so the triggering event handler has returned,
+     * and (b) adapters that cache state (e.g. deck_shell_deck_apps) now
+     * look their data up by act->app_id instead of relying on a->state
+     * surviving the NULL reset inside recreate_all. */
     deck_bridge_ui_activity_recreate_all();
     ESP_LOGI(TAG, "rotation set to %d", (int)rot);
+}
+
+deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t rot)
+{
+    if (!s_inited || !s_disp) return DECK_SDI_ERR_FAIL;
+    if (rot > DECK_BRIDGE_UI_ROT_270) return DECK_SDI_ERR_INVALID_ARG;
+    /* Defer the work — callers may be inside an LVGL event cb whose
+     * widget lives on the screen we're about to destroy. */
+    lv_async_call(rotation_apply_async, (void *)(uintptr_t)rot);
     return DECK_SDI_OK;
 }
 

@@ -6,6 +6,7 @@ idf_component_register(
          "src/deck_shell_settings.c"
          "src/deck_shell_rotation.c"
          "src/deck_shell_apps.c"
+         "src/deck_shell_deck_apps.c"
     INCLUDE_DIRS "include"
     REQUIRES log deck_runtime deck_sdi deck_bridge_ui
              lvgl__lvgl

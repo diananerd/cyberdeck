@@ -2,11 +2,13 @@
 #include "deck_alloc.h"
 #include "deck_intern.h"
 #include "deck_loader.h"
+#include "deck_dvc.h"
 #include "drivers/deck_sdi_time.h"
 #include "drivers/deck_sdi_info.h"
 #include "drivers/deck_sdi_nvs.h"
 #include "drivers/deck_sdi_fs.h"
 #include "drivers/deck_sdi_shell.h"
+#include "drivers/deck_sdi_bridge_ui.h"
 
 #include "esp_log.h"
 
@@ -709,6 +711,327 @@ static deck_value_t *b_text_repeat(deck_value_t **args, uint32_t n, deck_interp_
     return deck_new_str(buf, off);
 }
 
+/* ---- text.* (continued — spec §3 completeness, concept #26) ---- */
+
+static bool is_blank_ch(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
+}
+
+static deck_value_t *b_text_trim(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.trim expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    uint32_t start = 0, end = L;
+    while (start < end && is_blank_ch(s[start])) start++;
+    while (end > start && is_blank_ch(s[end - 1])) end--;
+    return deck_new_str(s + start, end - start);
+}
+
+static deck_value_t *b_text_is_empty(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.is_empty expects str"); return NULL;
+    }
+    return deck_retain(args[0]->as.s.len == 0 ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_text_is_blank(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.is_blank expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    for (uint32_t i = 0; i < args[0]->as.s.len; i++)
+        if (!is_blank_ch(s[i])) return deck_retain(deck_false());
+    return deck_retain(deck_true());
+}
+
+static deck_value_t *b_text_join(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.join([str], sep)"); return NULL;
+    }
+    uint32_t parts_n = args[0]->as.list.len;
+    if (parts_n == 0) return deck_new_str("", 0);
+    uint32_t sep_len = args[1]->as.s.len;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < parts_n; i++) {
+        deck_value_t *p = args[0]->as.list.items[i];
+        if (!p || p->type != DECK_T_STR) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.join: list element %u is not str", (unsigned)i);
+            return NULL;
+        }
+        total += p->as.s.len;
+        if (i + 1 < parts_n) total += sep_len;
+    }
+    if (total > (1U << 16)) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.join: result > 64KB"); return NULL;
+    }
+    char *buf = (char *)malloc((size_t)total + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.join alloc"); return NULL; }
+    uint32_t off = 0;
+    for (uint32_t i = 0; i < parts_n; i++) {
+        deck_value_t *p = args[0]->as.list.items[i];
+        memcpy(buf + off, p->as.s.ptr, p->as.s.len); off += p->as.s.len;
+        if (i + 1 < parts_n && sep_len > 0) {
+            memcpy(buf + off, args[1]->as.s.ptr, sep_len); off += sep_len;
+        }
+    }
+    deck_value_t *out = deck_new_str(buf, off);
+    free(buf);
+    return out;
+}
+
+/* Find first index of needle in haystack starting at `from`. -1 if not found. */
+static int64_t find_sub(const char *h, uint32_t hl, const char *n, uint32_t nl, uint32_t from)
+{
+    if (nl == 0) return (int64_t)from;
+    if (nl > hl || from > hl - nl) return -1;
+    for (uint32_t i = from; i + nl <= hl; i++) {
+        if (memcmp(h + i, n, nl) == 0) return (int64_t)i;
+    }
+    return -1;
+}
+
+static deck_value_t *b_text_index_of(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.index_of(str, str)"); return NULL;
+    }
+    int64_t idx = find_sub(args[0]->as.s.ptr, args[0]->as.s.len,
+                           args[1]->as.s.ptr, args[1]->as.s.len, 0);
+    if (idx < 0) return deck_new_none();
+    return deck_new_some(deck_new_int(idx));
+}
+
+static deck_value_t *b_text_count(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.count(str, str)"); return NULL;
+    }
+    const char *h = args[0]->as.s.ptr;
+    uint32_t hl = args[0]->as.s.len;
+    const char *nd = args[1]->as.s.ptr;
+    uint32_t nl = args[1]->as.s.len;
+    if (nl == 0) return deck_new_int(0);
+    int64_t count = 0;
+    uint32_t i = 0;
+    while (i + nl <= hl) {
+        if (memcmp(h + i, nd, nl) == 0) { count++; i += nl; } else i++;
+    }
+    return deck_new_int(count);
+}
+
+static deck_value_t *b_text_slice(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_INT ||
+        !args[2] || args[2]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.slice(str, int, int)"); return NULL;
+    }
+    int64_t L = (int64_t)args[0]->as.s.len;
+    int64_t s = args[1]->as.i;
+    int64_t e = args[2]->as.i;
+    if (s < 0) s += L;
+    if (e < 0) e += L;
+    if (s < 0) s = 0;
+    if (e > L) e = L;
+    if (s >= e) return deck_new_str("", 0);
+    return deck_new_str(args[0]->as.s.ptr + s, (uint32_t)(e - s));
+}
+
+/* Shared engine for replace(n=1) / replace_all(n=-1 for "unlimited"). */
+static deck_value_t *text_replace_impl(deck_interp_ctx_t *c, deck_value_t *sv,
+                                       deck_value_t *fv, deck_value_t *tv, int64_t max_replacements)
+{
+    const char *s = sv->as.s.ptr;
+    uint32_t sl = sv->as.s.len;
+    const char *f = fv->as.s.ptr;
+    uint32_t fl = fv->as.s.len;
+    const char *t = tv->as.s.ptr;
+    uint32_t tl = tv->as.s.len;
+    if (fl == 0) return deck_new_str(s, sl);   /* spec: empty needle = identity */
+    /* Upper bound for output size. */
+    uint64_t max_out = (uint64_t)sl;
+    if (tl > fl) {
+        uint64_t extra = (uint64_t)(tl - fl) * (uint64_t)sl;
+        max_out += extra;
+    }
+    if (max_out > (1U << 16)) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.replace: result > 64KB"); return NULL;
+    }
+    char *buf = (char *)malloc((size_t)max_out + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.replace alloc"); return NULL; }
+    uint32_t off = 0, i = 0;
+    int64_t done = 0;
+    while (i + fl <= sl) {
+        if ((max_replacements < 0 || done < max_replacements) &&
+            memcmp(s + i, f, fl) == 0) {
+            memcpy(buf + off, t, tl); off += tl;
+            i += fl;
+            done++;
+        } else {
+            buf[off++] = s[i++];
+        }
+    }
+    while (i < sl) buf[off++] = s[i++];
+    deck_value_t *out = deck_new_str(buf, off);
+    free(buf);
+    return out;
+}
+
+static deck_value_t *b_text_replace(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR ||
+        !args[2] || args[2]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.replace(str, from, to)"); return NULL;
+    }
+    return text_replace_impl(c, args[0], args[1], args[2], 1);
+}
+
+static deck_value_t *b_text_replace_all(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR ||
+        !args[2] || args[2]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.replace_all(str, from, to)"); return NULL;
+    }
+    return text_replace_impl(c, args[0], args[1], args[2], -1);
+}
+
+/* Split on any run of newlines (LF / CRLF / CR). */
+static deck_value_t *b_text_lines(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.lines expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    deck_value_t *out = deck_new_list(4);
+    if (!out) return NULL;
+    uint32_t start = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        if (s[i] == '\n' || s[i] == '\r') {
+            deck_value_t *frag = deck_new_str(s + start, i - start);
+            deck_list_push(out, frag); deck_release(frag);
+            if (s[i] == '\r' && i + 1 < L && s[i + 1] == '\n') i++;
+            start = i + 1;
+        }
+    }
+    if (start <= L) {
+        deck_value_t *frag = deck_new_str(s + start, L - start);
+        deck_list_push(out, frag); deck_release(frag);
+    }
+    return out;
+}
+
+/* Split on any run of whitespace; empty runs are skipped. */
+static deck_value_t *b_text_words(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.words expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    deck_value_t *out = deck_new_list(4);
+    if (!out) return NULL;
+    uint32_t i = 0;
+    while (i < L) {
+        while (i < L && is_blank_ch(s[i])) i++;
+        uint32_t start = i;
+        while (i < L && !is_blank_ch(s[i])) i++;
+        if (i > start) {
+            deck_value_t *w = deck_new_str(s + start, i - start);
+            deck_list_push(out, w); deck_release(w);
+        }
+    }
+    return out;
+}
+
+static deck_value_t *b_text_truncate(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.truncate(str, int [, suffix])"); return NULL;
+    }
+    int64_t max = args[1]->as.i;
+    if (max < 0) max = 0;
+    uint32_t L = args[0]->as.s.len;
+    if ((uint64_t)L <= (uint64_t)max) return deck_new_str(args[0]->as.s.ptr, L);
+    if (n < 3) return deck_new_str(args[0]->as.s.ptr, (uint32_t)max);
+    /* With suffix: the output is max chars total, ending in suffix. */
+    if (args[2]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.truncate suffix must be str"); return NULL;
+    }
+    uint32_t sl = args[2]->as.s.len;
+    if ((uint64_t)sl >= (uint64_t)max) return deck_new_str(args[2]->as.s.ptr, sl);
+    uint32_t keep = (uint32_t)max - sl;
+    uint32_t need = keep + sl;
+    char *buf = (char *)malloc(need + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.truncate alloc"); return NULL; }
+    memcpy(buf, args[0]->as.s.ptr, keep);
+    memcpy(buf + keep, args[2]->as.s.ptr, sl);
+    deck_value_t *out = deck_new_str(buf, need);
+    free(buf);
+    return out;
+}
+
+/* pad_side: -1 left, 0 center, +1 right */
+static deck_value_t *text_pad_impl(deck_interp_ctx_t *c, deck_value_t **args, int pad_side)
+{
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_INT ||
+        !args[2] || args[2]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "pad(str, int, ch)"); return NULL;
+    }
+    uint32_t L = args[0]->as.s.len;
+    int64_t want = args[1]->as.i;
+    if (want < 0) want = 0;
+    if ((uint64_t)L >= (uint64_t)want) return deck_new_str(args[0]->as.s.ptr, L);
+    uint32_t ch_len = args[2]->as.s.len;
+    if (ch_len == 0) return deck_new_str(args[0]->as.s.ptr, L);
+    uint32_t pad_total = (uint32_t)want - L;
+    if ((uint64_t)want > (1U << 16)) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "pad: width > 64KB"); return NULL;
+    }
+    char *buf = (char *)malloc((size_t)want + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "pad alloc"); return NULL; }
+    uint32_t pad_left = 0, pad_right = 0;
+    if (pad_side < 0)      { pad_right = 0; pad_left = pad_total; }
+    else if (pad_side > 0) { pad_left = 0;  pad_right = pad_total; }
+    else                   { pad_left = pad_total / 2; pad_right = pad_total - pad_left; }
+    uint32_t off = 0;
+    for (uint32_t i = 0; i < pad_left; i++) buf[off++] = args[2]->as.s.ptr[i % ch_len];
+    memcpy(buf + off, args[0]->as.s.ptr, L); off += L;
+    for (uint32_t i = 0; i < pad_right; i++) buf[off++] = args[2]->as.s.ptr[i % ch_len];
+    deck_value_t *out = deck_new_str(buf, off);
+    free(buf);
+    return out;
+}
+
+static deck_value_t *b_text_pad_left  (deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)n; return text_pad_impl(c, a, -1); }
+static deck_value_t *b_text_pad_right (deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)n; return text_pad_impl(c, a, +1); }
+static deck_value_t *b_text_pad_center(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)n; return text_pad_impl(c, a,  0); }
+
 /* ---- os.sleep_ms (DL2) ---- */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -744,6 +1067,309 @@ static deck_value_t *b_os_terminate(deck_value_t **args, uint32_t n, deck_interp
 {
     (void)args; (void)n; (void)c;
     (void)deck_sdi_shell_terminate();
+    return deck_retain(deck_unit());
+}
+
+/* ================================================================
+ * bridge.ui.* — DVC tree builders (DL2 F28 Phase 2)
+ * ================================================================
+ *
+ * .deck apps build a UI tree by calling these builder builtins and then
+ * pushing the root with `bridge.ui.render(root)`. Each builder returns an
+ * integer "handle" (an index into a module-local node table) rather than
+ * exposing the native `deck_dvc_node_t*` as a first-class Deck value — the
+ * runtime doesn't have a generic opaque-pointer type and we don't need
+ * one just to thread a few tree-building calls.
+ *
+ * Flow:
+ *   let title = bridge.ui.label("Hello world")
+ *   let btn   = bridge.ui.trigger("OK", 0)
+ *   let col   = bridge.ui.column([title, btn])
+ *   bridge.ui.render(col)
+ *
+ * Lifetime: s_bui_arena + s_bui_nodes live module-local (static). Each
+ * call to `render()` encodes + pushes + resets the arena — so handles
+ * from a previous build session become invalid. Only one build session
+ * at a time (single-threaded interpreter; bridge UI runs on the LVGL
+ * task but push_snapshot serialises via its own mutex).
+ *
+ * Error model: handles out of range, non-matching types, or table-full
+ * errors all set DECK_RT_TYPE_MISMATCH or DECK_RT_NO_MEMORY on the ctx.
+ * The caller sees a runtime error at the exact offending call site.
+ */
+#define DECK_BUI_MAX_NODES   128
+
+static deck_arena_t      s_bui_arena  = {0};
+static deck_dvc_node_t  *s_bui_nodes[DECK_BUI_MAX_NODES];
+static uint32_t          s_bui_n      = 0;
+static bool              s_bui_ready  = false;
+
+static void bui_ensure_init(void)
+{
+    if (s_bui_ready) return;
+    deck_arena_init(&s_bui_arena, 2048);
+    s_bui_ready = true;
+}
+
+static void bui_reset(void)
+{
+    deck_arena_reset(&s_bui_arena);
+    s_bui_n = 0;
+}
+
+static int64_t bui_register(deck_dvc_node_t *n)
+{
+    if (!n) return -1;
+    if (s_bui_n >= DECK_BUI_MAX_NODES) return -1;
+    s_bui_nodes[s_bui_n] = n;
+    return (int64_t)s_bui_n++;
+}
+
+static deck_dvc_node_t *bui_lookup(int64_t h)
+{
+    if (h < 0 || (uint32_t)h >= s_bui_n) return NULL;
+    return s_bui_nodes[(uint32_t)h];
+}
+
+/* Copy a Deck string (which is not NUL-terminated) into the render arena
+ * with a NUL byte so deck_dvc_set_str can handle it as a C string. */
+static const char *bui_strdup_from_value(deck_value_t *v)
+{
+    if (!v || v->type != DECK_T_STR) return NULL;
+    char *copy = deck_arena_alloc(&s_bui_arena, v->as.s.len + 1);
+    if (!copy) return NULL;
+    memcpy(copy, v->as.s.ptr, v->as.s.len);
+    copy[v->as.s.len] = '\0';
+    return copy;
+}
+
+/* bridge.ui.label(text) — DVC_LABEL with :value=text.  */
+static deck_value_t *b_bui_label(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.label(text:str)"); return NULL;
+    }
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.label oom"); return NULL; }
+    const char *text = bui_strdup_from_value(args[0]);
+    if (text) deck_dvc_set_str(&s_bui_arena, node, "value", text);
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+
+/* bridge.ui.trigger(text, intent_id) — DVC_TRIGGER; intent_id is an int
+ * that the shell can resolve to an intent. Pass 0 for decorative buttons. */
+static deck_value_t *b_bui_trigger(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.trigger(text:str, intent:int)"); return NULL;
+    }
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_TRIGGER);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.trigger oom"); return NULL; }
+    /* DVC schema for TRIGGER names the display string "label" (spec §18
+     * + render_trigger in deck_bridge_ui_decode reads attr_str(n,
+     * "label", ...)). Setting it under "text" silently produces a
+     * "BUTTON" default — bug caught on hardware, 2026-04-17. */
+    const char *text = bui_strdup_from_value(args[0]);
+    if (text) deck_dvc_set_str(&s_bui_arena, node, "label", text);
+    node->intent_id = (uint32_t)args[1]->as.i;
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+
+/* Shared helper: build a container node of `kind`, attach each handle in
+ * the list as a child. Used for column/row/group. */
+static deck_value_t *bui_container(deck_dvc_type_t kind, const char *debug,
+                                   deck_value_t **args, deck_interp_ctx_t *c,
+                                   const char *title_attr)
+{
+    /* Args shape depends on title_attr:
+     *   NULL  → args[0] is children list
+     *   set   → args[0] is title (str), args[1] is children list */
+    uint32_t ai = 0;
+    const char *title = NULL;
+    if (title_attr) {
+        if (!args[0] || args[0]->type != DECK_T_STR) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                    "bridge.ui.%s(title:str, children:list)", debug);
+            return NULL;
+        }
+        title = bui_strdup_from_value(args[0]);
+        ai = 1;
+    }
+    if (!args[ai] || args[ai]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                "bridge.ui.%s: children must be a list", debug);
+        return NULL;
+    }
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, kind);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.%s oom", debug); return NULL; }
+    if (title && title_attr) deck_dvc_set_str(&s_bui_arena, node, title_attr, title);
+
+    deck_value_t *list = args[ai];
+    for (uint32_t i = 0; i < list->as.list.len; i++) {
+        deck_value_t *item = list->as.list.items[i];
+        if (!item || item->type != DECK_T_INT) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                    "bridge.ui.%s: child %u not a handle", debug, (unsigned)i);
+            return NULL;
+        }
+        deck_dvc_node_t *child = bui_lookup(item->as.i);
+        if (!child) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                    "bridge.ui.%s: child %u handle=%lld invalid",
+                    debug, (unsigned)i, (long long)item->as.i);
+            return NULL;
+        }
+        deck_dvc_add_child(&s_bui_arena, node, child);
+    }
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+
+static deck_value_t *b_bui_column(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; return bui_container(DVC_COLUMN, "column", args, c, NULL); }
+
+static deck_value_t *b_bui_row(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; return bui_container(DVC_ROW, "row", args, c, NULL); }
+
+static deck_value_t *b_bui_group(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; return bui_container(DVC_GROUP, "group", args, c, "title"); }
+
+/* bridge.ui.data_row(label, value) — dim-label-over-primary-value row. */
+static deck_value_t *b_bui_data_row(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.data_row(label:str, value:str)"); return NULL;
+    }
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_DATA_ROW);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.data_row oom"); return NULL; }
+    const char *lbl = bui_strdup_from_value(args[0]);
+    const char *val = bui_strdup_from_value(args[1]);
+    if (lbl) deck_dvc_set_str(&s_bui_arena, node, "label", lbl);
+    if (val) deck_dvc_set_str(&s_bui_arena, node, "value", val);
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+
+/* bridge.ui.divider() / bridge.ui.spacer() — no args, decorative layout. */
+static deck_value_t *b_bui_divider(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_DIVIDER);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.divider oom"); return NULL; }
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+static deck_value_t *b_bui_spacer(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    bui_ensure_init();
+    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_SPACER);
+    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.spacer oom"); return NULL; }
+    int64_t h = bui_register(node);
+    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
+    return deck_new_int(h);
+}
+
+/* asset.path(name:str) — look up a registered @assets entry on the
+ * current module and return its path as a string. If the name is not
+ * registered (or no @assets block exists), returns :none so callers can
+ * pattern-match / default with `|>?`. The lookup is linear over the
+ * parsed pairs; typical app declares ≤ 10 entries so this is cheap.
+ *
+ * Paths are returned verbatim — interpretation (relative to /assets/,
+ * strip leading slash, etc.) is the responsibility of downstream
+ * consumers (fs.read, media widgets). */
+static deck_value_t *b_asset_path(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "asset.path(name:str)");
+        return NULL;
+    }
+    if (!c->module || c->module->kind != AST_MODULE) {
+        /* Called outside a loaded module (e.g. raw expr via run_expr). */
+        return deck_new_none();
+    }
+    for (uint32_t i = 0; i < c->module->as.module.items.len; i++) {
+        const ast_node_t *it = c->module->as.module.items.items[i];
+        if (!it || it->kind != AST_ASSETS) continue;
+        for (uint32_t e = 0; e < it->as.assets.n_entries; e++) {
+            const char *name = it->as.assets.names[e];
+            if (!name) continue;
+            size_t nlen = strlen(name);
+            if (nlen == args[0]->as.s.len &&
+                memcmp(name, args[0]->as.s.ptr, nlen) == 0) {
+                const char *path = it->as.assets.paths[e];
+                if (!path) return deck_new_none();
+                return deck_new_some(deck_new_str_cstr(path));
+            }
+        }
+    }
+    return deck_new_none();
+}
+
+/* bridge.ui.render(root_handle) — encode the tree rooted at `root_handle`,
+ * push it via the SDI, then reset the render arena. Returns unit. */
+static deck_value_t *b_bui_render(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.render(root:handle)"); return NULL;
+    }
+    deck_dvc_node_t *root = bui_lookup(args[0]->as.i);
+    if (!root) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
+                "bridge.ui.render: root handle=%lld invalid", (long long)args[0]->as.i);
+        return NULL;
+    }
+
+    /* deck_dvc_encode in sizing mode (buf=NULL) returns DECK_RT_NO_MEMORY
+     * by design — it walks the tree and updates the overflow flag for
+     * every would-be write. The sizing path is valid only if `need` ends
+     * up non-zero; that's the contract established by the dvc selftest. */
+    size_t need = 0;
+    (void)deck_dvc_encode(root, NULL, 0, &need);
+    if (need == 0) {
+        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render: encode sizing returned 0");
+        return NULL;
+    }
+    uint8_t *buf = deck_arena_alloc(&s_bui_arena, need);
+    if (!buf) {
+        set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.render: buffer oom (%u bytes)", (unsigned)need);
+        return NULL;
+    }
+    size_t wrote = 0;
+    if (deck_dvc_encode(root, buf, need, &wrote) != DECK_RT_OK) {
+        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render: encode failed");
+        return NULL;
+    }
+    deck_sdi_err_t rc = deck_sdi_bridge_ui_push_snapshot(buf, wrote);
+    if (rc != DECK_SDI_OK) {
+        /* Non-fatal: reset and surface the error. The arena reset is
+         * important or the next build session starts with stale nodes. */
+        bui_reset();
+        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render push: %s",
+                deck_sdi_strerror(rc));
+        return NULL;
+    }
+    bui_reset();
     return deck_retain(deck_unit());
 }
 
@@ -818,21 +1444,32 @@ static const builtin_t BUILTINS[] = {
     { "system.info.free_heap",  b_info_free_heap,    0, 0 },
     { "system.info.deck_level", b_info_deck_level,   0, 0 },
 
-    /* text */
+    /* text — spec 03-deck-os §3 (post-#15a unification on `len`).
+     * `len` / `starts` / `ends` match §11.2's list.len convention;
+     * the earlier `length`/`_with` forms are no longer registered. */
     { "text.upper",             b_text_upper,        1, 1 },
     { "text.lower",             b_text_lower,        1, 1 },
-    /* Spec 03-deck-os §3 (post-concept-#15a) @builtin text — len /
-     * starts / ends. Deck's minimalist convention is `len` everywhere
-     * (§11.2 list.len, §3 text.len); the earlier `length` in §3 was a
-     * spec-internal contradiction, fixed by unifying on `len`. The
-     * pre-#15 legacy names `text.starts_with` / `text.ends_with` are
-     * no longer registered; authors must use the short spec names. */
     { "text.len",               b_text_len,          1, 1 },
     { "text.starts",            b_text_starts_with,  2, 2 },
     { "text.ends",              b_text_ends_with,    2, 2 },
     { "text.contains",          b_text_contains,     2, 2 },
     { "text.split",             b_text_split,        2, 2 },
     { "text.repeat",            b_text_repeat,       2, 2 },
+    { "text.trim",              b_text_trim,         1, 1 },
+    { "text.is_empty",          b_text_is_empty,     1, 1 },
+    { "text.is_blank",          b_text_is_blank,     1, 1 },
+    { "text.join",              b_text_join,         2, 2 },
+    { "text.index_of",          b_text_index_of,     2, 2 },
+    { "text.count",             b_text_count,        2, 2 },
+    { "text.slice",             b_text_slice,        3, 3 },
+    { "text.replace",           b_text_replace,      3, 3 },
+    { "text.replace_all",       b_text_replace_all,  3, 3 },
+    { "text.lines",             b_text_lines,        1, 1 },
+    { "text.words",             b_text_words,        1, 1 },
+    { "text.truncate",          b_text_truncate,     2, 3 },
+    { "text.pad_left",          b_text_pad_left,     3, 3 },
+    { "text.pad_right",         b_text_pad_right,    3, 3 },
+    { "text.pad_center",        b_text_pad_center,   3, 3 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },
@@ -876,6 +1513,20 @@ static const builtin_t BUILTINS[] = {
     { "os.suspend",             b_os_suspend,        0, 0 },
     { "os.terminate",           b_os_terminate,      0, 0 },
     { "os.sleep_ms",            b_os_sleep_ms,       1, 1 },
+
+    /* assets (DL2 F28.5) */
+    { "asset.path",             b_asset_path,        1, 1 },
+
+    /* bridge.ui — DVC tree builders (DL2 F28 Phase 2) */
+    { "bridge.ui.label",        b_bui_label,         1, 1 },
+    { "bridge.ui.trigger",      b_bui_trigger,       2, 2 },
+    { "bridge.ui.column",       b_bui_column,        1, 1 },
+    { "bridge.ui.row",          b_bui_row,           1, 1 },
+    { "bridge.ui.group",        b_bui_group,         2, 2 },
+    { "bridge.ui.data_row",     b_bui_data_row,      2, 2 },
+    { "bridge.ui.divider",      b_bui_divider,       0, 0 },
+    { "bridge.ui.spacer",       b_bui_spacer,        0, 0 },
+    { "bridge.ui.render",       b_bui_render,        1, 1 },
 
     { NULL, NULL, 0, 0 },
 };
@@ -941,22 +1592,20 @@ static deck_value_t *b_unwrap(deck_value_t **args, uint32_t n, deck_interp_ctx_t
     set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "unwrap: not optional or result");
     return NULL;
 }
-/* Spec 01-deck-lang §11.5+§11.6 (post-#20) — polymorphic `unwrap_or`
- * returns `default` when the wrapper is empty (Optional :none) or
- * errored (Result :err). Unifies the former `unwrap_or` (Result) and
- * `unwrap_opt_or` (Optional) spec entries under one callable. */
+/* Spec 01-deck-lang §11.5 (post-#20) — polymorphic `unwrap_or` returns
+ * `default` when the wrapper is empty (Optional :none) or errored
+ * (Result :err). Replaces the former unwrap_or-for-Result + unwrap_opt_or
+ * -for-Optional pair under one callable. */
 static deck_value_t *b_unwrap_or(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n; (void)c;
     if (!args[0]) return deck_retain(args[1]);
-    if (args[0]->type == DECK_T_OPTIONAL) {
+    if (args[0]->type == DECK_T_OPTIONAL)
         return deck_retain(args[0]->as.opt.inner ? args[0]->as.opt.inner : args[1]);
-    }
     if (result_tag_is(args[0], "ok"))
         return deck_retain(args[0]->as.tuple.items[1]);
     if (result_tag_is(args[0], "err"))
         return deck_retain(args[1]);
-    /* Not a wrapper — pass the value through (treat as already-unwrapped). */
     return deck_retain(args[0]);
 }
 static deck_value_t *b_map_ok(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -1021,9 +1670,9 @@ static const builtin_t BARE_BUILTINS[] = {
     { "is_ok",    b_is_ok,    1, 1 },
     { "is_err",   b_is_err,   1, 1 },
     { "unwrap",    b_unwrap,    1, 1 },
-    { "unwrap_or", b_unwrap_or, 2, 2 },   /* polymorphic — §11.5/§11.6 post-#20 */
-    { "map_ok",    b_map_ok,    2, 2 },
-    { "and_then",  b_and_then,  2, 2 },
+    { "unwrap_or", b_unwrap_or, 2, 2 },   /* polymorphic — §11.5 post-#20 */
+    { "map_ok",   b_map_ok,   2, 2 },
+    { "and_then", b_and_then, 2, 2 },
 
     /* DL2 F22 — type inspection. */
     { "type_of", b_type_of, 1, 1 },
@@ -1920,6 +2569,20 @@ static const ast_node_t *find_machine(const ast_node_t *mod)
     return NULL;
 }
 
+/* DL2 F28.1 — look up `@machine.before` / `@machine.after` bodies. Parser
+ * tags them as AST_ON with reserved event names "__machine_before" and
+ * "__machine_after". Returns NULL if not present in the module. */
+static const ast_node_t *find_on_event(const ast_node_t *mod, const char *event)
+{
+    if (!mod || !event || mod->kind != AST_MODULE) return NULL;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (it && it->kind == AST_ON && it->as.on.event &&
+            strcmp(it->as.on.event, event) == 0) return it;
+    }
+    return NULL;
+}
+
 static const ast_node_t *find_state(const ast_node_t *machine, const char *name)
 {
     if (!machine || !name) return NULL;
@@ -1957,9 +2620,17 @@ static void run_state_hooks(deck_interp_ctx_t *c, const ast_node_t *state,
     }
 }
 
-static deck_err_t run_machine(const ast_node_t *machine, deck_interp_ctx_t *c)
+static deck_err_t run_machine(const ast_node_t *machine,
+                              const ast_node_t *mod,
+                              deck_interp_ctx_t *c)
 {
     if (!machine || machine->as.machine.states.len == 0) return DECK_RT_OK;
+    /* DL2 F28.1 — @machine.before / .after bodies run around each transition
+     * (after the source state's `on leave`, before the destination state's
+     * `on enter`). They see the global env and may reference top-level fn's
+     * and @use'd builtins. Bodies are optional — NULL when not declared. */
+    const ast_node_t *before = find_on_event(mod, "__machine_before");
+    const ast_node_t *after  = find_on_event(mod, "__machine_after");
     /* Spec 02-deck-app §8.2 — honour explicit `initial :atom` if declared;
      * else fall back to the first state in declaration order. */
     const ast_node_t *state = NULL;
@@ -1991,6 +2662,12 @@ static deck_err_t run_machine(const ast_node_t *machine, deck_interp_ctx_t *c)
         run_state_hooks(c, state, "leave", NULL);
         if (c->err != DECK_RT_OK) return c->err;
 
+        if (before && before->as.on.body) {
+            deck_value_t *r = deck_interp_run(c, c->global, before->as.on.body);
+            if (r) deck_release(r);
+            if (c->err != DECK_RT_OK) return c->err;
+        }
+
         const ast_node_t *nextst = find_state(machine, next);
         if (!nextst) {
             set_err(c, DECK_RT_INTERNAL, state->line, state->col,
@@ -2000,6 +2677,12 @@ static deck_err_t run_machine(const ast_node_t *machine, deck_interp_ctx_t *c)
         ESP_LOGI(TAG, "machine '%s' :%s -> :%s",
                  machine->as.machine.name, state->as.state.name, next);
         state = nextst;
+
+        if (after && after->as.on.body) {
+            deck_value_t *r = deck_interp_run(c, c->global, after->as.on.body);
+            if (r) deck_release(r);
+            if (c->err != DECK_RT_OK) return c->err;
+        }
     }
     set_err(c, DECK_RT_INTERNAL, machine->line, machine->col,
             "machine exceeded max transitions (%d)", DECK_MACHINE_MAX_TRANSITIONS);
@@ -2023,6 +2706,7 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
 
     deck_interp_ctx_t c;
     deck_interp_init(&c, &arena);
+    c.module = ld.module;
 
     /* DL2 F21.1: pre-bind every top-level `fn` so @on launch and @machine
      * bodies can reference them — and so fn bodies can reference each
@@ -2046,7 +2730,7 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
 
     if (c.err == DECK_RT_OK) {
         const ast_node_t *machine = find_machine(ld.module);
-        if (machine) run_machine(machine, &c);
+        if (machine) run_machine(machine, ld.module, &c);
     }
 
     deck_err_t run_rc = c.err;
@@ -2061,4 +2745,283 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
     deck_env_release(c.global);
     deck_arena_reset(&arena);
     return run_rc;
+}
+
+/* ----- DL2 F28: persistent app handles ---------------------------------
+ *
+ * Mirrors deck_runtime_run_on_launch but keeps arena+env alive after
+ * launch so later dispatch() calls can re-enter @on <event> bodies. The
+ * module AST, interned atoms, top-level fn bindings, and any let bindings
+ * created during @on launch remain live until unload.
+ */
+struct deck_runtime_app {
+    bool               in_use;
+    deck_arena_t       arena;
+    deck_loader_t      ld;
+    deck_interp_ctx_t  ctx;
+};
+
+static struct deck_runtime_app s_app_slots[DECK_RUNTIME_MAX_APPS];
+
+static struct deck_runtime_app *app_slot_alloc(void)
+{
+    for (int i = 0; i < DECK_RUNTIME_MAX_APPS; i++) {
+        if (!s_app_slots[i].in_use) {
+            memset(&s_app_slots[i], 0, sizeof(s_app_slots[i]));
+            s_app_slots[i].in_use = true;
+            return &s_app_slots[i];
+        }
+    }
+    return NULL;
+}
+
+static void app_slot_free(struct deck_runtime_app *app)
+{
+    if (!app) return;
+    app->in_use = false;
+}
+
+/* ----- DL2 F28.4: @migration runner ------------------------------------
+ *
+ * Called at app_load after fn pre-binding and before @on launch. Reads
+ * the stored schema version for this app from NVS, runs every
+ * `@migration from N:` body where `N >= stored` in ascending order of
+ * N, then writes back the new high-water mark.
+ *
+ * NVS layout:
+ *   namespace = "deck.mig" (8 chars, < 15 char limit)
+ *   key       = "v_" + 8-hex FNV32(app_id) → 10 chars (avoids truncating
+ *               app_ids longer than the 15-char key limit; collisions
+ *               are infinitesimal across the ≤ 8 apps the shell loads)
+ *   value     = i64 version number
+ */
+static uint32_t migration_fnv32(const char *s)
+{
+    uint32_t h = 0x811c9dc5u;
+    if (!s) return h ? h : 1;
+    for (; *s; s++) {
+        h ^= (uint8_t)*s;
+        h *= 0x01000193u;
+    }
+    return h ? h : 1;
+}
+
+static void migration_key_for(const char *app_id, char out[16])
+{
+    uint32_t h = migration_fnv32(app_id);
+    snprintf(out, 16, "v_%08x", (unsigned)h);
+}
+
+static void run_migrations(struct deck_runtime_app *app)
+{
+    if (!app->ld.module || app->ld.module->kind != AST_MODULE) return;
+    const ast_node_t *mig = NULL;
+    for (uint32_t i = 0; i < app->ld.module->as.module.items.len; i++) {
+        const ast_node_t *it = app->ld.module->as.module.items.items[i];
+        if (it && it->kind == AST_MIGRATION) { mig = it; break; }
+    }
+    if (!mig || mig->as.migration.n_entries == 0) return;
+    if (!app->ld.app_id || !*app->ld.app_id) {
+        ESP_LOGW(TAG, "migration: app has no id — skipping");
+        return;
+    }
+
+    char key[16];
+    migration_key_for(app->ld.app_id, key);
+
+    int64_t stored = 0;
+    deck_sdi_err_t rc = deck_sdi_nvs_get_i64("deck.mig", key, &stored);
+    if (rc != DECK_SDI_OK && rc != DECK_SDI_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "migration: nvs.get(deck.mig,%s): %s — assuming 0",
+                 key, deck_sdi_strerror(rc));
+        stored = 0;
+    } else if (rc == DECK_SDI_ERR_NOT_FOUND) {
+        stored = 0;
+    }
+
+    /* Sort indices ascending-by-version. Parser caps n_entries at 16
+     * (DECK_MIGRATION_MAX), so insertion sort with a 16-slot stack array
+     * is fine. */
+    uint32_t order[16];
+    const uint32_t n = mig->as.migration.n_entries;
+    for (uint32_t i = 0; i < n; i++) order[i] = i;
+    for (uint32_t a = 1; a < n; a++) {
+        uint32_t v = order[a];
+        int64_t  vk = mig->as.migration.from_versions[v];
+        int j = (int)a - 1;
+        while (j >= 0 && mig->as.migration.from_versions[order[j]] > vk) {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = v;
+    }
+
+    int64_t new_high = stored;
+    bool any_ran = false;
+    for (uint32_t i = 0; i < n; i++) {
+        int64_t fv = mig->as.migration.from_versions[order[i]];
+        if (fv < stored) continue;
+        ESP_LOGI(TAG, "migration %s: from %lld", app->ld.app_id, (long long)fv);
+        deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global,
+                                          mig->as.migration.bodies[order[i]]);
+        if (r) deck_release(r);
+        if (app->ctx.err != DECK_RT_OK) {
+            ESP_LOGE(TAG, "migration from %lld failed: %s — aborting",
+                     (long long)fv, deck_err_name(app->ctx.err));
+            return;
+        }
+        any_ran = true;
+        if (fv + 1 > new_high) new_high = fv + 1;
+    }
+
+    if (any_ran && new_high != stored) {
+        deck_sdi_err_t sr = deck_sdi_nvs_set_i64("deck.mig", key, new_high);
+        if (sr != DECK_SDI_OK) {
+            ESP_LOGW(TAG, "migration: nvs.set v=%lld failed: %s",
+                     (long long)new_high, deck_sdi_strerror(sr));
+        } else {
+            ESP_LOGI(TAG, "migration %s: stored v=%lld",
+                     app->ld.app_id, (long long)new_high);
+        }
+    }
+}
+
+deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
+                                 deck_runtime_app_t **out)
+{
+    if (out) *out = NULL;
+    struct deck_runtime_app *app = app_slot_alloc();
+    if (!app) {
+        ESP_LOGE(TAG, "app_load: no free slot (max=%d)", DECK_RUNTIME_MAX_APPS);
+        return DECK_RT_INTERNAL;
+    }
+
+    deck_arena_init(&app->arena, 0);
+    deck_loader_init(&app->ld, &app->arena);
+
+    deck_err_t rc = deck_loader_load(&app->ld, src, len);
+    if (rc != DECK_LOAD_OK) {
+        ESP_LOGE(TAG, "app_load: load failed @ stage %u: %s (%u:%u)",
+                 app->ld.err_stage, app->ld.err_msg,
+                 app->ld.err_line, app->ld.err_col);
+        deck_arena_reset(&app->arena);
+        app_slot_free(app);
+        return rc;
+    }
+
+    deck_interp_init(&app->ctx, &app->arena);
+    app->ctx.module = app->ld.module;
+
+    /* Pre-bind top-level fn's so @on launch + machine + later dispatches
+     * see them by name. Same pattern as run_on_launch. */
+    if (app->ld.module && app->ld.module->kind == AST_MODULE) {
+        for (uint32_t i = 0; i < app->ld.module->as.module.items.len; i++) {
+            const ast_node_t *it = app->ld.module->as.module.items.items[i];
+            if (it && it->kind == AST_FN_DEF) {
+                deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, it);
+                if (r) deck_release(r);
+                if (app->ctx.err != DECK_RT_OK) break;
+            }
+        }
+    }
+
+    /* DL2 F28.4 — run any applicable @migration bodies BEFORE @on launch
+     * so the launch body sees the post-migration NVS / FS state. */
+    if (app->ctx.err == DECK_RT_OK) {
+        run_migrations(app);
+    }
+
+    /* Run @on launch synchronously. Errors abort load + tear down. */
+    if (app->ctx.err == DECK_RT_OK) {
+        const ast_node_t *on = find_on_launch(app->ld.module);
+        if (on) {
+            deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, on->as.on.body);
+            if (r) deck_release(r);
+        }
+    }
+
+    /* Run @machine to reach its terminal state. Async transitions are not
+     * yet modelled; the machine runs to completion at load time. */
+    if (app->ctx.err == DECK_RT_OK) {
+        const ast_node_t *machine = find_machine(app->ld.module);
+        if (machine) run_machine(machine, app->ld.module, &app->ctx);
+    }
+
+    deck_err_t run_rc = app->ctx.err;
+    if (run_rc != DECK_RT_OK) {
+        ESP_LOGE(TAG, "app_load: runtime error @ %u:%u — %s: %s",
+                 app->ctx.err_line, app->ctx.err_col,
+                 deck_err_name(run_rc), app->ctx.err_msg);
+        deck_env_release(app->ctx.global);
+        deck_arena_reset(&app->arena);
+        app_slot_free(app);
+        return run_rc;
+    }
+
+    if (out) *out = app;
+    return DECK_RT_OK;
+}
+
+deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app, const char *event)
+{
+    if (!app || !app->in_use || !event) return DECK_RT_INTERNAL;
+    /* launch/terminate are handled by load/unload; ignoring them keeps
+     * callers from accidentally double-firing the lifecycle. */
+    if (strcmp(event, "launch") == 0 || strcmp(event, "terminate") == 0) {
+        return DECK_RT_OK;
+    }
+    const ast_node_t *on = find_on_event(app->ld.module, event);
+    if (!on || !on->as.on.body) return DECK_RT_OK;  /* no handler, no-op */
+
+    /* Reset any lingering error state from a prior dispatch so we don't
+     * short-circuit here. The global env survives across dispatches, but
+     * c->err is per-call.  */
+    app->ctx.err = DECK_RT_OK;
+    app->ctx.err_line = 0;
+    app->ctx.err_col = 0;
+    app->ctx.err_msg[0] = '\0';
+    app->ctx.depth = 0;
+
+    deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, on->as.on.body);
+    if (r) deck_release(r);
+
+    if (app->ctx.err != DECK_RT_OK) {
+        ESP_LOGE(TAG, "app_dispatch(%s): runtime error @ %u:%u — %s: %s",
+                 event, app->ctx.err_line, app->ctx.err_col,
+                 deck_err_name(app->ctx.err), app->ctx.err_msg);
+    }
+    return app->ctx.err;
+}
+
+void deck_runtime_app_unload(deck_runtime_app_t *app)
+{
+    if (!app || !app->in_use) return;
+
+    /* Best-effort @on terminate. Errors are logged, not propagated — we
+     * cannot abort cleanup. */
+    const ast_node_t *on = find_on_event(app->ld.module, "terminate");
+    if (on && on->as.on.body) {
+        app->ctx.err = DECK_RT_OK;
+        app->ctx.depth = 0;
+        deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, on->as.on.body);
+        if (r) deck_release(r);
+        if (app->ctx.err != DECK_RT_OK) {
+            ESP_LOGW(TAG, "app_unload: @on terminate failed: %s",
+                     deck_err_name(app->ctx.err));
+        }
+    }
+
+    deck_env_release(app->ctx.global);
+    deck_arena_reset(&app->arena);
+    app_slot_free(app);
+}
+
+const char *deck_runtime_app_id(const deck_runtime_app_t *app)
+{
+    return (app && app->in_use) ? app->ld.app_id : NULL;
+}
+
+const char *deck_runtime_app_name(const deck_runtime_app_t *app)
+{
+    return (app && app->in_use) ? app->ld.app_name : NULL;
 }

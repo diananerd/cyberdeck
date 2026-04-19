@@ -2,6 +2,327 @@
 
 Todas las versiones notables del firmware CyberDeck. Formato inspirado en Keep-a-Changelog.
 
+## [Unreleased] — post-DL2
+
+### F28 Phase 2 — apps .deck con UI propia, @on lifecycle, @assets, @flow desugar
+
+Cuatro features que cierran la superficie DL2 para que las apps .deck
+sean de verdad utilizables por el usuario final (vs. phase 1 que solo
+corría código en log.info).
+
+**bridge.ui.\* builtins.** 9 builders + render():
+`bridge.ui.label(text)`, `trigger(text, intent)`, `column(children)`,
+`row(children)`, `group(title, children)`, `data_row(label, value)`,
+`divider()`, `spacer()`, `render(root)`. Cada builder devuelve un
+int64 "handle" en un node table módulo-local; `render()` encoda la
+tree como DVC + llama `deck_sdi_bridge_ui_push_snapshot` + resetea el
+arena local. Pattern: app construye tree → render → handles invalidated.
+
+Capacidad nueva `bridge` añadida a `DL1_CAPS[]` + error messages.
+Implícita (no requiere `@use bridge.ui`) igual que math/text/log/...
+
+**@on resume/pause wired a activity lifecycle.** El intent resolver
+de `deck_shell_deck_apps` ahora pushea una activity propia (no pinta
+sobre launcher) con callbacks adapter:
+- `on_create` → dispatch `@on resume`
+- `on_resume` → dispatch `@on resume`
+- `on_pause`  → dispatch `@on pause`
+- `on_destroy` → NULL (pause ya corrió; terminate reservado para unload)
+
+**Verificado visualmente en hardware** (tras el fix del bug de timing):
+tap HELLO card → screen muestra el tree `HELLO / DECK LEVEL:2 /
+FREE HEAP:N` renderizado desde .deck source → BACK navega al launcher
+→ HOME también funciona. Pause dispatch fires una vez.
+
+Bug raíz del primer intento: el adapter dispatchaba `@on resume` en
+`on_create`, pero `deck_bridge_ui_activity_push` secuencia
+`on_create → lv_scr_load(new_scr) → on_resume` — o sea, render
+llegaba al screen del launcher (aún activo) y luego `lv_scr_load`
+lo reemplazaba con el nuevo screen vacío. **Fix**: dispatch sólo
+desde `on_resume`, cuando `lv_scr_act()` ya apunta al screen
+correcto. `on_create` queda cacheando el handle; `on_destroy` NULL.
+
+**@assets + asset.path(name).** Parser reemplaza `parse_opaque_block`
+con `parse_assets_decl` que extrae pares `name: "path"` a un
+AST_ASSETS node. El builtin `asset.path(name)` busca linealmente por
+módulo corriente (nuevo field `deck_interp_ctx_t.module`) y devuelve
+`some(path)` o `none`. Max 32 entries por bloque.
+
+**@flow desugar.** `parse_flow_decl` convierte `@flow name` + pares
+`step X:` en un AST_MACHINE equivalente con auto-transitions entre
+steps sucesivos. El último step termina la máquina. El runtime no
+cambia — run_machine no sabe que la máquina vino de @flow.
+
+**Conformance**: +3 tests — `app.bridge_ui`, `app.assets`, `app.flow`.
+Todo verde: **80/80 deck + 5/5 suites + 15/15 stress = 100/100 PASS,
+0 outliers**. `app.bridge_ui` vive al final del array porque
+LVGL render steals cycles de Core 0 y contaminaba timings siguientes.
+
+**Parser tests**: actualizados `mod_flow`, `mod_assets`,
+`mod_machine_before`, `mod_machine_after` para el nuevo AST output
+(ya no `(use __metadata)` stubs).
+
+**Bin size**: 1360880 bytes (~1328 KB), sube ~8KB por Phase 2 code.
+
+### Bugs encontrados en hardware durante Phase 2
+
+**bridge.ui.render: encode sizing failed** (primer flash). El
+`deck_dvc_encode(NULL, 0)` return DECK_RT_NO_MEMORY por diseño (usa
+overflow flag para tracking). Mi render lo trataba como error. Fix:
+ignorar rc, verificar que `need > 0`.
+
+**Pause dispatch doble**. Activity lifecycle dispara `on_pause` y
+luego `on_destroy`; mi adapter dispatchaba "pause" en ambos. Fix:
+on_destroy = NULL, la pause ya corrió en on_pause.
+
+**app.assets: pattern_not_exhaustive**. El exhaustiveness checker
+requiere wildcard `_` incluso cuando `some(_)` + `none` cubren el
+tipo Optional. Fix al test: añadir `_ => unreachable` explícito.
+
+### F28.4 — @migration con NVS version tracking
+
+Última pieza de F28. El parser deja de tratar `@migration` como opaque
+y extrae pares `from N:<body>` a un AST_MIGRATION node. El runtime
+corre un nuevo `run_migrations()` en `deck_runtime_app_load` después
+del fn pre-bind y antes de `@on launch`, con estas reglas:
+
+- **NVS layout**: namespace `"deck.mig"`, key `"v_<fnv32(app_id) hex>"`
+  (10 chars, cabe en límite de 15 de NVS key), valor i64 con versión.
+  Hash evita truncar app_ids largos como `conf.lang.requires.caps`.
+- **Semántica**: si `stored=N` en NVS (0 default = nunca migrado),
+  corre en orden ascendente todos los bodies cuyo `from K >= N`,
+  después persiste `max(K)+1`. Subsecuentes boots ven `stored=1` y
+  saltan el body `from 0:` — idempotencia sin esfuerzo del user.
+- **Fail model**: si un body throwsea, se aborta sin actualizar
+  `stored`, así la siguiente carga reintenta. No hay rollback.
+
+**Test**: `t_migration` en `deck_interp_run_selftest`. Flow:
+1. Borra `deck.mig/v_a829200e` (hash fijo de "mig.test") + efecto NVS
+2. `deck_runtime_app_load` con @migration from 0 → `nvs.set("conf.mig","ran","v0")`
+3. Verifica NVS tiene `ran=v0`
+4. Unload, borra sólo `ran` (tracking se mantiene)
+5. Reload: stored=1, migration NO debe correr
+6. Verifica que `ran` sigue NOT_FOUND
+
+Interp selftest counter sube 47 → 48. Verificado en hardware:
+```
+I (2537) deck_interp: migration mig.test: from 0
+I (2541) deck_interp: migration mig.test: stored v=1
+I (2550) deck_interp: interp selftest: PASS (48 cases)
+```
+
+Parser selftest `mod_migration` actualizado al nuevo AST output
+(`(module (migration (from 1 (do ...))))` en vez de `(use __metadata)`).
+
+### F28 bridge.ui.trigger intent wiring
+
+Cierre natural de F28 Phase 2: tapping un `bridge.ui.trigger(text, N)`
+dentro de una .deck screen ahora dispatcha `@on trigger_N` sobre la app
+dueña de la activity top. Flujo:
+
+1. Decoder (`deck_bridge_ui_decode.c`) al crear DVC_TRIGGER registra
+   `trigger_click_cb` con `intent_id` como user_data.
+2. Nuevo hook público `deck_bridge_ui_set_intent_hook(fn)`. Default NULL
+   (plataformas sin shell solo loggean el intent).
+3. `deck_shell_deck_apps` instala `deck_app_intent_hook` en
+   `scan_and_register`: al tap, lee activity top, matchea app_id a un
+   slot cargado, formatea `"trigger_<N>"` y llama
+   `deck_runtime_app_dispatch`.
+4. El .deck app declara `@on trigger_1:`, `@on trigger_2:`, etc. Los
+   handlers pueden llamar `bridge.ui.render(...)` nuevamente para
+   redibujar — el env persistente lo permite.
+
+**hello.deck extendido** con `fn build_screen(msg)` reutilizable y 2
+triggers (PING id=1, REFRESH id=2). Cada handler reconstruye el tree
+con un mensaje distinto y llama render — demostrando redraw
+state-driven desde código .deck puro.
+
+**NO verificado visualmente**: tap botón → re-render state change.
+Infraestructura compila, conformance sigue 80/80, pero aún no
+confirmé en pantalla que tap dentro de HELLO redibuje el body con el
+nuevo mensaje. Hay un riesgo conocido: `bridge.ui.render` desde dentro
+de un trigger callback hace `lv_obj_clean(scr)` sobre widgets que
+actualmente procesan un evento — LVGL lo maneja en general, pero si
+hubiera glitch visual o crash, el fix sería usar `lv_obj_del_async`
+o postponer el render vía `lv_async_call` (deferred al próximo tick).
+
+### Bugs caught on hardware tras verificación visual
+
+**bridge.ui.trigger label attr mismatch.** El builder sentaba `"text"`
+pero el decoder (`render_trigger`) lee `"label"` — los botones salían
+con el default "BUTTON" en vez de "PING"/"REFRESH". Fix:
+`deck_dvc_set_str(&s_bui_arena, node, "label", text)` en
+`b_bui_trigger`. Visualmente verificado: "si veo hello y funciona
+back y home" + user tap → labels correctos.
+
+**DVC_DATA_ROW aliaseaba a render_label.** El decoder mapeaba
+`DVC_DATA_ROW` al mismo `render_label` que `DVC_LABEL`, que solo lee
+`"value"` — el attr `"label"` se ignoraba silenciosamente. Fix: nuevo
+`render_data_row` que apila una label-dim (text_opa 60%) encima del
+value-primary, como dice CLAUDE.md §ui_common_data_row. Row-pad 2 px,
+transparent bg, 0-width border. Las 2 labels comparten el color
+primary; la diferencia visual viene de opacity. (El decoder no
+personaliza fuentes — usa default LVGL.)
+
+Con este fix, `bridge.ui.data_row("DECK LEVEL:", str(system.info.deck_level))`
+visualmente rinde "DECK LEVEL:" dim + "2" primary apiladas — **confirmado
+visualmente en hardware por el usuario**.
+
+### Aún diferido post-DL2
+
+- Nice-to-have: semver real en `@app.version` (hoy migration usa
+  int-based `from N:`).
+- Nice-to-have: fuentes Montserrat SM/MD/LG en el decoder para
+  diferenciar jerarquía tipográfica además de opacity.
+
+### Hardware verification — 2026-04-17
+
+Los 3 deferrals post-DL2 (flaky tests, F28 runtime Phase 1, .deck
+source apps Phase 1) verificados end-to-end sobre el board:
+
+- **Conformance**: `{"deck_tests_total":77,"deck_tests_pass":77,"deck_tests_fail":0,"deck_outliers":0,"stress_total":15,"stress_pass":15,"suites_total":5,"suites_pass":5}`
+  — el fix de warm-up discarding produce 0 outliers donde antes salían 3-4
+- **`app.machine_hooks.deck`** pasa (sentinel emitido desde @machine.after)
+- **2 apps .deck cargadas desde SPIFFS root**: `/ping.deck` (app_id=100)
+  y `/hello.deck` (app_id=101). Paths con `/` en el nombre (ej. conformance/)
+  son filtrados antes de load
+- **Launcher tap → `@on resume` funciona**: 3 taps consecutivos al card
+  HELLO dispararon `I (14321/19389/25642) deck.app: hello.deck: resumed
+  (tap from launcher)` — el env persistente se reusa, no hay re-load
+- Heap idle DL2+shell+2apps: **internal=62875 bytes** (vs 72003 pre-apps,
+  ~9KB overhead para las 2 apps cargadas + LVGL launcher)
+
+### Bug fixes descubiertos en hardware
+
+**shell.deck_apps: filter de subdirectorios.** SPIFFS es flat, así que
+`conformance/sanity.deck` aparece como un entry del root con `/` en el
+nombre. Primera versión cargaba todos los .deck tests como apps,
+saturando los 8 slots y spammeando el intent registry. Fix:
+`if (strchr(name, '/') != NULL) return true;` en `scan_cb`.
+
+**deck_shell.c (DL1 legacy): OOM en alloc 32KB.** Tras cargar las apps
+persistentes, el internal heap quedaba ~45KB libre — insuficiente para
+un `heap_caps_malloc(32K, MALLOC_CAP_INTERNAL)`. Fix: fallback a
+PSRAM. El buffer solo se lee (parser ya transfiere a arena interno),
+así que la velocidad de PSRAM no impacta.
+
+### F28 runtime semantics (Phase 1 of post-DL2 deferral)
+
+Primer tramo del F28 runtime prometido en 0.9.1 — se cerró la parte
+que **no requiere wiring a shell events**. Queda para Phase 2 la
+integración con `EVT_WIFI_*`/`EVT_LOW_MEMORY`/activity push-pop.
+
+**@machine.before / @machine.after** ahora corren alrededor de cada
+transition, no solo se parsean. El parser emite `AST_ON` con event
+names reservados `__machine_before` / `__machine_after`; `run_machine`
+los localiza vía `find_on_event` y ejecuta el body: `before` después
+del `leave` del source state y antes de cambiar de estado, `after`
+después de que el nuevo estado quede activo.
+
+**Persistent app API** (`deck_runtime_app_*`). Tres funciones nuevas
+en `deck_interp.h`:
+
+- `deck_runtime_app_load(src, len, **out)` — carga, corre @on launch
+  + @machine, **mantiene el arena y el global env vivos**
+- `deck_runtime_app_dispatch(app, event)` — busca `@on <event>` y lo
+  ejecuta con el env persistente. Missing handler = no-op silencioso.
+  Reserved events (launch, terminate) son no-op aquí.
+- `deck_runtime_app_unload(app)` — corre `@on terminate` best-effort,
+  libera env, resetea arena, libera slot
+
+Backing store: array estático de 8 slots (`DECK_RUNTIME_MAX_APPS`).
+Cada slot encapsula su propio arena + loader + ctx. Esto permite
+que múltiples apps estén loaded simultáneamente (hasta 8), cada una
+con su env independiente. `deck_runtime_run_on_launch` sigue
+existiendo sin cambios — es la one-shot path.
+
+**Selftest**: 2 nuevos cases en `deck_interp_run_selftest`
+(`app_dispatch`, `machine_hooks`). Counter sube 45 → 47.
+Parser test para @machine.before/.after actualizado: ya no espera
+`(use __metadata)`, ahora espera `(on :__machine_before ...)`.
+
+**Conformance**: `app.machine_hooks.deck` nuevo, el sentinel
+`DECK_CONF_OK:app.machine_hooks` se emite **solo** desde
+@machine.after, así que si el runtime omite el hook el test falla
+aunque la state machine completa corra. 77 tests totales.
+
+### .deck source apps from SD (Phase 1 of post-DL2 deferral)
+
+Cerrado el ítem "Cargar apps reales desde `/deck/apps/*.deck` via runtime":
+
+**Nuevo componente shell: `deck_shell_deck_apps`.** Scanea el apps
+partition root al boot (`/*.deck`) y carga cada archivo via el
+`deck_runtime_app_load` API de F28 Phase 1. Cada carga exitosa recibe
+un `app_id` secuencial desde `DECK_APPS_BASE_ID=100` y un intent
+resolver compartido que dispara `@on resume` en el handle cuando el
+card del launcher es tapado.
+
+**Launcher extendido.** Las 4 tarjetas "stub" (BOOKS/NOTES/FILES/WIFI)
+que antes eran toast "Coming soon..." ahora se reemplazan por cards
+dinámicas — una por .deck app cargada (upto 4). Si hay menos apps,
+las slots restantes siguen como stubs.
+
+**Apps incluidas** en el apps partition:
+- `hello.deck` — extendida con `@on resume/pause/terminate` handlers
+  que logguean al UART console (visible via `idf.py monitor`)
+- `ping.deck` — app mínima que emite `time.now_us()` en cada tap,
+  sirve como prueba del lifecycle repeated-dispatch
+
+**Limitaciones conocidas (Phase 2):**
+- Las apps .deck **no pueden dibujar UI todavía**. No hay builtin
+  `bridge.ui.*` expuesto al runtime; el feedback visible es solo el
+  toast "Running X..." que el shell muestra al tap, más los log.info
+  emitidos al UART.
+- El shell NO llama dispatch(resume/pause) en respuesta a activity
+  push/pop — solo en response a tap del card launcher. Eso implica
+  que @on pause nunca se dispara en el flujo actual.
+- No hay cap de heap o CPU por app cargada; un `log.info` en loop
+  apagaría el WDT. DL3 añadirá el task scheduler.
+
+### Aún diferido post-DL2 (Phase 2+)
+
+- **@flow / @flow.step** — sugar sobre @machine. Parseado opaque hoy.
+  Requiere AST transform pass que convierta step X → state X con
+  auto-transition al siguiente.
+- **@migration** — parseado opaque. Requiere wiring a NVS para
+  detectar version bumps y ejecutar los bodies `from N:`.
+- **@assets** — parseado opaque. Requiere el builtin
+  `asset.path(name)` + resolución relativa al app directory.
+- **bridge.ui.* builtins** — para que las apps .deck construyan
+  snapshots DVC. Sin esto, el UI queda 100% en C.
+- **@on resume/pause wiring a activity lifecycle** — hoy solo se
+  llama resume en tap launcher. Falta integrar con activity
+  push/pop + eventos del shell (EVT_WIFI_*, heap low-watermark).
+- **Task scheduler** — DL3. Permitiría apps de larga duración sin
+  bloquear el main task.
+
+### Conformance — flaky-test investigation (post-DL2 deferral)
+
+Cerrado el ítem "3 deck tests flaky por investigar". Los tests
+`edge.nested_match`, `edge.match_when`, `edge.long_ident` (ocasionalmente
+`lang.lambda.basic`) aparecían con `OUTLIER` porque la muestra 0 de 5
+corría ~2.6× más lenta que las 4 restantes (~3.8 ms vs ~1.4 ms).
+
+**Root cause**: el harness hace `vTaskDelay(1)` entre tests para alimentar
+el IDLE0 watchdog. Ese yield permite que IDLE/LVGL/WiFi evicten el
+I-cache del xtensa; la primera muestra paga ese costo y las siguientes
+corren warm. No es flakiness de pasa/falla — los tests pasan 100% de
+las veces; la varianza era de latencia.
+
+**Fix**: `deck_conformance.c` añade una **warm-up run** discarded antes de
+las 5 scored runs en cada test positivo. El warm-up se registra como
+`cold_us` y se imprime separado; las 5 muestras scored (`min/p50/p99/max`)
+reflejan steady-state warm, sin el artifact de cold-start.
+
+```
+  edge.nested_match   PASS  cold=3970us min=1390us p50=1440us p99=1472us max=1472us  heap+0
+```
+
+Todas las positivas añaden 1 run extra (warmup) → boot time suite sube
+~140 ms (76 tests × ~1.9 ms/warmup, aproximación). Aceptable. El flag
+`OUTLIER` sobrevive en el harness para capturar regresiones futuras
+pero ya no se dispara por cold-start.
+
 ## [0.10.0] — 2026-04-17 — F31 DL2 certified
 
 Cierre del plan DL2 — release 0.10.0. Esta versión consolida F25-F30

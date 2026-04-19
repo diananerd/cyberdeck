@@ -1,0 +1,16 @@
+@app
+  name: "Conf app.flow"
+  id: "conf.app.flow"
+  version: "1.0.0"
+  edition: 2026
+
+@requires
+  deck_level: 1
+
+@flow signup
+  step welcome:
+    log.info("app.flow: welcome")
+  step collect:
+    log.info("app.flow: collect")
+  step done:
+    log.info("DECK_CONF_OK:app.flow")

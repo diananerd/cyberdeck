@@ -27,18 +27,20 @@ deck_err_t deck_shell_rotation_restore(void)
         return DECK_RT_OK;     /* nothing saved → keep default 0 */
     }
     if (v < 0 || v > 3) {
-        ESP_LOGW(TAG, "stored rotation out of range (%lld) — ignoring",
+        ESP_LOGW(TAG, "stored rotation out of range (%lld) — resetting",
                  (long long)v);
+        (void)deck_sdi_nvs_set_i64(NVS_NS, NVS_KEY, 0);
         return DECK_RT_OK;
     }
     if (v == 0) return DECK_RT_OK; /* already default */
-    deck_sdi_err_t rr = deck_bridge_ui_set_rotation(
-        (deck_bridge_ui_rotation_t)v);
-    if (rr != DECK_SDI_OK) {
-        ESP_LOGW(TAG, "set_rotation: %s", deck_sdi_strerror(rr));
-        return DECK_RT_INTERNAL;
-    }
-    ESP_LOGI(TAG, "restored rotation %d", (int)v);
+    /* Non-0 rotations are currently disabled (see deck_shell_settings.c
+     * rot_unavailable_cb for the full reason — LVGL sw_rotate vs partial
+     * buffer). A previously-saved 90/180/270 would otherwise stick across
+     * reboots. Reset to 0 now; when a proper rotation-aware flush lands
+     * we'll re-enable the code path below. */
+    ESP_LOGW(TAG, "stored rotation %lld currently unsupported — resetting to 0",
+             (long long)v);
+    (void)deck_sdi_nvs_set_i64(NVS_NS, NVS_KEY, 0);
     return DECK_RT_OK;
 }
 

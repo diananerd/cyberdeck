@@ -49,9 +49,15 @@ deck_err_t deck_shell_boot(void)
     snprintf(path, sizeof(path), "/%s", fc.name);
 
     /* Read the .deck source into a heap buffer. 32 KB cap is ample
-     * for DL1 programs (spec 16 §4.9 targets ≤ 48 KB per loaded app). */
+     * for DL1 programs (spec 16 §4.9 targets ≤ 48 KB per loaded app).
+     * Fall back to PSRAM when internal is tight — by the time DL1 shell
+     * runs, the DL2 persistent app slots have already consumed most of
+     * the internal heap and a 32KB internal alloc can fail even though
+     * several MB of PSRAM are free. The source buffer is only read, not
+     * interpreted from, so PSRAM access speed is fine. */
     const size_t READ_CAP = 32 * 1024;
     char *buf = heap_caps_malloc(READ_CAP, MALLOC_CAP_INTERNAL);
+    if (!buf) buf = heap_caps_malloc(READ_CAP, MALLOC_CAP_SPIRAM);
     if (!buf) { ESP_LOGE(TAG, "oom reading app"); return DECK_RT_NO_MEMORY; }
     size_t n = READ_CAP - 1;
     deck_sdi_err_t rr = deck_sdi_fs_read(path, buf, &n);

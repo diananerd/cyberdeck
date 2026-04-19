@@ -53,6 +53,11 @@ typedef struct {
     char               err_msg[DECK_INTERP_ERR_MSG];
     bool               tail_pos;     /* DL2 F21.3: current AST node is in tail position */
     deck_pending_tc_t  pending_tc;
+    /* DL2 F28.5: the currently-executing module, set by run_on_launch
+     * and deck_runtime_app_* so builtins (asset.path) can look up
+     * top-level decls (@assets) at call time. NULL for expressions
+     * evaluated outside a module (e.g. interp_test scratch runs). */
+    const ast_node_t  *module;
 } deck_interp_ctx_t;
 
 /* Initialize interpreter context. global env starts empty. */
@@ -65,6 +70,52 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env,
 
 /* Load + run @on launch body. Used by F5 tests + F8 shell. */
 deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len);
+
+/* ----- DL2 F28 — persistent app handles --------------------------------
+ *
+ * `deck_runtime_run_on_launch` is a one-shot: it loads, runs @on launch,
+ * runs the machine, tears everything down. That doesn't work for the
+ * DL2 app-model — @on resume/pause/suspend/terminate need the module
+ * AST, global env, and top-level fn bindings to outlive the launch call
+ * so subsequent shell events can re-enter the same module.
+ *
+ * deck_runtime_app_t holds a dedicated arena + loader + interp context
+ * for one loaded .deck. Lifecycle:
+ *   load()      — parse + validate + run @on launch + run @machine (initial
+ *                 transitions execute synchronously, same as run_on_launch)
+ *   dispatch()  — find @on <event> and run its body. Null / no-match is a
+ *                 silent no-op. Does NOT re-run the machine.
+ *   unload()    — fire @on terminate if present, release global env, free
+ *                 the arena.
+ *
+ * Reserved event names: "launch" and "terminate" are dispatched implicitly
+ * by load/unload; calling dispatch() with them is a no-op (to prevent
+ * double-dispatch). Other lifecycle names ("resume", "pause", "suspend",
+ * "low_memory", "network_change") are passed through as-is.
+ *
+ * Apps are kept internally in a fixed array; max DECK_RUNTIME_MAX_APPS.
+ */
+#define DECK_RUNTIME_MAX_APPS  8
+
+typedef struct deck_runtime_app deck_runtime_app_t;
+
+/* Load a source buffer as a persistent app. On success *out is set to a
+ * non-NULL handle and return is DECK_RT_OK. On failure *out is NULL and
+ * the returned error identifies the stage (load / launch / machine). */
+deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
+                                 deck_runtime_app_t **out);
+
+/* Fire @on <event> on the app. Missing handler is a silent no-op, returns
+ * DECK_RT_OK. Event body errors bubble up. */
+deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app, const char *event);
+
+/* Fire @on terminate if present, then free everything. Handle is invalid
+ * after this call. NULL-safe. */
+void deck_runtime_app_unload(deck_runtime_app_t *app);
+
+/* Read app metadata extracted by the loader. NULL returns for missing. */
+const char *deck_runtime_app_id(const deck_runtime_app_t *app);
+const char *deck_runtime_app_name(const deck_runtime_app_t *app);
 
 /* Env helpers. */
 deck_env_t *deck_env_new(deck_arena_t *a, deck_env_t *parent);

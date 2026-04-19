@@ -142,13 +142,22 @@ static lv_obj_t *render_label(lv_obj_t *parent, const deck_dvc_node_t *n)
     return lbl;
 }
 
+/* Registered by higher layers (shell) via deck_bridge_ui_set_intent_hook.
+ * When NULL we still log-only, which is how the decoder behaves on
+ * platforms that don't wire a hook. */
+static deck_bridge_ui_intent_hook_t s_intent_hook = NULL;
+
+void deck_bridge_ui_set_intent_hook(deck_bridge_ui_intent_hook_t hook)
+{
+    s_intent_hook = hook;
+}
+
 static void trigger_click_cb(lv_event_t *e)
 {
     uint32_t intent_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     if (intent_id == 0) return;
-    /* F28 wires this to deck_intent_fire(rt, intent_id, NULL). For now
-     * we just log; tests verify the wiring through log inspection. */
     ESP_LOGI(TAG, "intent fired: id=%u", (unsigned)intent_id);
+    if (s_intent_hook) s_intent_hook(intent_id);
 }
 
 static lv_obj_t *render_trigger(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -451,6 +460,38 @@ static lv_obj_t *render_progress(lv_obj_t *parent, const deck_dvc_node_t *n)
     return bar;
 }
 
+/* DVC_DATA_ROW — stacked dim-label-over-primary-value pair, per
+ * CLAUDE.md ui_common_data_row spec. Differs from DVC_LABEL (which
+ * used to also render data rows, leaking the label attr). Font is the
+ * LVGL default for both lines; we lean on color + opacity to convey the
+ * label/value hierarchy since the decoder doesn't customize fonts yet. */
+static lv_obj_t *render_data_row(lv_obj_t *parent, const deck_dvc_node_t *n)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_set_width(col, lv_pct(100));
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(col, 2, LV_PART_MAIN);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START,
+                                LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    const char *label = attr_str(n, "label", NULL);
+    const char *value = attr_str(n, "value", "");
+    if (label && *label) {
+        lv_obj_t *l = lv_label_create(col);
+        lv_label_set_text(l, label);
+        lv_obj_set_style_text_color(l, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_text_opa(l, LV_OPA_60, LV_PART_MAIN);
+    }
+    lv_obj_t *v = lv_label_create(col);
+    lv_label_set_text(v, value);
+    lv_obj_set_style_text_color(v, CD_PRIMARY, LV_PART_MAIN);
+    return col;
+}
+
 /* ---------- dispatch ---------- */
 
 static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -463,8 +504,8 @@ static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
         case DVC_LIST:
         case DVC_LIST_ITEM: return render_column(parent, n);
         case DVC_ROW:      return render_row(parent, n);
-        case DVC_LABEL:
-        case DVC_DATA_ROW: return render_label(parent, n);
+        case DVC_LABEL:    return render_label(parent, n);
+        case DVC_DATA_ROW: return render_data_row(parent, n);
         case DVC_TRIGGER:
         case DVC_NAVIGATE: return render_trigger(parent, n);
         case DVC_TEXT:     return render_text_input(parent, n, false);
@@ -505,7 +546,15 @@ deck_sdi_err_t deck_bridge_ui_render(const deck_dvc_node_t *root)
     lv_obj_clean(scr);
     lv_obj_set_style_bg_color(scr, CD_BG_DARK, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(scr, 16, LV_PART_MAIN);
+    /* Statusbar + navbar live on lv_layer_top (survive screen swaps) and
+     * cover the top 36 px / bottom 48 px of the screen. Reserve that room
+     * in pad_top / pad_bottom so content never slips behind either bar.
+     * Side padding stays at 16 for breathing room. Matches the make_
+     * content_area convention in deck_shell_apps.c. */
+    lv_obj_set_style_pad_top(scr,    36 + 16, LV_PART_MAIN);  /* SB_HEIGHT + breath */
+    lv_obj_set_style_pad_bottom(scr, 48 + 16, LV_PART_MAIN);  /* NB_HEIGHT + breath */
+    lv_obj_set_style_pad_left(scr,   16, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(scr,  16, LV_PART_MAIN);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(scr, 14, LV_PART_MAIN);
     lv_obj_set_flex_align(scr, LV_FLEX_ALIGN_START,

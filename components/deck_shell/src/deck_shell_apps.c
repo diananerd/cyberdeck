@@ -192,45 +192,106 @@ static deck_err_t counter_intent_resolver(const deck_shell_intent_t *intent)
 /*    F29.2 — Task Manager                                      */
 /* ============================================================ */
 
+/* Human-readable label for a known-C-side app_id. Keeps the taskman list
+ * legible; unknown ids (e.g. .deck apps with ids ≥ 100) fall through to
+ * the raw number. */
+static const char *taskman_app_name(uint16_t app_id)
+{
+    switch (app_id) {
+        case 0: return "LAUNCHER";
+        case 1: return "TASKMAN";
+        case 4: return "COUNTER";
+        case 7: return "NET HELLO";
+        case 9: return "SETTINGS";
+        default: return NULL;
+    }
+}
+
 static void taskman_refresh_list(lv_obj_t *list_area)
 {
     lv_obj_clean(list_area);
     size_t depth = deck_bridge_ui_activity_depth();
-    char hdr[64];
+    char hdr[72];
     snprintf(hdr, sizeof(hdr), "ACTIVE: %u / 4    HEAP: %u KB",
              (unsigned)depth,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
     make_dim(list_area, hdr);
 
+    /* Iterate the whole stack, slot[0] (launcher) first → top last so
+     * the "top" (which you're looking at) shows at the bottom of the
+     * list — matches the mental model of a stack. */
     for (size_t i = 0; i < depth; i++) {
-        deck_bridge_ui_activity_t *a = deck_bridge_ui_activity_current();
-        /* current() returns top — we'd need stack-iter API. Approximate:
-         * just show top + count. F29.x will add proper iteration. */
-        if (i > 0 || !a) break;
-        char row[64];
-        snprintf(row, sizeof(row), "TOP: app=%u screen=%u",
-                 (unsigned)a->app_id, (unsigned)a->screen_id);
+        deck_bridge_ui_activity_t *a = deck_bridge_ui_activity_at(i);
+        if (!a) continue;
+        const char *nm = taskman_app_name(a->app_id);
+        char row[96];
+        bool is_top = (i + 1 == depth);
+        if (nm) {
+            snprintf(row, sizeof(row), "%s %s (scr=%u)",
+                     is_top ? "->" : "  ", nm, (unsigned)a->screen_id);
+        } else {
+            snprintf(row, sizeof(row), "%s app=%u scr=%u",
+                     is_top ? "->" : "  ",
+                     (unsigned)a->app_id, (unsigned)a->screen_id);
+        }
         lv_obj_t *r = lv_label_create(list_area);
         lv_label_set_text(r, row);
-        lv_obj_set_style_text_color(r, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_text_color(r, is_top ? CD_PRIMARY : CD_PRIMARY_DIM,
+                                     LV_PART_MAIN);
     }
 }
 
 static lv_obj_t *s_taskman_list_area = NULL;
+static lv_timer_t *s_taskman_refresh_timer = NULL;
+
+/* Deferred pop — called from the confirm OK callback. lv_async_call so we
+ * don't mutate the activity stack from inside the dialog dismiss path. */
+static void taskman_kill_top_async(void *ud)
+{
+    (void)ud;
+    /* Never pop when only the launcher is on the stack — pop_to_home is
+     * a no-op in that case but we log something clearer. Also refuse to
+     * pop if the top IS the taskman itself (that's us killing ourselves
+     * — legal but surprising; we let it through so users can verify the
+     * pop-to-launcher path works). */
+    if (deck_bridge_ui_activity_depth() <= 1) {
+        deck_bridge_ui_overlay_toast("Nothing to kill", 1200);
+        return;
+    }
+    deck_sdi_err_t rc = deck_bridge_ui_activity_pop();
+    if (rc != DECK_SDI_OK) {
+        deck_bridge_ui_overlay_toast("Kill failed", 1500);
+    }
+}
+
+static void taskman_kill_on_ok(void *ud)
+{
+    (void)ud;
+    lv_async_call(taskman_kill_top_async, NULL);
+}
 
 static void taskman_kill_confirm_cb(lv_event_t *e)
 {
     (void)e;
-    deck_bridge_ui_overlay_confirm(
+    deck_bridge_ui_overlay_confirm_cb(
         "KILL TOP APP",
         "Pop the topmost activity? Launcher cannot be killed.",
-        "KILL", "CANCEL", 0, 0);
-    /* Confirm OK currently logs only — F30 wires actual pop on confirm. */
+        "KILL", "CANCEL",
+        taskman_kill_on_ok, NULL, NULL);
 }
 
 static void taskman_refresh_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_taskman_list_area) taskman_refresh_list(s_taskman_list_area);
+}
+
+/* Auto-refresh every 1.5s so the HEAP counter behaves like a live gauge.
+ * Also picks up depth changes if another app is pushed in the background
+ * (unlikely today but defends against future async flows). */
+static void taskman_auto_refresh_timer_cb(lv_timer_t *t)
+{
+    (void)t;
     if (s_taskman_list_area) taskman_refresh_list(s_taskman_list_area);
 }
 
@@ -253,6 +314,20 @@ static void taskman_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
 
     taskman_refresh_list(s_taskman_list_area);
 
+    /* Live heap gauge — timers fire on the LVGL task with the UI lock
+     * held, so we can update labels without locking ourselves. Always
+     * (re)create the timer on on_create — if a previous instance leaked
+     * one (e.g. the activity got recreated during rotation before its
+     * on_destroy fired), we'd end up with a stale timer firing against
+     * a freed list area and a use-after-free on the next refresh. Be
+     * defensive and delete any lingering timer before recreating. */
+    if (s_taskman_refresh_timer) {
+        lv_timer_del(s_taskman_refresh_timer);
+        s_taskman_refresh_timer = NULL;
+    }
+    s_taskman_refresh_timer =
+        lv_timer_create(taskman_auto_refresh_timer_cb, 1500, NULL);
+
     lv_obj_t *row = lv_obj_create(area);
     lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -267,6 +342,10 @@ static void taskman_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
 static void taskman_on_destroy(deck_bridge_ui_activity_t *act, void *intent_data)
 {
     (void)act; (void)intent_data;
+    if (s_taskman_refresh_timer) {
+        lv_timer_del(s_taskman_refresh_timer);
+        s_taskman_refresh_timer = NULL;
+    }
     s_taskman_list_area = NULL;
 }
 
