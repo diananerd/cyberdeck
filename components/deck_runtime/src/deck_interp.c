@@ -261,14 +261,14 @@ static deck_value_t *b_text_lower(deck_value_t **args, uint32_t n, deck_interp_c
 static deck_value_t *b_text_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.len expects str"); return NULL; }
+    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.length expects str"); return NULL; }
     return deck_new_int((int64_t)args[0]->as.s.len);
 }
 static deck_value_t *b_text_starts_with(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
     if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.starts_with expects (str, str)"); return NULL; }
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.starts expects (str, str)"); return NULL; }
     if (args[1]->as.s.len > args[0]->as.s.len) return deck_retain(deck_false());
     return deck_retain(memcmp(args[0]->as.s.ptr, args[1]->as.s.ptr, args[1]->as.s.len) == 0 ? deck_true() : deck_false());
 }
@@ -276,7 +276,7 @@ static deck_value_t *b_text_ends_with(deck_value_t **args, uint32_t n, deck_inte
 {
     (void)n;
     if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.ends_with expects (str, str)"); return NULL; }
+        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.ends expects (str, str)"); return NULL; }
     if (args[1]->as.s.len > args[0]->as.s.len) return deck_retain(deck_false());
     const char *tail = args[0]->as.s.ptr + args[0]->as.s.len - args[1]->as.s.len;
     return deck_retain(memcmp(tail, args[1]->as.s.ptr, args[1]->as.s.len) == 0 ? deck_true() : deck_false());
@@ -581,7 +581,7 @@ static deck_value_t *b_fs_read(deck_value_t **args, uint32_t n, deck_interp_ctx_
 
 /* fs.list — returns entries separated by '\n' as a single string.
  * DL1 lacks list literal syntax, so a newline-joined string is the
- * pragmatic representation: callable via text.contains / text.len.
+ * pragmatic representation: callable via text.contains / text.length.
  * DL2 will replace this with a real list<str> value once list syntax
  * lands. */
 #define FS_LIST_BUF 4096
@@ -810,9 +810,13 @@ static const builtin_t BUILTINS[] = {
     /* text */
     { "text.upper",             b_text_upper,        1, 1 },
     { "text.lower",             b_text_lower,        1, 1 },
-    { "text.len",               b_text_len,          1, 1 },
-    { "text.starts_with",       b_text_starts_with,  2, 2 },
-    { "text.ends_with",         b_text_ends_with,    2, 2 },
+    /* Spec 03-deck-os §3 @builtin text — length / starts / ends.
+     * (The pre-concept-#15 legacy names `text.len` / `text.starts_with`
+     *  / `text.ends_with` are no longer registered; authors must use
+     *  the spec names.) */
+    { "text.length",            b_text_len,          1, 1 },
+    { "text.starts",            b_text_starts_with,  2, 2 },
+    { "text.ends",              b_text_ends_with,    2, 2 },
     { "text.contains",          b_text_contains,     2, 2 },
     { "text.split",             b_text_split,        2, 2 },
     { "text.repeat",            b_text_repeat,       2, 2 },

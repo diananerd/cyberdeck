@@ -69,11 +69,11 @@ static bool t_math_ceil(const char *name)
 static bool t_text_lower(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("text.lower(\"ABC\")", &e); CHECK(v && v->as.s.len == 3 && memcmp(v->as.s.ptr, "abc", 3) == 0, "abc"); deck_release(v); (void)e; return true; }
 static bool t_text_len(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("text.len(\"hello\")", &e); CHECK(v && v->as.i == 5, "5"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("text.length(\"hello\")", &e); CHECK(v && v->as.i == 5, "5"); deck_release(v); (void)e; return true; }
 static bool t_text_starts_with(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("text.starts_with(\"hello\", \"he\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("text.starts(\"hello\", \"he\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
 static bool t_text_ends_with(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("text.ends_with(\"hello\", \"lo\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("text.ends(\"hello\", \"lo\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
 static bool t_text_contains(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("text.contains(\"hello\", \"ell\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
 static bool t_conv_str_int(const char *name)

@@ -12,9 +12,9 @@
   let two   = base ++ base
   let four  = two ++ two
   let eight = four ++ four
-  let ok_len  = text.len(eight) == 208
-  let ok_head = text.starts_with(eight, "abcdefgh")
-  let ok_tail = text.ends_with(eight, "stuvwxyz")
+  let ok_len  = text.length(eight) == 208
+  let ok_head = text.starts(eight, "abcdefgh")
+  let ok_tail = text.ends(eight, "stuvwxyz")
   let ok_mid  = text.contains(eight, "xyzabc")
   let ok = ok_len and ok_head and ok_tail and ok_mid
   log.info(if ok then "DECK_CONF_OK:edge.long_string" else "DECK_CONF_FAIL:edge.long_string")

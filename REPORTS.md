@@ -593,3 +593,25 @@ Session #3 continued — 2026-04-18.
 - `@flow` desugaring (which internally builds `AST_MACHINE` via `ast_new`) doesn't set `initial_state`, so every existing flow fixture falls back to "first step" — same behavior as before.
 
 **Why this matters (A → B pattern)**: annexes can now begin to parse. The remaining §8 features (payloads, composition, top-level transitions, watch) are bigger but orthogonal — each can land as its own concept without regressing what #14 unlocks. The explicit `initial` declaration also removes a subtle fragility: until now, reordering the `state` children silently re-picked the initial state; an app author that moved a state for readability could change runtime behaviour without warning. With `initial :atom` in place, the entry point is source-controlled and named.
+
+### Concept #15 — `text.*` builtin names (spec §3 — length / starts / ends)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery**: spec `03-deck-os §3 @builtin text` uses `length`, `starts`, `ends`. Runtime registered `text.len`, `text.starts_with`, `text.ends_with`. Session #2 deepening rewrote 5+ fixtures to spec names (silently failing: "unknown function text.length"); earlier fixtures and unit tests kept the runtime names (passing). Classic A→B: the conformance harness reports green on one side, red but silent on the other.
+
+**Fix applied (top-down, no shim)**:
+
+- 2026-04-18 · layer 4 edit · `src/deck_interp.c` BUILTINS table — three registrations flipped to their spec names: `text.length`, `text.starts`, `text.ends`. The C function symbols (`b_text_len` / `b_text_starts_with` / `b_text_ends_with`) are unchanged, so there's no risk of behaviour drift; only the dispatch name string changes.
+- 2026-04-18 · layer 4 edit · corresponding error messages in the same file updated to the new names.
+- 2026-04-18 · layer 6 edit · fixtures `edge_empty_strings.deck`, `edge_escapes.deck`, `edge_long_string.deck`, `edge_unicode.deck` migrated from `text.len` / `text.starts_with` / `text.ends_with` to spec names.
+- 2026-04-18 · layer 5 edit · `src/deck_interp_test.c` three spot-check tests migrated.
+- 2026-04-18 · layer 6 edit · `apps/conformance/os_nvs.deck` was using `text.len(ks)` on a **list** — both wrong (type mismatch) and wrong API (spec §11.2 has `list.len` for list, not `text.length`). Changed to `list.len(ks)`, which is the spec-canonical list operation and matches the runtime registration.
+
+**Verification**:
+- `grep -rE "text\.(len|starts_with|ends_with)\b"` across `apps/` and `components/` — no matches outside comments.
+- Spec-deepened fixtures (`lang_fn_typed`, `lang_interp_basic`, `lang_literals`, `lang_strings`, `lang_variant_pat`, `os_fs_list`, `os_info`, `os_text`) were already using the spec names and remain unchanged — they now actually resolve against the runtime (before this commit, they would error with "unknown function text.length").
+
+**Why this matters (A → B pattern)**: the split-vocabulary situation was the cleanest possible demonstration of the user's framing — half the fixtures testing the spec vocabulary were silently failing, half the fixtures testing the runtime vocabulary were passing, and the harness treated the suite as green. Unifying under the spec names forces either-pass-or-fail coherence. No backward-compat shim: a layer-4 author that reintroduces `text.len` would have to do so explicitly.
+
+**Deferred (related, not this concept)**: list.len is actually spec-canonical too (§11.2 uses `len`, not `length`) — text uses `length` while list uses `len`. That's a spec inconsistency, not a runtime one; the runtime already matches spec for both. Not fixing the spec in this concept; flagged for a possible `11.2/03-deck-os §3 naming consistency audit` later.

@@ -48,7 +48,7 @@
   -- keys() enumerates what we just wrote.
   let ok_keys = match nvs.keys()
                   | :ok ks ->
-                      text.len(ks) >= 7   -- str_k int_pos int_neg int_zero f_k b_t b_f bytes_k
+                      list.len(ks) >= 7   -- str_k int_pos int_neg int_zero f_k b_t b_f bytes_k
                   | :err _  -> false
 
   -- Missing key returns :none (not :err).
