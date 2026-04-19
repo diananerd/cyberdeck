@@ -137,7 +137,7 @@ content =
         trigger "Cancel" -> LauncherState.send(:close_search)
 
 fn unread_badge (counts: [(app_id: str, unread: int)], app_id: str) -> int? =
-  let n = match first_or(filter(counts, c -> c.app_id == app_id),
+  let n = match first_or(list.filter(counts, c -> c.app_id == app_id),
                          (app_id: app_id, unread: 0))
             | (app_id: _, unread: v) -> v
   if n > 0 then :some n else :none

@@ -635,3 +635,36 @@ Session #3 continued — 2026-04-18.
 **Verification**: `grep -rE 'text\.length'` across the whole repo returns zero matches. `len` is now the single spelling for string length, matching `list.len`, `map.len` (when the future map.len lands), and every other minimalist short name in Deck.
 
 **Why this matters (the user's framing, broader)**: the combinatorial audit isn't just "spec vs code"; it's every pair of authoritative artefacts, including spec-to-spec. A contradiction at that layer is exactly as dangerous as one at any other layer because it seeds inconsistent mental models across the codebase. The rule of thumb when two specs disagree: honour the language's **philosophy**, not whichever side happens to be cited first. Deck's philosophy is minimalism — shortest correct form wins.
+
+### Concept #16 — §11 collection builtins uniform under `module.name`
+
+Session #3 continued — 2026-04-18.
+
+**Drift**: §11 "Standard Vocabulary" had three incompatible styles in adjacent subsections:
+- §11.2 list ops: bare names — `len(xs)`, `head(xs)`, `map(xs, fn)`
+- §11.3 map ops: qualified — `map.get(m, k)`, `map.keys(m)`
+- §11.4 tuple ops: mixed — bare `fst(t)`, `snd(t)` alongside qualified `tup.third(t)`, `tup.swap(t)`
+
+Runtime + every fixture use qualified `list.xxx` / `map.xxx` / `tup.xxx`. So the §11.2 bare form was teaching a vocabulary nothing else implements. The §11.4 mix meant readers couldn't predict whether a new tuple op would be bare or qualified.
+
+Additionally, several annexes and spec examples called the bare names at call sites (`filter(counts, …)`, `map(s.entries, …)`, `head(s.selected)`, `len(items)`, `count_where(items, …)`). Every one of those would fail to dispatch against the runtime, and would confuse a human reader about which style Deck uses.
+
+**Fix applied (pure spec + annex, no runtime touch)**:
+
+- 2026-04-18 · layer 1 edit · `01-deck-lang.md §11.2` — every entry rewritten to `list.xxx(xs: [T], …)`. Header gained a one-line note explaining the qualified-module convention and that the runtime + fixtures already use it.
+- 2026-04-18 · layer 1 edit · `01-deck-lang.md §11.4` — `fst` / `snd` renamed to `tup.fst` / `tup.snd`, eliminating the pair-vs-ternary inconsistency inside the same section. Header gained the same note.
+- 2026-04-18 · layer 1 edit · `01-deck-lang.md §7.2` interpolation example — `{len(items)}` → `{list.len(items)}`.
+- 2026-04-18 · layer 1 edit · `04-deck-runtime.md §11.3` REPL example — `filter(xs, …)` → `list.filter(xs, …)`.
+- 2026-04-18 · layer 1 edit · `05-deck-os-api.md` AES comment — `len(data)` → `list.len(data)`.
+- 2026-04-18 · layer 1 edit · `09-deck-shell.md` — `unread_for` helper's `filter(counts, …)` → `list.filter(counts, …)`; task-switcher pipeline + crash-reporter helpers migrated (three call sites total).
+- 2026-04-18 · layer 2 edit · `annex-a-launcher.md` — badge helper's `filter(counts, …)` → `list.filter(counts, …)`.
+- 2026-04-18 · layer 2 edit · `annex-b-task-manager.md` — content-primitive `list` now wraps a qualified `list.filter(processes, …)` call (first `list` = §12.1 list primitive; second `list.filter` = §11.2 list module method — both explicit).
+- 2026-04-18 · layer 2 edit · `annex-c-settings.md` — three `append(s.digits, d)` sites → `list.append(s.digits, d)`.
+- 2026-04-18 · layer 2 edit · `annex-d-files.md` — `head(s.selected)` → `list.head(s.selected)`; `map(s.entries, …)` → `list.map(s.entries, …)`; `len(s.selected)` → `list.len(s.selected)` in the delete-confirm prompt.
+- 2026-04-18 · layer 2 edit · `annex-xx-bluesky.md` — eight call sites migrated: two `len(posts)+len(users)` search guards, four `|> map(parse_xxx)` pipelines, two `count_where(items, …)` notification counters.
+
+**Verification**: `grep` for bare `(len|head|tail|filter|reduce|append|prepend|reverse|flatten|take|drop|find_index|count_where|sort_by|unique_by|min_by|max_by|any|all|find)(` across `deck-lang/` returns only: (a) the §3 `len` / `contains` / `find` definitions (inside `@builtin text` / `@builtin regex` blocks — those are module-scoped headers, not call sites), and (b) non-function mentions (e.g. `:append` atom in an event name, prose referencing "map" as in key/value map). Zero bare call sites remain. Fixtures already used qualified form — no fixture edits needed.
+
+**Why this matters**: the question the user implicitly asked at the `len`/`length` point generalises — every pair of similar operations in Deck's spec should use **one** spelling and **one** qualification convention. §11 is the front-door lookup for a developer learning Deck's standard library; having it present three incompatible styles in adjacent subsections teaches the wrong pattern out of the gate. Now every collection op says `<module>.<method>(receiver, …)` the same way, and every annex that calls these ops does so through the same dispatch shape the runtime implements.
+
+**No code change** — runtime was already correct; this concept fixes the specs + annexes so they stop teaching the wrong vocabulary.

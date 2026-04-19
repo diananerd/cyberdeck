@@ -136,7 +136,7 @@ Each running app is a `navigate` — a semantic "go into" affordance that the br
           proc
 
           group "BACKGROUND TASKS"
-            list filter(processes, p -> p.app_id == id and p.kind == :background)
+            list list.filter(processes, p -> p.app_id == id and p.kind == :background)
               empty ->
                 "NO BACKGROUND TASKS"
               bg ->

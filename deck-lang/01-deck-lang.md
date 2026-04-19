@@ -67,7 +67,7 @@ unit           -- the unit value
 Inside any double-quoted string, `{expr}` evaluates `expr` and calls `str()` on the result:
 ```
 let msg  = "Temperature: {temp}°C"
-let full = "Hello, {user.name}! You have {len(items)} messages."
+let full = "Hello, {user.name}! You have {list.len(items)} messages."
 let math = "Result: {a + b}"
 ```
 To include a literal `{`, escape it: `"\{"`. Interpolation applies to all string literals, including map keys and annotation values.
@@ -818,50 +818,51 @@ bool  (s: str)      -> bool?    -- "true"/"false" to bool
 ```
 
 ### 11.2 List Operations
+All list operations are qualified under `list.` — same convention as `map.` (§11.3) and every `@builtin` module in §3. This matches both the runtime's dispatch pattern and every fixture's call form.
 ```
-len        (list: [T])                           -> int
-head       (list: [T])                           -> T?
-tail       (list: [T])                           -> [T]
-last       (list: [T])                           -> T?
-append     (list: [T], item: T)                  -> [T]
-prepend    (item: T, list: [T])                  -> [T]
-reverse    (list: [T])                           -> [T]
-take       (list: [T], n: int)                   -> [T]
-drop       (list: [T], n: int)                   -> [T]
-contains   (list: [T], item: T)                  -> bool
-map        (list: [T], fn: T -> U)               -> [U]
-filter     (list: [T], fn: T -> bool)            -> [T]
-reduce     (list: [T], init: U, fn: (U,T) -> U)  -> U
-flat_map   (list: [T], fn: T -> [U])             -> [U]
-flatten    (list: [[T]])                         -> [T]
-zip        (a: [T], b: [U])                      -> [(T, U)]
-zip_with   (a: [T], b: [U], fn: (T,U) -> V)     -> [V]
-scan       (list: [T], init: U, fn: (U,T) -> U)  -> [U]
-enumerate  (list: [T])                           -> [(int, T)]
-tabulate   (n: int, fn: int -> T)                -> [T]
-chunk      (list: [T], size: int)                -> [[T]]
-window     (list: [T], size: int)                -> [[T]]
-partition  (list: [T], fn: T -> bool)            -> ([T], [T])
-any        (list: [T], fn: T -> bool)            -> bool
-all        (list: [T], fn: T -> bool)            -> bool
-none       (list: [T], fn: T -> bool)            -> bool
-find       (list: [T], fn: T -> bool)            -> T?
-find_index (list: [T], fn: T -> bool)            -> int?
-count_where(list: [T], fn: T -> bool)            -> int
-group_by   (list: [T], fn: T -> str)             -> {str: [T]}
-unique     (list: [T])                           -> [T]
-unique_by  (list: [T], fn: T -> any)             -> [T]
-sort       (list: [T])                           -> [T]
-sort_by    (list: [T], fn: T -> float)           -> [T]
-sort_by_str(list: [T], fn: T -> str)             -> [T]
-sort_desc  (list: [T])                           -> [T]
-sort_by_desc(list: [T], fn: T -> float)          -> [T]
-sum        (list: [int])                         -> int
-sum_f      (list: [float])                       -> float
-avg        (list: [float])                       -> float?
-min_by     (list: [T], fn: T -> float)           -> T?
-max_by     (list: [T], fn: T -> float)           -> T?
-interleave (a: [T], b: [T])                      -> [T]
+list.len        (xs: [T])                           -> int
+list.head       (xs: [T])                           -> T?
+list.tail       (xs: [T])                           -> [T]
+list.last       (xs: [T])                           -> T?
+list.append     (xs: [T], item: T)                  -> [T]
+list.prepend    (item: T, xs: [T])                  -> [T]
+list.reverse    (xs: [T])                           -> [T]
+list.take       (xs: [T], n: int)                   -> [T]
+list.drop       (xs: [T], n: int)                   -> [T]
+list.contains   (xs: [T], item: T)                  -> bool
+list.map        (xs: [T], fn: T -> U)               -> [U]
+list.filter     (xs: [T], fn: T -> bool)            -> [T]
+list.reduce     (xs: [T], init: U, fn: (U,T) -> U)  -> U
+list.flat_map   (xs: [T], fn: T -> [U])             -> [U]
+list.flatten    (xs: [[T]])                         -> [T]
+list.zip        (a: [T], b: [U])                    -> [(T, U)]
+list.zip_with   (a: [T], b: [U], fn: (T,U) -> V)    -> [V]
+list.scan       (xs: [T], init: U, fn: (U,T) -> U)  -> [U]
+list.enumerate  (xs: [T])                           -> [(int, T)]
+list.tabulate   (n: int, fn: int -> T)              -> [T]
+list.chunk      (xs: [T], size: int)                -> [[T]]
+list.window     (xs: [T], size: int)                -> [[T]]
+list.partition  (xs: [T], fn: T -> bool)            -> ([T], [T])
+list.any        (xs: [T], fn: T -> bool)            -> bool
+list.all        (xs: [T], fn: T -> bool)            -> bool
+list.none       (xs: [T], fn: T -> bool)            -> bool
+list.find       (xs: [T], fn: T -> bool)            -> T?
+list.find_index (xs: [T], fn: T -> bool)            -> int?
+list.count_where(xs: [T], fn: T -> bool)            -> int
+list.group_by   (xs: [T], fn: T -> str)             -> {str: [T]}
+list.unique     (xs: [T])                           -> [T]
+list.unique_by  (xs: [T], fn: T -> any)             -> [T]
+list.sort       (xs: [T])                           -> [T]
+list.sort_by    (xs: [T], fn: T -> float)           -> [T]
+list.sort_by_str(xs: [T], fn: T -> str)             -> [T]
+list.sort_desc  (xs: [T])                           -> [T]
+list.sort_by_desc(xs: [T], fn: T -> float)          -> [T]
+list.sum        (xs: [int])                         -> int
+list.sum_f      (xs: [float])                       -> float
+list.avg        (xs: [float])                       -> float?
+list.min_by     (xs: [T], fn: T -> float)           -> T?
+list.max_by     (xs: [T], fn: T -> float)           -> T?
+list.interleave (a: [T], b: [T])                    -> [T]
 ```
 
 ### 11.3 Map Operations
@@ -882,13 +883,14 @@ map.from_list(pairs: [(str,T)])          -> {str:T}
 ```
 
 ### 11.4 Tuple Operations
+All tuple operations are qualified under `tup.` — same convention as `list.` (§11.2) and `map.` (§11.3). Even the pair-accessor `tup.fst` / `tup.snd` follow the pattern, eliminating the earlier mix of bare `fst`/`snd` with qualified `tup.third`/`tup.swap`.
 ```
-fst (t: (A, B))                    -> A
-snd (t: (A, B))                    -> B
-tup.third  (t: (A, B, C))          -> C
-tup.swap   (t: (A, B))             -> (B, A)
-tup.map_fst(t: (A,B), fn: A->C)    -> (C, B)
-tup.map_snd(t: (A,B), fn: B->C)    -> (A, C)
+tup.fst    (t: (A, B))                    -> A
+tup.snd    (t: (A, B))                    -> B
+tup.third  (t: (A, B, C))                 -> C
+tup.swap   (t: (A, B))                    -> (B, A)
+tup.map_fst(t: (A,B), fn: A->C)           -> (C, B)
+tup.map_snd(t: (A,B), fn: B->C)           -> (A, C)
 ```
 
 ### 11.5 Result Helpers

@@ -347,7 +347,7 @@ Symmetric encryption using **AES-CBC with PKCS#7 padding**. Required for any key
 @capability crypto.aes
   encrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
   -- AES-CBC, PKCS#7 padding. key: 16, 24, or 32 bytes. iv: exactly 16 bytes.
-  -- Returns the ciphertext (length = ceil(len(data)/16)*16).
+  -- Returns the ciphertext (length = ceil(list.len(data)/16)*16).
   decrypt (key: [byte], iv: [byte], data: [byte]) -> Result [byte] crypto.Error
   -- Strips PKCS#7 padding. Returns :err :decrypt_failed if padding is invalid
   -- (wrong key or corrupted ciphertext).

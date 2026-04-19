@@ -95,7 +95,7 @@ This privilege is special-cased in the SDI: `cap_fs.read("/sdcard/social.bsky.ap
 
   transition :copy_now (dst: str)
     from :picker s
-    to   :copying (src: head(s.selected), dst: dst, progress: 0.0, total_bytes: 0)
+    to   :copying (src: list.head(s.selected), dst: dst, progress: 0.0, total_bytes: 0)
     when: s.mode == :copy
     -- (multi-file copy iterates here; details elided)
 
@@ -166,7 +166,7 @@ Each `FsEntry` is `@type`'d with name/size/mtime/kind; the bridge renders those 
 ```deck
     | :picker s ->
         multiselect :paths  value: s.selected
-          options: map(s.entries, e -> (label: e.name, value: e.path))
+          options: list.map(s.entries, e -> (label: e.name, value: e.path))
           on -> FilesState.send(:toggle_pick, paths: event.value)
 
         match s.mode
@@ -177,7 +177,7 @@ Each `FsEntry` is `@type`'d with name/size/mtime/kind; the bridge renders those 
               trigger "Move here"
                 -> FilesState.send(:move_now, dst: current_path())
           | :delete ->
-              confirm "Delete selected"  prompt: "Delete {len(s.selected)} item(s)?"
+              confirm "Delete selected"  prompt: "Delete {list.len(s.selected)} item(s)?"
                 -> confirm_delete(s.selected)
 
         trigger "Cancel"

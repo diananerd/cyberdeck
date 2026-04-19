@@ -170,7 +170,7 @@ Each child flow defines its own internal navigation. Examples for WiFi (`WifiFlo
 
   transition :digit (d: str)
     from :set_pin s
-    to   :set_pin (digits: append(s.digits, d))
+    to   :set_pin (digits: list.append(s.digits, d))
 
   transition :first_pin_done
     from :set_pin s
@@ -179,7 +179,7 @@ Each child flow defines its own internal navigation. Examples for WiFi (`WifiFlo
 
   transition :confirm_digit (d: str)
     from :confirm_pin s
-    to   :confirm_pin (first: s.first, digits: append(s.digits, d))
+    to   :confirm_pin (first: s.first, digits: list.append(s.digits, d))
 
   transition :confirm_done
     from :confirm_pin s

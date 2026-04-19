@@ -428,7 +428,7 @@ The app never calls anything like `shell.set_status_bar` — the statusbar and n
     to   :idle (counts: counts)
 
 fn unread_for (counts: [(app_id: str, unread: int)], app_id: str) -> int =
-  match first_or(filter(counts, c -> c.app_id == app_id),
+  match first_or(list.filter(counts, c -> c.app_id == app_id),
                  (app_id: app_id, unread: 0))
     | (app_id: _, unread: n) -> n
 ```
@@ -442,7 +442,7 @@ Nothing about the launcher mentions grid vs list, card vs row, columns, icons, o
 
   step :visible _ ->
     content =
-      list (apps.running() ++ apps.suspended() |> filter(a -> not a.is_launcher))
+      list (apps.running() ++ apps.suspended() |> list.filter(a -> not a.is_launcher))
         empty ->
           "NO RUNNING APPS"
         app ->
@@ -545,12 +545,12 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
 
 fn main_processes () =
   ProcessSnapshot.last() |> unwrap_opt_or([])
-                         |> filter(p -> p.kind is :main)
+                         |> list.filter(p -> p.kind is :main)
 
 fn background_tasks_of (app_id: str) =
   ProcessSnapshot.last() |> unwrap_opt_or([])
-                         |> filter(bg -> bg.app_id == app_id
-                                      and bg.kind is :background)
+                         |> list.filter(bg -> bg.app_id == app_id
+                                           and bg.kind is :background)
 ```
 
 ```deck
@@ -576,7 +576,7 @@ fn background_tasks_of (app_id: str) =
 
 fn processes_of (app_id: str) =
   ProcessSnapshot.last() |> unwrap_opt_or([])
-                         |> filter(p -> p.app_id == app_id)
+                         |> list.filter(p -> p.app_id == app_id)
 ```
 
 **Protecciones del OS**: el Task Manager no puede matar al Launcher (`system.launcher`) ni a sí mismo. El bridge de `system.tasks.kill()` verifica el `app_id` y retorna `:unauthorized` si alguno de los dos es el objetivo.
@@ -981,8 +981,8 @@ The Crash Reporter is therefore stateless — it reacts to the new crash, posts 
 
 @on launch
   let pending = crashes.list()
-  when len(pending) > 0
-    show_crash_overlay(head(pending))
+  when list.len(pending) > 0
+    show_crash_overlay(list.head(pending))
 
 @on crash_report (info: CrashInfo)
   -- The OS has already persisted `info`; we only need to surface it.

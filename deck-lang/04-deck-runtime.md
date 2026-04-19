@@ -992,7 +992,7 @@ deck repl
 > 2 + 2
 4
 > let xs = [1, 2, 3, 4, 5]
-> filter(xs, x -> x > 2)
+> list.filter(xs, x -> x > 2)
 [3, 4, 5]
 > Post { uri: "a", text: "b", author: Author { did: "d", handle: "h", name: "h" }, likes: 0, reposts: 0, created_at: time.now() }
 Post { uri: "a", text: "b", ... }

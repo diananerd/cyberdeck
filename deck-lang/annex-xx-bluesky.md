@@ -583,7 +583,7 @@ fn search_posts (q: str, cursor: str?) -> Result FeedPage str !api =
   match xrpc.get("app.bsky.feed.searchPosts", params)
     | :err e -> :err e
     | :ok body ->
-        let posts  = body |> get_list("posts") |> map(parse_post_view)
+        let posts  = body |> get_list("posts") |> list.map(parse_post_view)
         let cursor = str_field(body, "cursor")
         :ok FeedPage { posts: posts, cursor: cursor }
 
@@ -598,8 +598,8 @@ fn base_params (cursor: str?) -> {str: str} =
 fn parse_feed_page (body: {str: any}) -> FeedPage =
   let raw_feed = get_list(body, "feed")
   let posts    = raw_feed
-    |> filter(p -> config.show_reposts or not is_repost(p))
-    |> map(parse_feed_view_post)
+    |> list.filter(p -> config.show_reposts or not is_repost(p))
+    |> list.map(parse_feed_view_post)
   FeedPage {
     posts:  posts,
     cursor: str_field(body, "cursor")
@@ -636,7 +636,7 @@ fn parse_post_view (p: {str: any}) -> Post =
 @private
 fn parse_thread (node: {str: any}) -> Thread =
   let post    = parse_post_view(unwrap_opt_or(map.get(node, "post"), {}))
-  let replies = get_list(node, "replies") |> map(parse_thread)
+  let replies = get_list(node, "replies") |> list.map(parse_thread)
   Thread { post: post, replies: replies }
 
 @private
@@ -707,7 +707,7 @@ fn search_actors (q: str) -> Result [Profile] str !api =
   match xrpc.get("app.bsky.actor.searchActors", { "q": q, "limit": "20" })
     | :err e -> :err e
     | :ok body ->
-        :ok (get_list(body, "actors") |> map(parse_profile))
+        :ok (get_list(body, "actors") |> list.map(parse_profile))
 
 fn parse_profile (p: {str: any}) -> Profile =
   let viewer     = unwrap_opt_or(map.get(p, "viewer"), {})
@@ -852,7 +852,7 @@ fn list_notifs () -> Result [Notif] str !api =
   match xrpc.get("app.bsky.notification.listNotifications", { "limit": "30" })
     | :err e -> :err e
     | :ok body ->
-        let items = get_list(body, "notifications") |> map(parse_notif)
+        let items = get_list(body, "notifications") |> list.map(parse_notif)
         :ok items
 
 fn get_unread_count () -> Result int str !api =
@@ -1154,7 +1154,7 @@ fn load_notifs () -> unit !api =
   match notification.list_notifs()
     | :err e  -> Notifs.send(:failed, message: e)
     | :ok items ->
-        let unread = count_where(items, n -> not n.is_read)
+        let unread = list.count_where(items, n -> not n.is_read)
         Notifs.send(:loaded, items: items, unread: unread)
 ```
 
@@ -1313,12 +1313,12 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
 
   transition :got_results (posts: [Post], users: [Profile])
     from :searching s
-    when: len(posts) + len(users) == 0
+    when: list.len(posts) + list.len(users) == 0
     to   :no_results (query: s.query)
 
   transition :got_results (posts: [Post], users: [Profile])
     from :searching s
-    when: len(posts) + len(users) > 0
+    when: list.len(posts) + list.len(users) > 0
     to   :results (query: s.query, posts: posts, users: users)
 
   transition :failed (message: str)
@@ -1339,7 +1339,7 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
         | :no_results s -> "No results for \"{s.query}\""
         | :error s      -> error reason: s.message
         | :results s    ->
-            match len(s.users) > 0
+            match list.len(s.users) > 0
               | true ->
                   group "People"
                     list s.users
@@ -1354,7 +1354,7 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
                           MainFlow.send(:go_profile)
                           ProfileFlow.send(:open_profile, did: u.did)
               | false -> unit
-            match len(s.posts) > 0
+            match list.len(s.posts) > 0
               | true ->
                   group "Posts"
                     list s.posts
@@ -1458,7 +1458,7 @@ fn do_logout () -> unit !api !nvs =
             | :err _ -> unit
             | :ok items ->
                 do
-                  let unread = count_where(items, i -> not i.is_read)
+                  let unread = list.count_where(items, i -> not i.is_read)
                   let prev   = match Notifs.state
                     | :loaded s -> s.unread
                     | _         -> 0
