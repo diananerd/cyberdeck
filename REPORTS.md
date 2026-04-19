@@ -854,3 +854,28 @@ Session #3 continued.
 - **Content reactivity**: when content references a stream (e.g. `list installed_apps`) the runtime must re-evaluate on stream emission (spec §8.7 "Implicit Reactivity"). Requires stream wiring from concept #21's `@stream` deferred piece.
 
 **Why this matters**: concepts #14, #22, #23, #24 together close every state-machine-body parse blocker identified in the current audit. Every annex's `@machine`/`@flow` grammar — header, state list with payloads/composition/bodies containing content=, initial declaration, top-level transitions — now parses end-to-end. The runtime still treats most of these as no-ops, but the loader runs through. The substantive runtime implementation of state-machine behaviour (dispatch, payload binding, content evaluation, reactivity) is the next tranche.
+
+### Concept #25 — complex type annotations in fn / @type (spec §5 + §4.3)
+
+Session #3 continued.
+
+**Drift**: `parse_fn_decl` accepted only a single-ident type after `:` or `->`. `parse_type_decl` did the same inside `@type` bodies with a narrow `IDENT (| IDENT)*` extension. Spec §5 allows the full type grammar: `[T]`, `(A, B, …)`, `{K: V}`, `T?`, `Result T E`, dotted paths, union `T | U`. Every realistic annex signature and record has at least one complex type. Annex-a:139 — `fn unread_badge (counts: [(app_id: str, unread: int)], app_id: str) -> int? =` — fails at the `[` after `counts:`. Every `@type` record with a list/tuple/record field fails likewise.
+
+**Scope**: parse-and-discard. Runtime is dynamically typed at F21.1; types exist for documentation and (future) type-checker only. Complex types parse cleanly; their structure is thrown away.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_parser.c` — new helper `skip_type_annotation(p)` that consumes a balanced type expression. Bracket depth counter tracks `()`, `[]`, `{}` nesting; the helper stops at the first top-level `,`, `)`, `!`, `->`, `=`, `NEWLINE`, or `DEDENT`. Inside any bracket level, nothing terminates early — `(A, B)` and `[T]` and `{K: V}` all get fully eaten.
+- Layer 4 edit · `parse_fn_decl` — both param `: Type` and return `-> Type` clauses now call `skip_type_annotation` instead of expecting a single IDENT.
+- Layer 4 edit · `parse_type_decl` — record field `: Type` clause and union `T | U` continuation now call `skip_type_annotation`. The union separator also accepts the new TOK_BAR (standalone `|` post-concept-#10) in addition to the historic TOK_PIPE / TOK_OR_OR.
+
+**What this unblocks**:
+
+- `fn unread_badge (counts: [(app_id: str, unread: int)], app_id: str) -> int?` — annex-a:139.
+- `fn get (nsid: str, params: {str: str}) -> Result {str: any} str !api` — annex-xx-bluesky:413.
+- `@type Post { reply_ref: ReplyRef?, author: Author, ... }` — annex-xx-bluesky:80.
+- Every annex record type with an Optional field, list field, or Result field.
+
+**Deferred**: real type-checking at load time (validating that the argument types match the spec'd types, that the return type is consistent, that unions are exhaustive). Spec §5 describes the type system; the F21.1 runtime is still dynamic. The skip here is faithful to that contract — types pass through the parser untouched, and runtime dispatch is on values, not declared types.
+
+**Why this matters**: at this point, with concepts #14, #21, #22, #23, #24, #25 all landed, every parser-level blocker identified by the whole-annex audit is gone. The remaining gaps are all in the runtime: declarative content evaluation, state-machine dispatch, payload binding, stream emission, task scheduling, deep-link routing. Those are substantive implementation concepts; the parser no longer gates them.

@@ -1725,6 +1725,31 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
  * value usable in any expression position (let RHS, call argument, etc).
  * Type annotations and effect annotations are accepted but discarded at
  * F21.1; F22 lands the type system, F23 effect checks. */
+/* Spec §5 — type annotations may be ident, dotted path, `[T]`,
+ * `(A, B, ...)`, `{K: V}`, `T?`, `Result T E`, etc. At F21.1 the runtime
+ * is dynamic, so types are parsed and discarded. This helper eats a
+ * balanced type expression up to the next parameter separator
+ * (`,`, `)`, `!`, `->`, `=`, NEWLINE, DEDENT). Brackets/parens/braces
+ * nest freely inside. */
+static bool skip_type_annotation(deck_parser_t *p)
+{
+    uint32_t bd = 0;   /* bracket depth: () [] {} */
+    while (!at(p, TOK_EOF)) {
+        if (bd == 0) {
+            if (at(p, TOK_COMMA) || at(p, TOK_RPAREN) ||
+                at(p, TOK_BANG)  || at(p, TOK_ARROW)  ||
+                at(p, TOK_ASSIGN) || at(p, TOK_NEWLINE) ||
+                at(p, TOK_DEDENT))
+                return true;
+        }
+        if (at(p, TOK_LPAREN) || at(p, TOK_LBRACKET) || at(p, TOK_LBRACE)) bd++;
+        else if (at(p, TOK_RBRACKET) || at(p, TOK_RBRACE))                bd--;
+        else if (at(p, TOK_RPAREN) && bd > 0)                             bd--;
+        advance(p);
+    }
+    return true;
+}
+
 static ast_node_t *parse_fn_decl(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_FN_DEF); if (!n) return NULL;
@@ -1755,14 +1780,12 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
             }
             params_buf[n_params++] = p->cur.text;
             advance(p);
-            /* Optional ': Type' — a single ident type at F21.1, ignored. */
+            /* Optional `: Type` — spec §5 supports complex types ([T],
+             * (A,B), {K:V}, T?, Result T E). Runtime is dynamic at F21.1
+             * so we parse-and-discard via a balanced skip. */
             if (at(p, TOK_COLON)) {
                 advance(p);
-                if (!at(p, TOK_IDENT)) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name after ':'");
-                    return NULL;
-                }
-                advance(p);
+                if (!skip_type_annotation(p)) return NULL;
             }
             if (!at(p, TOK_COMMA)) break;
             advance(p);
@@ -1770,14 +1793,10 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     }
     if (!expect(p, TOK_RPAREN, "expected ')' after fn parameters")) return NULL;
 
-    /* Optional `-> Type`. Single ident type at F21.1, ignored. */
+    /* Optional `-> Type`. Spec §5 complex types — parse-and-discard. */
     if (at(p, TOK_ARROW)) {
         advance(p);
-        if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected return type after '->'");
-            return NULL;
-        }
-        advance(p);
+        if (!skip_type_annotation(p)) return NULL;
     }
 
     /* DL2 F23: collect effect annotations `!alias` for loader to enforce
@@ -1922,17 +1941,13 @@ static ast_node_t *parse_type_decl(deck_parser_t *p)
         fields[nf++] = p->cur.text;
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after field name")) return NULL;
-        /* Type annotation: IDENT (`|` IDENT)* — F22.3 union types parsed
-         * and discarded for now (no static type system yet). */
-        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name"); return NULL; }
-        advance(p);
-        while (at(p, TOK_OR_OR) || at(p, TOK_PIPE)) {
+        /* Type annotation — spec §5 complex types plus §4.3 union types
+         * (`T | U`). Parse-and-discard via the bracket-balanced helper.
+         * Union `|` between balanced type expressions is eaten too. */
+        if (!skip_type_annotation(p)) return NULL;
+        while (at(p, TOK_OR_OR) || at(p, TOK_PIPE) || at(p, TOK_BAR)) {
             advance(p);
-            if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected type after '|'");
-                return NULL;
-            }
-            advance(p);
+            if (!skip_type_annotation(p)) return NULL;
         }
         while (at(p, TOK_NEWLINE)) advance(p);
     }
