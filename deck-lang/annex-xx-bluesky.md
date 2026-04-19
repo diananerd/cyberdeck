@@ -256,7 +256,7 @@ bluesky/
   transition :paginate
     from :loaded s
     when: s.cursor is :some
-    to   :paginating (posts: s.posts, cursor: unwrap_opt(s.cursor))
+    to   :paginating (posts: s.posts, cursor: unwrap(s.cursor))
 
   transition :paginated (new_posts: [Post], cursor: str?)
     from :paginating s
@@ -431,7 +431,7 @@ fn post_rpc (nsid: str, body: {str: any}) -> Result {str: any} str !api =
 fn check_error (body: {str: any}) -> Result {str: any} str =
   match map.get(body, "error")
     | :some code ->
-        let msg = unwrap_opt_or(map.get(body, "message") |>? is_str, code)
+        let msg = unwrap_or(map.get(body, "message") |>? is_str, code)
         :err msg
     | :none -> :ok body
 
@@ -613,14 +613,14 @@ fn parse_feed_view_post (item: {str: any}) -> Post =
 
 @private
 fn parse_post_view (p: {str: any}) -> Post =
-  let record   = unwrap_opt_or(map.get(p, "record"), {})
-  let viewer   = unwrap_opt_or(map.get(p, "viewer"), {})
+  let record   = unwrap_or(map.get(p, "record"), {})
+  let viewer   = unwrap_or(map.get(p, "viewer"), {})
   let like_uri = str_field(viewer, "like")
   let rp_uri   = str_field(viewer, "repost")
   Post {
     uri:          str_field_req(p, "uri"),
     cid:          str_field_req(p, "cid"),
-    author:       parse_author(unwrap_opt_or(map.get(p, "author"), {})),
+    author:       parse_author(unwrap_or(map.get(p, "author"), {})),
     text:         str_field_req(record, "text"),
     created_at:   str_field_req(record, "createdAt"),
     like_count:   int_field(p, "likeCount"),
@@ -635,7 +635,7 @@ fn parse_post_view (p: {str: any}) -> Post =
 
 @private
 fn parse_thread (node: {str: any}) -> Thread =
-  let post    = parse_post_view(unwrap_opt_or(map.get(node, "post"), {}))
+  let post    = parse_post_view(unwrap_or(map.get(node, "post"), {}))
   let replies = get_list(node, "replies") |> list.map(parse_thread)
   Thread { post: post, replies: replies }
 
@@ -653,8 +653,8 @@ fn parse_reply_ref (record: {str: any}) -> ReplyRef? =
   match map.get(record, "reply")
     | :none -> :none
     | :some r ->
-        let root   = unwrap_opt_or(map.get(r, "root"),   {})
-        let parent = unwrap_opt_or(map.get(r, "parent"), {})
+        let root   = unwrap_or(map.get(r, "root"),   {})
+        let parent = unwrap_or(map.get(r, "parent"), {})
         :some ReplyRef {
           root_uri:   str_field_req(root,   "uri"),
           root_cid:   str_field_req(root,   "cid"),
@@ -679,9 +679,9 @@ fn empty_post () -> Post =
 @private
 fn str_field     (m: {str: any}, k: str) -> str? = row.str(m, k)
 @private
-fn str_field_req (m: {str: any}, k: str) -> str  = unwrap_opt_or(row.str(m, k), "")
+fn str_field_req (m: {str: any}, k: str) -> str  = unwrap_or(row.str(m, k), "")
 @private
-fn int_field     (m: {str: any}, k: str) -> int  = unwrap_opt_or(row.int(m, k), 0)
+fn int_field     (m: {str: any}, k: str) -> int  = unwrap_or(row.int(m, k), 0)
 @private
 fn get_list      (m: {str: any}, k: str) -> [any] =
   match map.get(m, k)
@@ -690,7 +690,7 @@ fn get_list      (m: {str: any}, k: str) -> [any] =
 @private
 fn extract_rkey (uri: str) -> str =
   let parts = text.split(uri, "/")
-  unwrap_opt_or(last(parts), "")
+  unwrap_or(last(parts), "")
 ```
 
 ---
@@ -710,7 +710,7 @@ fn search_actors (q: str) -> Result [Profile] str !api =
         :ok (get_list(body, "actors") |> list.map(parse_profile))
 
 fn parse_profile (p: {str: any}) -> Profile =
-  let viewer     = unwrap_opt_or(map.get(p, "viewer"), {})
+  let viewer     = unwrap_or(map.get(p, "viewer"), {})
   let follow_uri = row.str(viewer, "following")
   Profile {
     did:          str_req(p, "did"),
@@ -726,13 +726,13 @@ fn parse_profile (p: {str: any}) -> Profile =
   }
 
 @private
-fn str_req (m: {str: any}, k: str) -> str  = unwrap_opt_or(row.str(m, k), "")
+fn str_req (m: {str: any}, k: str) -> str  = unwrap_or(row.str(m, k), "")
 @private
-fn int_f   (m: {str: any}, k: str) -> int  = unwrap_opt_or(row.int(m, k), 0)
+fn int_f   (m: {str: any}, k: str) -> int  = unwrap_or(row.int(m, k), 0)
 @private
 fn extract_rkey (uri: str) -> str =
   let parts = text.split(uri, "/")
-  unwrap_opt_or(last(parts), "")
+  unwrap_or(last(parts), "")
 ```
 
 ---
@@ -752,7 +752,7 @@ fn like (uri: str, cid: str) -> Result str str !api =
       }
     })
       | :err e   -> :err e
-      | :ok body -> :ok (unwrap_opt_or(row.str(body, "uri"), ""))
+      | :ok body -> :ok (unwrap_or(row.str(body, "uri"), ""))
   )
 
 fn unlike (rkey: str) -> Result unit str !api =
@@ -770,7 +770,7 @@ fn repost (uri: str, cid: str) -> Result str str !api =
       }
     })
       | :err e   -> :err e
-      | :ok body -> :ok (unwrap_opt_or(row.str(body, "uri"), ""))
+      | :ok body -> :ok (unwrap_or(row.str(body, "uri"), ""))
   )
 
 fn unrepost (rkey: str) -> Result unit str !api =
@@ -788,7 +788,7 @@ fn follow (did: str) -> Result str str !api =
       }
     })
       | :err e   -> :err e
-      | :ok body -> :ok (unwrap_opt_or(row.str(body, "uri"), ""))
+      | :ok body -> :ok (unwrap_or(row.str(body, "uri"), ""))
   )
 
 fn unfollow (rkey: str) -> Result unit str !api =
@@ -803,7 +803,7 @@ fn create_post (text_content: str, reply_to: Post?) -> Result unit str !api =
           "createdAt": time.to_iso(time.now())
         }
       | :some parent ->
-          let ref  = unwrap_opt_or(parent.reply_ref, ReplyRef {
+          let ref  = unwrap_or(parent.reply_ref, ReplyRef {
             root_uri:   parent.uri, root_cid:   parent.cid,
             parent_uri: parent.uri, parent_cid: parent.cid
           })
@@ -858,7 +858,7 @@ fn list_notifs () -> Result [Notif] str !api =
 fn get_unread_count () -> Result int str !api =
   match xrpc.get("app.bsky.notification.getUnreadCount", {})
     | :err e -> :err e
-    | :ok body -> :ok (unwrap_opt_or(row.int(body, "count"), 0))
+    | :ok body -> :ok (unwrap_or(row.int(body, "count"), 0))
 
 fn mark_seen () -> Result unit str !api =
   xrpc.post_rpc("app.bsky.notification.updateSeen", {
@@ -868,17 +868,17 @@ fn mark_seen () -> Result unit str !api =
 @private
 fn parse_notif (n: {str: any}) -> Notif =
   Notif {
-    reason:     unwrap_opt_or(row.str(n, "reason"), ""),
-    author:     parse_author(unwrap_opt_or(map.get(n, "author"), {})),
-    is_read:    unwrap_opt_or(row.bool(n, "isRead"), false),
-    indexed_at: unwrap_opt_or(row.str(n, "indexedAt"), "")
+    reason:     unwrap_or(row.str(n, "reason"), ""),
+    author:     parse_author(unwrap_or(map.get(n, "author"), {})),
+    is_read:    unwrap_or(row.bool(n, "isRead"), false),
+    indexed_at: unwrap_or(row.str(n, "indexedAt"), "")
   }
 
 @private
 fn parse_author (a: {str: any}) -> Author =
   Author {
-    did:          unwrap_opt_or(row.str(a, "did"),         ""),
-    handle:       unwrap_opt_or(row.str(a, "handle"),      ""),
+    did:          unwrap_or(row.str(a, "did"),         ""),
+    handle:       unwrap_or(row.str(a, "handle"),      ""),
     display_name: row.str(a, "displayName"),
     avatar:       row.str(a, "avatar")
   }
@@ -1037,10 +1037,10 @@ fn load_more (s: any) -> unit !api =
 
 fn post_card (p: Post) =
   group "author"
-    media unwrap_opt_or(p.author.avatar, "")
+    media unwrap_or(p.author.avatar, "")
       alt:  "Avatar of {p.author.handle}"
       role: :avatar
-    unwrap_opt_or(p.author.display_name, p.author.handle)
+    unwrap_or(p.author.display_name, p.author.handle)
     "@{p.author.handle}"
     time_ago.format(p.created_at)
   rich_text p.text
@@ -1073,10 +1073,10 @@ fn thread_node (t: Thread) =
 
 fn post_expanded (p: Post) =
   group "author"
-    media unwrap_opt_or(p.author.avatar, "")
+    media unwrap_or(p.author.avatar, "")
       alt:  "Avatar of {p.author.handle}"
       role: :avatar
-    unwrap_opt_or(p.author.display_name, p.author.handle)
+    unwrap_or(p.author.display_name, p.author.handle)
     "@{p.author.handle}"
   rich_text p.text
   time_ago.format(p.created_at)
@@ -1133,10 +1133,10 @@ fn load_thread (uri: str) -> unit !api =
 
 fn notif_row (n: Notif) =
   group "author"
-    media unwrap_opt_or(n.author.avatar, "")
+    media unwrap_or(n.author.avatar, "")
       alt:  "Avatar of {n.author.handle}"
       role: :avatar
-    unwrap_opt_or(n.author.display_name, n.author.handle)
+    unwrap_or(n.author.display_name, n.author.handle)
   reason_label(n.reason)
   time_ago.format(n.indexed_at)
 
@@ -1190,7 +1190,7 @@ fn load_notifs () -> unit !api =
                 | :some url ->
                     media url  alt: "Profile photo of @{s.profile.handle}"  role: :cover
                 | :none -> unit
-              unwrap_opt_or(s.profile.display_name, s.profile.handle)
+              unwrap_or(s.profile.display_name, s.profile.handle)
               "@{s.profile.handle}"
               match s.profile.bio
                 | :some bio -> rich_text bio
@@ -1345,10 +1345,10 @@ fn do_post (text_content: str, reply_to: Post?) -> unit !api =
                     list s.users
                       u ->
                         group "user"
-                          media unwrap_opt_or(u.avatar, "")
+                          media unwrap_or(u.avatar, "")
                             alt:  "Avatar of {u.handle}"
                             role: :avatar
-                          unwrap_opt_or(u.display_name, u.handle)
+                          unwrap_or(u.display_name, u.handle)
                           "@{u.handle}"
                         navigate "View profile" -> do
                           MainFlow.send(:go_profile)

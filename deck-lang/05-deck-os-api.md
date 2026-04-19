@@ -300,7 +300,7 @@ Fast, TTL-based cache. Not persisted. Lost on app restart. For API responses or 
 fn timeline_posts () -> [{str: any}] !api !cache =
   cache.get_or_set("timeline", 30s, _ ->
     match api.get("/feed.getTimeline")
-      | :ok r  -> unwrap_opt_or(r.json, [])
+      | :ok r  -> unwrap_or(r.json, [])
       | :err _ -> []
   )
 ```

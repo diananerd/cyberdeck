@@ -448,7 +448,7 @@ Nothing about the launcher mentions grid vs list, card vs row, columns, icons, o
         app ->
           group
             when app.thumbnail is :some
-              media unwrap_opt(app.thumbnail)  alt: app.name  role: :thumbnail
+              media unwrap(app.thumbnail)  alt: app.name  role: :thumbnail
             navigate "Open {app.name}" -> do
                 apps.bring_to_front(app.id)
                 Launcher.send(:dismiss_tasks)
@@ -536,19 +536,19 @@ A diferencia del Launcher (que nunca se destruye), el Task Manager sí puede ser
               bg ->
                 group
                   bg
-                  confirm "Stop task"  prompt: "Cancelar {unwrap_opt(bg.task_name)}?"
-                    -> tasks.kill_task(bg.app_id, unwrap_opt(bg.task_name))
+                  confirm "Stop task"  prompt: "Cancelar {unwrap(bg.task_name)}?"
+                    -> tasks.kill_task(bg.app_id, unwrap(bg.task_name))
             when not p.app_id == "system.launcher"
               navigate "Ver detalle" -> TaskManager.send(:show_detail, app_id: p.app_id)
               confirm "Kill {p.app_id}"  prompt: "Forzar cierre de {p.app_id}?"
                 -> tasks.kill(p.app_id)
 
 fn main_processes () =
-  ProcessSnapshot.last() |> unwrap_opt_or([])
+  ProcessSnapshot.last() |> unwrap_or([])
                          |> list.filter(p -> p.kind is :main)
 
 fn background_tasks_of (app_id: str) =
-  ProcessSnapshot.last() |> unwrap_opt_or([])
+  ProcessSnapshot.last() |> unwrap_or([])
                          |> list.filter(bg -> bg.app_id == app_id
                                            and bg.kind is :background)
 ```
@@ -569,13 +569,13 @@ fn background_tasks_of (app_id: str) =
             group
               p
               when p.kind is :background
-                confirm "Stop {unwrap_opt(p.task_name)}"  prompt: "Cancelar este background task?"
-                  -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
+                confirm "Stop {unwrap(p.task_name)}"  prompt: "Cancelar este background task?"
+                  -> tasks.kill_task(p.app_id, unwrap(p.task_name))
         confirm "Kill app"  prompt: "Forzar cierre de {app_id}? Se perderán cambios no guardados."
           -> tasks.kill(app_id)
 
 fn processes_of (app_id: str) =
-  ProcessSnapshot.last() |> unwrap_opt_or([])
+  ProcessSnapshot.last() |> unwrap_or([])
                          |> list.filter(p -> p.app_id == app_id)
 ```
 
@@ -1976,7 +1976,7 @@ El task manager UI puede usar `system.tasks.kill_task()` para cancelar un sync q
 
 step :active _ ->
   content =
-    list (ProcessSnapshot.recent(1) |> unwrap_opt_or([]))
+    list (ProcessSnapshot.recent(1) |> unwrap_or([]))
       p ->
         group
           p
@@ -1985,7 +1985,7 @@ step :active _ ->
               -> tasks.kill(p.app_id)
           when p.kind is :background
             confirm "Stop {p.task_name}"  prompt: "Cancelar background task {p.task_name}?"
-              -> tasks.kill_task(p.app_id, unwrap_opt(p.task_name))
+              -> tasks.kill_task(p.app_id, unwrap(p.task_name))
 ```
 
 El stream no emite más frecuente que 5 s aunque el OS internamente muestree más rápido. La throttle está en el bridge que implementa la capability.

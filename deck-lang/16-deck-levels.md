@@ -237,7 +237,7 @@ Bundled apps that are **not** runnable at DL1:
 | `is` operator | §7.8 | Atom / state testing |
 | List / map / tuple helpers (`len`, `head`, `map`, `filter`, `reduce`, …) | §11.2–11.4 | Standard library |
 | Result / Optional helpers (`ok`, `err`, `unwrap`, `map_ok`, `and_then`, …) | §11.5–11.6 | Canonical error ergonomics |
-| Type inspection (`type_of`, `is_int`, …) | §11.8 | Dynamic introspection |
+| Type inspection (`type_of`, `is_int`, …) | §11.7 | Dynamic introspection |
 | `@private` | §10.2 | Module encapsulation |
 
 ### 5.2 App model features added at DL2

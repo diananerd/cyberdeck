@@ -714,3 +714,22 @@ Session #3 continued.
 **Fix**: added `b_log_debug` backed by `ESP_LOGD` (no-op in production builds unless menuconfig opts in) and registered `log.debug` in the BUILTINS table.
 
 **One-line sister commit to close a full @builtin log surface**. No spec edit needed — spec was already correct. Completes the debug/info/warn/error quartet so every real-world annex author sees all four variants work.
+
+### Concept #20 — unify `unwrap` / `unwrap_or` (polymorphic over Result + Optional)
+
+Session #3 continued.
+
+**Three-way drift**: spec `01-deck-lang §11.5+§11.6` declared separate `unwrap` (Result) + `unwrap_opt` (Optional), and `unwrap_or` (Result) + `unwrap_opt_or` (Optional). Runtime registered only `unwrap` — and it was **already polymorphic** (dispatches on Optional vs Result internally). No `unwrap_or` at all. Annex-xx-bluesky + spec examples called `unwrap_opt(...)` / `unwrap_opt_or(...)` ~20 times. None would dispatch: runtime says "unknown function".
+
+**Resolution (per Deck minimalism)**: same concept with same semantics gets one name. Fold the Optional-only variants into the polymorphic ones the runtime already (almost) implements. Flatten §11.5 + §11.6 into a single merged section.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_interp.c` — new `b_unwrap_or` polymorphic over Optional and Result: returns the default argument when the wrapper is `:none` or `:err`, and the inner value otherwise. If the argument isn't a wrapper at all the value is passed through unchanged (most intuitive for pipelines). Registered as `"unwrap_or"` alongside the existing `"unwrap"`.
+- Layer 1 edit · `01-deck-lang.md §11` — §11.5 and §11.6 merged into one "Result & Optional Helpers" section. Polymorphic helpers (`unwrap`, `unwrap_or`) take either wrapper; shape-specific helpers (`map_ok` / `map_err` for Result; `map_opt` / `and_then_opt` for Optional) stay named by shape because they produce shape-specific outputs. Historical names `unwrap_opt` / `unwrap_opt_or` called out explicitly as "no longer part of the spec" so nobody reintroduces them accidentally.
+- Layer 1 edit · `01-deck-lang.md §11.x` — subsections renumbered: old §11.7 (Comparison) → §11.6; old §11.8 (Type Inspection) → §11.7; old §11.9 (Functional Utilities) → §11.8; old §11.10 (Random) → §11.9. One cross-reference in `16-deck-levels.md §6` ("§11.8") updated to "§11.7".
+- Layer 1 + 2 edit · `02-deck-app.md`, `05-deck-os-api.md`, `09-deck-shell.md`, `annex-xx-bluesky.md` — bulk-migrated ~20 call sites from `unwrap_opt(...)` / `unwrap_opt_or(...)` to `unwrap(...)` / `unwrap_or(...)`. Pipe forms (`|> unwrap_opt`) also migrated. A hint in a doc error message ("use 'match' or 'unwrap_opt_or'") updated to reference the new name.
+
+**Verification**: `grep -rE "\bunwrap_opt\b"` across the repo returns only the §11.5 historical-reference note. Every call site migrated.
+
+**Why this matters**: this is exactly the lesson from concept #15a, applied generalised. When two functions differ only in the type of their wrapper argument — and the runtime already handles both — the spec should offer ONE callable. The user's durable rule: "when specs at equal authority disagree, pick whichever side aligns with the language's overall direction." Here §11.5 and §11.6 were the two sides, both internally correct, but presenting the same semantics under two names. Flattening them kills the choice paralysis for app authors and matches the polymorphic dispatch the runtime already ships.

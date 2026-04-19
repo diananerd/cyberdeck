@@ -1423,7 +1423,7 @@ Runs when the app is updated before the new version starts. Migrations are index
 ```
 @migration
   from 0:
-    store.set("new_key", unwrap_opt_or(store.get("old_key"), ""))
+    store.set("new_key", unwrap_or(store.get("old_key"), ""))
     store.delete("old_key")
   from 1:
     db.exec("ALTER TABLE posts ADD COLUMN score REAL DEFAULT 0.0")
@@ -1561,7 +1561,7 @@ fn celsius (t: float) -> str
       | :err _ -> Sensor.send(:sensor_lost)
 
 @on suspend
-  store.set("last_reading", str(unwrap_opt_or(TempStream.last(), 0.0)))
+  store.set("last_reading", str(unwrap_or(TempStream.last(), 0.0)))
 
 
 -- machines/sensor.deck
@@ -1920,8 +1920,8 @@ The bridge builds a `{str: str}` map from the matched pattern:
 @on open_url (url: str, params: {str: str})
   -- For url = "bsky://profile/alice.bsky.social/post/3kabc"
   -- params = { "handle": "alice.bsky.social", "rkey": "3kabc" }
-  let handle = params["handle"] |> unwrap_opt
-  let rkey   = params["rkey"]   |> unwrap_opt
+  let handle = params["handle"] |> unwrap
+  let rkey   = params["rkey"]   |> unwrap
   App.send(:open_thread (handle: handle, rkey: rkey))
 ```
 

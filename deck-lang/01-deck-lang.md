@@ -893,41 +893,56 @@ tup.map_fst(t: (A,B), fn: A->C)           -> (C, B)
 tup.map_snd(t: (A,B), fn: B->C)           -> (A, C)
 ```
 
-### 11.5 Result Helpers
+### 11.5 Result & Optional Helpers
+
+Deck unifies Result (`Result T E`) and Optional (`T?`) under the same
+helper surface wherever the semantics line up. `unwrap` and `unwrap_or`
+are polymorphic: each accepts either wrapper and behaves the obvious
+way on both shapes. `map` / `and_then` dispatch on the wrapper type
+too — same callable, one for Result, one for Optional.
+
 ```
+-- Constructors
 ok          (v: T)                  -> Result T E
 err         (e: E)                  -> Result T E
+some        (v: T)                  -> T?
+
+-- Predicates
 is_ok       (r: Result T E)         -> bool
 is_err      (r: Result T E)         -> bool
-unwrap      (r: Result T E)         -> T        -- runtime error if :err
-unwrap_or   (r: Result T E, d: T)   -> T
-map_ok      (r: Result T E, fn: T->U) -> Result U E
-map_err     (r: Result T E, fn: E->F) -> Result T F
-and_then    (r: Result T E, fn: T->Result U E) -> Result U E
-or_else     (r: Result T E, fn: E->Result T E) -> Result T E
-all_ok      (list: [Result T E])    -> Result [T] E
-```
-
-### 11.6 Optional Helpers
-```
-some        (v: T)                  -> T?
 is_some     (o: T?)                 -> bool
 is_none     (o: T?)                 -> bool
-unwrap_opt  (o: T?)                 -> T        -- runtime error if :none
-unwrap_opt_or(o: T?, d: T)          -> T
-map_opt     (o: T?, fn: T->U)       -> U?
-and_then_opt(o: T?, fn: T->U?)      -> U?
-opt_to_result(o: T?, e: E)          -> Result T E
-result_to_opt(r: Result T E)        -> T?
+
+-- Unwrap (polymorphic over Result + Optional)
+unwrap      (w: Result T E | T?)       -> T   -- runtime error if :err / :none
+unwrap_or   (w: Result T E | T?, d: T) -> T
+
+-- Map / chain
+map_ok      (r: Result T E, fn: T->U)          -> Result U E
+map_err     (r: Result T E, fn: E->F)          -> Result T F
+and_then    (r: Result T E, fn: T->Result U E) -> Result U E
+or_else     (r: Result T E, fn: E->Result T E) -> Result T E
+map_opt     (o: T?, fn: T->U)                  -> U?
+and_then_opt(o: T?, fn: T->U?)                 -> U?
+
+-- Collection / conversion
+all_ok        (xs: [Result T E])    -> Result [T] E
+opt_to_result (o: T?, e: E)         -> Result T E
+result_to_opt (r: Result T E)       -> T?
 ```
 
-### 11.7 Comparison
+Historic names `unwrap_opt` / `unwrap_opt_or` (separate Optional-only
+forms) are no longer part of the spec. Per Deck's minimalism rule —
+the same concept with the same semantics gets one name — they collapse
+into polymorphic `unwrap` / `unwrap_or`.
+
+### 11.6 Comparison
 ```
 compare (a: T, b: T) -> atom   -- :lt | :eq | :gt
                                 -- valid for int, float, str, atoms, tuples of same
 ```
 
-### 11.8 Type Inspection
+### 11.7 Type Inspection
 ```
 type_of  (v: any) -> atom  -- :int | :float | :bool | :str | :byte | :unit
                            -- :list | :map | :tuple | :fn | :atom | :stream
@@ -948,7 +963,7 @@ match type_of(v)
   | _     -> "other"
 ```
 
-### 11.9 Functional Utilities
+### 11.8 Functional Utilities
 ```
 identity  (x: T)             -> T
 const_fn  (v: T)             -> (any -> T)
@@ -956,7 +971,7 @@ compose   (f: B->C, g: A->B) -> (A -> C)
 flip      (f: (A,B)->C)      -> (B,A) -> C
 ```
 
-### 11.10 Random (Impure Builtin)
+### 11.9 Random (Impure Builtin)
 `random` is an intentional exception to the pure-by-default rule. It is available without `@use`, requires no `!effect` annotation, but is non-deterministic. Functions using `random` do not need to declare it in their signatures. Use `random.seed(n)` in `@test` blocks for reproducibility.
 
 The interpreter seeds `random` from OS hardware entropy during `deck_runtime_create()`, before any app code runs. The `random` module must be declared in the OS surface file (`.deck-os`) as a `@builtin random` block with the `@impure` modifier — see §3 of `03-deck-os`. On platforms without a hardware RNG, the OS author must provide a software PRNG seeded from another entropy source (boot timestamp, ADC noise, etc.).
@@ -1080,5 +1095,5 @@ Load error [type-check]: models/post.deck:8:12
 
 Runtime error [record-access]: views/thread.deck:22:7
   accessed field 'text' on :none (Post? was :none).
-  Hint: unwrap the optional first with 'match' or 'unwrap_opt_or'.
+  Hint: unwrap the optional first with 'match' or 'unwrap_or'.
 ```

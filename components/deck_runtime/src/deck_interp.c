@@ -941,6 +941,24 @@ static deck_value_t *b_unwrap(deck_value_t **args, uint32_t n, deck_interp_ctx_t
     set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "unwrap: not optional or result");
     return NULL;
 }
+/* Spec 01-deck-lang §11.5+§11.6 (post-#20) — polymorphic `unwrap_or`
+ * returns `default` when the wrapper is empty (Optional :none) or
+ * errored (Result :err). Unifies the former `unwrap_or` (Result) and
+ * `unwrap_opt_or` (Optional) spec entries under one callable. */
+static deck_value_t *b_unwrap_or(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0]) return deck_retain(args[1]);
+    if (args[0]->type == DECK_T_OPTIONAL) {
+        return deck_retain(args[0]->as.opt.inner ? args[0]->as.opt.inner : args[1]);
+    }
+    if (result_tag_is(args[0], "ok"))
+        return deck_retain(args[0]->as.tuple.items[1]);
+    if (result_tag_is(args[0], "err"))
+        return deck_retain(args[1]);
+    /* Not a wrapper — pass the value through (treat as already-unwrapped). */
+    return deck_retain(args[0]);
+}
 static deck_value_t *b_map_ok(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -1002,9 +1020,10 @@ static const builtin_t BARE_BUILTINS[] = {
     { "err",      b_to_err,   1, 1 },
     { "is_ok",    b_is_ok,    1, 1 },
     { "is_err",   b_is_err,   1, 1 },
-    { "unwrap",   b_unwrap,   1, 1 },
-    { "map_ok",   b_map_ok,   2, 2 },
-    { "and_then", b_and_then, 2, 2 },
+    { "unwrap",    b_unwrap,    1, 1 },
+    { "unwrap_or", b_unwrap_or, 2, 2 },   /* polymorphic — §11.5/§11.6 post-#20 */
+    { "map_ok",    b_map_ok,    2, 2 },
+    { "and_then",  b_and_then,  2, 2 },
 
     /* DL2 F22 — type inspection. */
     { "type_of", b_type_of, 1, 1 },
