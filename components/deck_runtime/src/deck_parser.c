@@ -1515,22 +1515,53 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
     if (at(p, TOK_ATOM)) {
         st->as.state.name = p->cur.text;
         advance(p);
-        if (at(p, TOK_COLON)) advance(p);   /* tolerate `state :x:` */
     } else if (at(p, TOK_IDENT)) {
         st->as.state.name = p->cur.text;
         advance(p);
-        if (!expect(p, TOK_COLON,
-                    "expected ':' after state name (legacy form); "
-                    "spec §8.3 prefers `state :atom_name` with no colon"))
-            return NULL;
     } else {
         set_err(p, DECK_LOAD_PARSE_ERROR, "expected state name");
         return NULL;
     }
-    if (!expect(p, TOK_NEWLINE, "expected newline after state name")) return NULL;
-    while (at(p, TOK_NEWLINE)) advance(p);
-    if (!expect(p, TOK_INDENT, "expected indented state body")) return NULL;
+    /* Spec 02-deck-app §8.3 — optional payload clause `(field: Type, …)`.
+     * Parser eats it and discards (the runtime doesn't yet bind state
+     * payloads across transitions). Up to 16 fields. */
+    if (at(p, TOK_LPAREN)) {
+        advance(p);
+        uint32_t depth = 1;
+        while (depth > 0 && !at(p, TOK_EOF)) {
+            if (at(p, TOK_LPAREN)) depth++;
+            else if (at(p, TOK_RPAREN)) { if (--depth == 0) break; }
+            advance(p);
+        }
+        if (!expect(p, TOK_RPAREN, "expected ')' closing state payload clause")) return NULL;
+    }
+    /* Spec §8.3 — optional state composition `machine: Name` / `flow: Name`.
+     * Recorded as an IDENT-value hook for later runtime support; today the
+     * node is built but the interp ignores it (no state nesting yet). */
+    if (at(p, TOK_IDENT) && p->cur.text &&
+        (strcmp(p->cur.text, "machine") == 0 ||
+         strcmp(p->cur.text, "flow") == 0)) {
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after `machine`/`flow` in state decl")) return NULL;
+        if (at(p, TOK_IDENT)) advance(p);
+    }
+    /* Trailing colon — legacy `state IDENT:` and the `state :x:` tolerance
+     * from concept #14 both collapse here. Optional. */
+    if (at(p, TOK_COLON)) advance(p);
+
     ast_list_init(&st->as.state.hooks);
+
+    /* Bodyless state declarations (`state :welcome` on its own line) are
+     * allowed per §8.3 — a state with no on-enter/leave/transition hooks
+     * is terminal / composed-via-parent. */
+    if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "unexpected token after state declaration");
+        return NULL;
+    }
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (!at(p, TOK_INDENT)) return st;   /* no body — OK */
+    advance(p); /* INDENT */
 
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (at(p, TOK_KW_ON)) {

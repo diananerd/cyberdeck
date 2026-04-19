@@ -758,3 +758,41 @@ Their bodies are well-formed indented blocks — the parser already has a `parse
 - The interp-level `@doc`/`@example`/`@test` within a `fn` body (spec §17 shows them between signature and `=`) is NOT handled here — only the top-level form. If an annex places them inside a fn, `parse_fn_decl` still rejects.
 
 **Why this matters**: annex-xx-bluesky uses `@config`, `@stream`, `@task`, `@doc` at top level. Until this concept, the ENTIRE annex fails at the first of these decorators — long before any substantive runtime code runs. With parse-and-discard stubs, the annex loads enough that subsequent concepts can add real semantics one at a time, under a harness that already reports load progress rather than a bare "unknown decorator" error at line 1. The user's combinatorial-audit rule in reverse: remove the cheap blockers first so the deeper bugs become reachable.
+
+### Concept #22 — state payloads + composition + bodyless declarations (spec §8.3)
+
+Session #3 continued.
+
+**Drift**: three related parser gaps blocked every annex's `@machine` / `@flow` body:
+
+1. **Payload clause** `state :active (temp: float, max: float)` — parser rejected the `(` following a state name.
+2. **Composition** `state :home machine: LauncherState` / `state :thread flow: ThreadFlow` — `machine:` / `flow:` after a state name raised "unexpected token".
+3. **Bodyless declarations** `state :welcome` on its own line (spec §8.3: legitimate for terminal states or states fully defined by composition) — parser required `NEWLINE + INDENT + hook+ + DEDENT` and errored on missing INDENT.
+
+Every annex (a/b/c/d/xx) hits at least one of these in the first few lines of its first `@machine`. No annex state-machine declaration parses today.
+
+**Scope for this concept** (intentional narrow): parse-and-discard. Runtime does not yet bind state payloads across transitions, compose machines inside states, or do anything special with the composition reference. The parser accepts the shapes, builds a well-formed AST, and the interp continues to treat states as hooks-only containers. Each runtime semantic gets its own concept later.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_parser.c:parse_state_decl`:
+  * Name parsing now accepts `TOK_ATOM` or `TOK_IDENT`. The trailing colon is optional for both (was mandatory for IDENT form only).
+  * After the name, optional payload clause: consumes from `(` to matching `)` (with nesting depth counter so `(field: (int, int))` works), discards contents.
+  * After payload, optional composition: if the next token is `IDENT("machine")` or `IDENT("flow")`, consume `: IDENT` and discard.
+  * Body is now optional: if no `INDENT` follows the name, the state is bodyless and parsing returns the empty-hook state directly.
+  * If a `NEWLINE+INDENT` does follow, existing hook-loop logic (on enter/leave/transition) runs unchanged.
+
+**Compatibility**:
+
+- Fixtures that write `state a:` (legacy IDENT + mandatory colon + indented body) continue to work — all three path decisions preserve the existing shape.
+- The concept-#14 atom form `state :boot\n  on enter: …` continues to work.
+- New: `state :welcome` alone on a line parses as a bodyless state.
+- New: `state :search (query: str)` parses (payload discarded).
+- New: `state :home machine: LauncherState` parses (composition discarded).
+
+**Deferred for their own concepts** (tracked):
+- **Payload binding**: when `state :active (temp: float)` is entered via `transition :got_reading (t: float)  to :active (temp: t)`, bind `temp` in the on-enter/content-body scope. Requires AST node for payload fields + interp env extension + transition `to` clause that passes args.
+- **Composition execution**: a state with `machine: Other` enters the nested machine on entry and surfaces its transitions to the parent. Requires nested machine lifecycle, history tracking, and entry/exit propagation.
+- **`transition :event from :x to :y when: … before: … after:`** as a machine-level declaration (§8.4). Currently transitions are parsed only inside state bodies.
+
+**Why this matters**: until this concept, the entire annex set failed at parse time. No loader check, no interp, no DVC, nothing runs. This concept doesn't *implement* the features — it makes them syntactically legal so the audit can reach what's behind them. Matches the concept-#21 pattern: remove the cheap blockers, expose the deeper bugs.
