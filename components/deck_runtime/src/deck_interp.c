@@ -1257,6 +1257,218 @@ static deck_value_t *b_text_hex_encode(deck_value_t **args, uint32_t n, deck_int
     return out;
 }
 
+/* text.bytes(s) -> [int] — convert string to list of byte values (0-255). */
+static deck_value_t *b_text_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.bytes expects str"); return NULL;
+    }
+    const unsigned char *s = (const unsigned char *)args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.bytes alloc"); return NULL; }
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *b = deck_new_int(s[i]);
+        if (!b) { deck_release(out); return NULL; }
+        deck_list_push(out, b);
+        deck_release(b);
+    }
+    return out;
+}
+
+/* text.from_bytes([int]) -> str? — reverse of text.bytes. Null byte (0x00)
+ * yields :none since it can't appear in a valid Deck string (runtime ptrs
+ * are len-prefixed, but null is still a sentinel for C interop). Any other
+ * 0x01..0xFF byte is accepted as the owning string is len-prefixed. */
+static deck_value_t *b_text_from_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.from_bytes expects [int]"); return NULL;
+    }
+    uint32_t L = args[0]->as.list.len;
+    if (L == 0) {
+        deck_value_t *empty = deck_new_str("", 0);
+        deck_value_t *some = deck_new_some(empty);
+        deck_release(empty);
+        return some;
+    }
+    if (L > (1U << 16)) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.from_bytes: list > 64KB"); return NULL;
+    }
+    char *buf = (char *)malloc(L + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.from_bytes alloc"); return NULL; }
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        if (!v || v->type != DECK_T_INT) { free(buf); return deck_new_none(); }
+        int64_t x = v->as.i;
+        if (x < 0 || x > 255 || x == 0) { free(buf); return deck_new_none(); }
+        buf[i] = (char)x;
+    }
+    deck_value_t *inner = deck_new_str(buf, L);
+    free(buf);
+    if (!inner) return NULL;
+    deck_value_t *some = deck_new_some(inner);
+    deck_release(inner);
+    return some;
+}
+
+/* text.query_build({k: v}) -> str — URL-encoded k=v pairs joined with '&'.
+ * Keys are emitted in lexicographic order so output is deterministic. */
+static int cmp_str(const void *a, const void *b)
+{
+    deck_value_t *const *pa = (deck_value_t *const *)a;
+    deck_value_t *const *pb = (deck_value_t *const *)b;
+    const char *sa = (*pa)->as.s.ptr;
+    const char *sb = (*pb)->as.s.ptr;
+    uint32_t la = (*pa)->as.s.len, lb = (*pb)->as.s.len;
+    uint32_t m = la < lb ? la : lb;
+    int r = memcmp(sa, sb, m);
+    if (r != 0) return r;
+    return (la < lb) ? -1 : (la > lb) ? 1 : 0;
+}
+
+/* RFC 3986 percent-encode into a heap buf — shared by query_build + a future
+ * caller. Caller owns the returned pointer, uses *out_len for its size. */
+static char *url_pct_encode(const char *s, uint32_t L, uint32_t *out_len)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    char *buf = (char *)malloc((size_t)L * 3 + 1);
+    if (!buf) return NULL;
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (url_unreserved(ch)) buf[o++] = (char)ch;
+        else {
+            buf[o++] = '%';
+            buf[o++] = HEX[(ch >> 4) & 0xF];
+            buf[o++] = HEX[ch & 0xF];
+        }
+    }
+    *out_len = o;
+    return buf;
+}
+
+static deck_value_t *b_text_query_build(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.query_build({str: str})"); return NULL;
+    }
+    /* Gather used keys. */
+    deck_map_t *m = &args[0]->as.map;
+    uint32_t n_entries = 0;
+    for (uint32_t i = 0; i < m->len; i++) if (m->entries[i].used) n_entries++;
+    if (n_entries == 0) return deck_new_str("", 0);
+    deck_value_t **keys = (deck_value_t **)malloc(sizeof(deck_value_t *) * n_entries);
+    if (!keys) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_build alloc"); return NULL; }
+    uint32_t ki = 0;
+    for (uint32_t i = 0; i < m->len; i++) {
+        if (!m->entries[i].used) continue;
+        deck_value_t *k = m->entries[i].key;
+        deck_value_t *v = m->entries[i].val;
+        if (!k || k->type != DECK_T_STR || !v || v->type != DECK_T_STR) {
+            free(keys);
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.query_build: keys and values must be str");
+            return NULL;
+        }
+        keys[ki++] = k;
+    }
+    qsort(keys, n_entries, sizeof(deck_value_t *), cmp_str);
+    /* Assemble output. */
+    uint32_t cap = 256;
+    char *out = (char *)malloc(cap);
+    if (!out) { free(keys); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_build alloc"); return NULL; }
+    uint32_t off = 0;
+    for (uint32_t i = 0; i < n_entries; i++) {
+        deck_value_t *k = keys[i];
+        deck_value_t *v = deck_map_get(args[0], k);
+        uint32_t klen = 0, vlen = 0;
+        char *ke = url_pct_encode(k->as.s.ptr, k->as.s.len, &klen);
+        char *ve = url_pct_encode(v->as.s.ptr, v->as.s.len, &vlen);
+        if (!ke || !ve) { free(ke); free(ve); free(out); free(keys); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_build alloc"); return NULL; }
+        uint32_t need = off + klen + 1 + vlen + (i + 1 < n_entries ? 1 : 0);
+        if (need >= cap) {
+            while (cap <= need) cap *= 2;
+            char *tmp = (char *)realloc(out, cap);
+            if (!tmp) { free(ke); free(ve); free(out); free(keys); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_build realloc"); return NULL; }
+            out = tmp;
+        }
+        memcpy(out + off, ke, klen); off += klen;
+        out[off++] = '=';
+        memcpy(out + off, ve, vlen); off += vlen;
+        if (i + 1 < n_entries) out[off++] = '&';
+        free(ke); free(ve);
+    }
+    free(keys);
+    deck_value_t *result = deck_new_str(out, off);
+    free(out);
+    return result;
+}
+
+/* text.query_parse("a=1&b=two%20words") -> {"a": "1", "b": "two words"}.
+ * Invalid input (missing '=' in a pair, bad percent-escapes) is best-effort:
+ * missing '=' pair -> value = "". Bad %XX -> literal passthrough (same as
+ * url_decode). */
+static deck_value_t *b_text_query_parse(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.query_parse expects str"); return NULL;
+    }
+    deck_value_t *out = deck_new_map(8);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_parse alloc"); return NULL; }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    uint32_t i = 0;
+    while (i < L) {
+        uint32_t k_start = i;
+        while (i < L && s[i] != '=' && s[i] != '&') i++;
+        uint32_t k_end = i;
+        uint32_t v_start = k_end, v_end = k_end;
+        if (i < L && s[i] == '=') {
+            i++;
+            v_start = i;
+            while (i < L && s[i] != '&') i++;
+            v_end = i;
+        }
+        if (i < L && s[i] == '&') i++;
+        /* Inline URL-decode directly into malloc'd buffers. */
+        uint32_t klen = k_end - k_start;
+        char *kbuf = (char *)malloc((size_t)klen + 1);
+        if (!kbuf) { deck_release(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_parse alloc"); return NULL; }
+        uint32_t kl = 0;
+        for (uint32_t p = k_start; p < k_end; p++) {
+            char ch = s[p];
+            if (ch == '%' && p + 2 < k_end) {
+                int hi = hex_nibble(s[p + 1]), lo = hex_nibble(s[p + 2]);
+                if (hi >= 0 && lo >= 0) { kbuf[kl++] = (char)((hi << 4) | lo); p += 2; continue; }
+            }
+            kbuf[kl++] = ch;
+        }
+        uint32_t vlen = v_end - v_start;
+        char *vbuf = (char *)malloc((size_t)vlen + 1);
+        if (!vbuf) { free(kbuf); deck_release(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.query_parse alloc"); return NULL; }
+        uint32_t vl = 0;
+        for (uint32_t p = v_start; p < v_end; p++) {
+            char ch = s[p];
+            if (ch == '%' && p + 2 < v_end) {
+                int hi = hex_nibble(s[p + 1]), lo = hex_nibble(s[p + 2]);
+                if (hi >= 0 && lo >= 0) { vbuf[vl++] = (char)((hi << 4) | lo); p += 2; continue; }
+            }
+            vbuf[vl++] = ch;
+        }
+        deck_value_t *kv = deck_new_str(kbuf, kl);
+        deck_value_t *vv = deck_new_str(vbuf, vl);
+        free(kbuf); free(vbuf);
+        if (!kv || !vv) { if (kv) deck_release(kv); if (vv) deck_release(vv); deck_release(out); return NULL; }
+        deck_map_put(out, kv, vv);
+        deck_release(kv); deck_release(vv);
+    }
+    return out;
+}
+
 /* hex_decode returns a list-of-int (each 0-255) wrapped in :some, or :none. */
 static deck_value_t *b_text_hex_decode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -1732,6 +1944,11 @@ static const builtin_t BUILTINS[] = {
     { "text.url_decode",        b_text_url_decode,    1, 1 },
     { "text.hex_encode",        b_text_hex_encode,    1, 1 },
     { "text.hex_decode",        b_text_hex_decode,    1, 1 },
+    /* Concept #29 — bytes / query. */
+    { "text.bytes",             b_text_bytes,         1, 1 },
+    { "text.from_bytes",        b_text_from_bytes,    1, 1 },
+    { "text.query_build",       b_text_query_build,   1, 1 },
+    { "text.query_parse",       b_text_query_parse,   1, 1 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },

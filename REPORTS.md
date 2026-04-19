@@ -1039,3 +1039,21 @@ A→B shape: all three functions "work" on the fixtures that happen to use short
 **Why this matters**: URL and base64 encoding are prerequisites for any HTTP client work — a Deck app calling an AT Proto endpoint (annex-xx) needs `text.url_encode` on every query parameter and `text.base64_encode` for binary uploads. Without these, the entire `@capability network.http` / `api_client` surface is useless even once wired up.
 
 **Running tally**: `text.*` now at 29/36. Remaining: `format`, `query_build`, `query_parse`, `json`, `from_json`, `bytes`, `from_bytes`. The `json/from_json` pair is the biggest remaining piece (full JSON parser + serializer) — candidate for its own concept. `format` requires a `{name}` template parser + map lookup. `query_build/parse` compose on top of `url_encode/decode` — small. `bytes/from_bytes` are str ↔ [int] round-trips — trivial.
+
+### Concept #29 — text.* bytes + query builtins (spec §3)
+
+**Drift**: four more `os_text.deck` probes that errored silently pre-concept:
+- `text.bytes(s) -> [int]` — string to byte list.
+- `text.from_bytes([int]) -> str?` — byte list back to string (`:none` on invalid).
+- `text.query_build({k: v}) -> str` — URL-encoded k=v pairs joined with `&`.
+- `text.query_parse(s) -> {k: v}` — parse query string back to map.
+
+**Fix applied**:
+
+- `text.bytes` / `text.from_bytes` — straightforward str ↔ [int] loops. `from_bytes` rejects null bytes (0x00) and out-of-range ints, returning `:none`. Capped at 64 KB input.
+- `text.query_build` — iterates the map's used entries, validates every key and value is `str`, sorts keys lexicographically (qsort) for deterministic output, percent-encodes each via shared `url_pct_encode` helper, joins `k=v` pairs with `&`. Deterministic ordering is load-bearing: `os_text.deck` asserts `{"a": "1", "b": "two words"}` → `"a=1&b=two%20words"`, so the map's internal hash order must not leak.
+- `text.query_parse` — splits on `&`, splits each pair on `=`, inline %-decodes key and value. Missing `=` in a pair → empty value. Invalid %XX → literal passthrough (consistent with `url_decode`). Never fails.
+
+**Why sort?** Maps in the runtime are open-addressed hash tables — iteration order depends on hash values and capacity, not insertion order. Any fixture or app that compares `query_build` output against a literal would fail intermittently without sort. Lexicographic sort is the canonical deterministic choice.
+
+**Running tally**: `text.*` now at 33/36. Remaining: `format`, `json`, `from_json`. The JSON pair is the big remaining piece (full parser + serializer, ~500 LOC); `format` needs a `{name}` template parser + map lookup — small.
