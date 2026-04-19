@@ -1057,3 +1057,18 @@ A→B shape: all three functions "work" on the fixtures that happen to use short
 **Why sort?** Maps in the runtime are open-addressed hash tables — iteration order depends on hash values and capacity, not insertion order. Any fixture or app that compares `query_build` output against a literal would fail intermittently without sort. Lexicographic sort is the canonical deterministic choice.
 
 **Running tally**: `text.*` now at 33/36. Remaining: `format`, `json`, `from_json`. The JSON pair is the big remaining piece (full parser + serializer, ~500 LOC); `format` needs a `{name}` template parser + map lookup — small.
+
+### Concept #30 — text.format template interpolation (spec §3)
+
+**Drift**: `text.format("Hello, {name}!", {"name": "World"}) == "Hello, World!"` is the fixture's expected contract. Runtime had no registration — silent fail in the os_text.deck AND bait for any app author reading `§3` and trying to use template strings (common idiom in log / UI content).
+
+**Fix applied**:
+
+- Template walker in `b_text_format`: iterates `tmpl`, on `{{` emits literal `{`, on `{NAME}` locates the matching `}`, extracts name, does `deck_map_get(args[1], name)`, stringifies via `b_to_str` (which already handles int/float/bool/atom/unit/str), copies to output. Missing key keeps the literal `{NAME}` placeholder rather than silently inserting empty — lets authors see exactly which key they misspelled. Unmatched `{` (no closing `}`) passes through as literal.
+- Forward-declared `b_to_str` so the format impl (in the text block) can call the bare-builtin (declared further down).
+
+**Why keep missing keys literal instead of erroring**: template-based UI often has optional placeholders — the stricter alternative (error on missing) would force every caller to pre-validate the map, which is onerous for simple log messages. Literal-passthrough is the common convention (Python `str.format_map` with a default-dict, JS template engines). Apps that want strict behaviour can check `map.keys()` first.
+
+**Why `{{` escape but no `}}` escape**: only `{` is ambiguous (starts a placeholder). `}` is always safe literal unless matched inside a `{…}` pair. Keeping the escape minimal matches the spec and reduces surprises.
+
+**Running tally**: `text.*` now at 34/36. Remaining: `json`, `from_json` — a proper recursive-descent JSON parser + stringifier is the next text concept. Biggest remaining spec §3 gap.

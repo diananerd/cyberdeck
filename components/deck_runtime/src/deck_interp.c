@@ -1257,6 +1257,81 @@ static deck_value_t *b_text_hex_encode(deck_value_t **args, uint32_t n, deck_int
     return out;
 }
 
+/* Forward declaration — b_to_str lives further down (bare-builtin area). */
+static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+
+/* text.format(tmpl, {name: value}) -> str — replaces {name} placeholders
+ * with map-lookup values stringified via b_to_str. Missing keys keep the
+ * literal placeholder. `{{` escapes to literal `{`. */
+static deck_value_t *b_text_format(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR ||
+        !args[1] || args[1]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.format(tmpl, {str: any})"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    uint32_t cap = L + 32;
+    char *out = (char *)malloc(cap);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format alloc"); return NULL; }
+    uint32_t off = 0;
+    uint32_t i = 0;
+    while (i < L) {
+        char ch = s[i];
+        if (ch == '{' && i + 1 < L && s[i + 1] == '{') {
+            /* {{ -> { */
+            if (off + 1 >= cap) { cap *= 2; char *t = realloc(out, cap); if (!t) { free(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format realloc"); return NULL; } out = t; }
+            out[off++] = '{';
+            i += 2;
+            continue;
+        }
+        if (ch == '{') {
+            /* find matching } */
+            uint32_t end = i + 1;
+            while (end < L && s[end] != '}') end++;
+            if (end >= L) {
+                /* unmatched — emit literal */
+                if (off + 1 >= cap) { cap *= 2; char *t = realloc(out, cap); if (!t) { free(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format realloc"); return NULL; } out = t; }
+                out[off++] = ch;
+                i++;
+                continue;
+            }
+            uint32_t name_len = end - i - 1;
+            deck_value_t *key = deck_new_str(s + i + 1, name_len);
+            deck_value_t *val = key ? deck_map_get(args[1], key) : NULL;
+            if (key) deck_release(key);
+            if (!val) {
+                /* missing -> literal {name} */
+                uint32_t lit_len = (end - i + 1);
+                if (off + lit_len >= cap) { while (cap <= off + lit_len) cap *= 2; char *t = realloc(out, cap); if (!t) { free(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format realloc"); return NULL; } out = t; }
+                memcpy(out + off, s + i, lit_len); off += lit_len;
+            } else {
+                deck_value_t *stringified;
+                if (val->type == DECK_T_STR) {
+                    stringified = deck_retain(val);
+                } else {
+                    deck_value_t *sargs[1] = { val };
+                    stringified = b_to_str(sargs, 1, c);
+                    if (!stringified) { free(out); return NULL; }
+                }
+                uint32_t vl = stringified->as.s.len;
+                if (off + vl >= cap) { while (cap <= off + vl) cap *= 2; char *t = realloc(out, cap); if (!t) { deck_release(stringified); free(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format realloc"); return NULL; } out = t; }
+                memcpy(out + off, stringified->as.s.ptr, vl); off += vl;
+                deck_release(stringified);
+            }
+            i = end + 1;
+            continue;
+        }
+        if (off + 1 >= cap) { cap *= 2; char *t = realloc(out, cap); if (!t) { free(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.format realloc"); return NULL; } out = t; }
+        out[off++] = ch;
+        i++;
+    }
+    deck_value_t *result = deck_new_str(out, off);
+    free(out);
+    return result;
+}
+
 /* text.bytes(s) -> [int] — convert string to list of byte values (0-255). */
 static deck_value_t *b_text_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -1949,6 +2024,7 @@ static const builtin_t BUILTINS[] = {
     { "text.from_bytes",        b_text_from_bytes,    1, 1 },
     { "text.query_build",       b_text_query_build,   1, 1 },
     { "text.query_parse",       b_text_query_parse,   1, 1 },
+    { "text.format",            b_text_format,        2, 2 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },
