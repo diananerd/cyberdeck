@@ -182,8 +182,16 @@ static deck_value_t *b_log_debug(deck_value_t **args, uint32_t n, deck_interp_ct
         ESP_LOGD("deck.app", "%.*s", (int)args[0]->as.s.len, args[0]->as.s.ptr);
     return deck_retain(deck_unit());
 }
+/* Spec §3: time.now() -> Timestamp (epoch seconds). Uses wall clock when
+ * set; falls back to monotonic seconds since boot so ordering still holds
+ * on hardware without an RTC and before SNTP sync lands. */
 static deck_value_t *b_time_now(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
-{ (void)a; (void)n; (void)c; return deck_new_int(deck_sdi_time_monotonic_us() / 1000); }
+{
+    (void)a; (void)n; (void)c;
+    int64_t w = deck_sdi_time_wall_epoch_s();
+    if (w <= 0) w = deck_sdi_time_monotonic_us() / 1000000;
+    return deck_new_int(w);
+}
 static deck_value_t *b_info_device_id(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 { (void)a; (void)n; (void)c; const char *d = deck_sdi_info_device_id(); return deck_new_str_cstr(d ? d : ""); }
 static deck_value_t *b_info_free_heap(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -536,6 +544,251 @@ static deck_value_t *b_time_to_iso(deck_value_t **args, uint32_t n, deck_interp_
     int k = snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return deck_new_str(buf, (uint32_t)k);
+}
+
+/* ---- time.* completeness (concept #32, spec §3) ----
+ * Canonical units: Timestamp = epoch seconds (int), Duration = seconds (int).
+ * Duration literals (5s, 2m, 1h, 1d) are lowered to seconds by the lexer;
+ * `ms` suffix is truncated since the canonical precision is seconds. */
+
+static int64_t ts_or_err(deck_value_t *v, deck_interp_ctx_t *c, const char *who)
+{
+    if (!is_num(v)) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s needs Timestamp", who); return INT64_MIN; }
+    return v->type == DECK_T_INT ? v->as.i : (int64_t)v->as.f;
+}
+
+static deck_value_t *b_time_since(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.since");
+    if (c->err) return NULL;
+    int64_t now_s = deck_sdi_time_wall_epoch_s();
+    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
+    return deck_new_int(now_s - t);
+}
+
+static deck_value_t *b_time_until(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.until");
+    if (c->err) return NULL;
+    int64_t now_s = deck_sdi_time_wall_epoch_s();
+    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
+    return deck_new_int(t - now_s);
+}
+
+static deck_value_t *b_time_add(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.add");
+    if (c->err) return NULL;
+    int64_t d = ts_or_err(a[1], c, "time.add");
+    if (c->err) return NULL;
+    return deck_new_int(t + d);
+}
+
+static deck_value_t *b_time_sub(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.sub");
+    if (c->err) return NULL;
+    int64_t d = ts_or_err(a[1], c, "time.sub");
+    if (c->err) return NULL;
+    return deck_new_int(t - d);
+}
+
+static deck_value_t *b_time_before(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = ts_or_err(a[0], c, "time.before");
+    if (c->err) return NULL;
+    int64_t y = ts_or_err(a[1], c, "time.before");
+    if (c->err) return NULL;
+    return deck_retain(x < y ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_time_after(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = ts_or_err(a[0], c, "time.after");
+    if (c->err) return NULL;
+    int64_t y = ts_or_err(a[1], c, "time.after");
+    if (c->err) return NULL;
+    return deck_retain(x > y ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_time_epoch(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int(0);
+}
+
+/* Format a Timestamp using strftime-compatible template. Cap 128 bytes out. */
+static deck_value_t *b_time_format(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.format");
+    if (c->err) return NULL;
+    if (!a[1] || a[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.format(t, fmt:str)"); return NULL; }
+    char fmt[64]; uint32_t L = a[1]->as.s.len < 63 ? a[1]->as.s.len : 63;
+    memcpy(fmt, a[1]->as.s.ptr, L); fmt[L] = 0;
+    time_t tt = (time_t)t;
+    struct tm tm; gmtime_r(&tt, &tm);
+    char buf[128];
+    size_t k = strftime(buf, sizeof(buf), fmt, &tm);
+    return deck_new_str(buf, (uint32_t)k);
+}
+
+/* Parse a Timestamp from a formatted string using strptime. :none on failure. */
+static deck_value_t *b_time_parse(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!a[0] || a[0]->type != DECK_T_STR ||
+        !a[1] || a[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.parse(s:str, fmt:str)"); return NULL;
+    }
+    char s[96];   uint32_t sl = a[0]->as.s.len < 95 ? a[0]->as.s.len : 95;
+    memcpy(s, a[0]->as.s.ptr, sl); s[sl] = 0;
+    char fmt[64]; uint32_t fl = a[1]->as.s.len < 63 ? a[1]->as.s.len : 63;
+    memcpy(fmt, a[1]->as.s.ptr, fl); fmt[fl] = 0;
+    struct tm tm; memset(&tm, 0, sizeof(tm));
+    extern char *strptime(const char *s, const char *format, struct tm *tm);
+    char *end = strptime(s, fmt, &tm);
+    if (!end) return deck_new_none();
+    /* timegm is non-portable; construct epoch manually from tm fields as UTC. */
+    static const int16_t mdays[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int year = tm.tm_year + 1900;
+    int month = tm.tm_mon;
+    int day = tm.tm_mday;
+    if (year < 1970 || month < 0 || month > 11) return deck_new_none();
+    int64_t days = (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
+    days += mdays[month] + (day - 1);
+    bool is_leap = ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+    if (month >= 2 && is_leap) days += 1;
+    int64_t epoch = days * 86400 + tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec;
+    return deck_new_some(deck_new_int(epoch));
+}
+
+/* from_iso is just parse with the fixed ISO 8601 Z format. Returns :none on bad input. */
+static deck_value_t *b_time_from_iso(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!a[0] || a[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.from_iso(str)"); return NULL; }
+    char s[40]; uint32_t L = a[0]->as.s.len;
+    if (L > 39) return deck_new_none();
+    memcpy(s, a[0]->as.s.ptr, L); s[L] = 0;
+    int Y, Mo, D, h, m, sec;
+    char tail = 0;
+    int got = sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d%c", &Y, &Mo, &D, &h, &m, &sec, &tail);
+    if (got < 6) return deck_new_none();
+    if (got >= 7 && tail != 'Z' && tail != '+' && tail != '-') return deck_new_none();
+    if (Y < 1970 || Mo < 1 || Mo > 12 || D < 1 || D > 31) return deck_new_none();
+    static const int16_t mdays[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int64_t days = (Y - 1970) * 365 + (Y - 1969) / 4 - (Y - 1901) / 100 + (Y - 1601) / 400;
+    days += mdays[Mo - 1] + (D - 1);
+    bool is_leap = ((Y % 4 == 0) && (Y % 100 != 0)) || (Y % 400 == 0);
+    if (Mo >= 3 && is_leap) days += 1;
+    int64_t epoch = days * 86400 + h * 3600 + m * 60 + sec;
+    return deck_new_some(deck_new_int(epoch));
+}
+
+/* time.date_parts(t) -> {str: int?} with year/month/day/hour/minute/second.
+ * Returning int? (i.e. :some N) matches the fixture's `match parts.year | :some y`
+ * pattern — map.get already produces Option. So the map values are plain int
+ * and the Option wraps at map.get time. Wait — fixture does `parts.year` not
+ * `map.get(parts, "year")`. That's the future map.field accessor; for now the
+ * fixture won't work regardless. Keep the shape spec-correct: {str: int}. */
+static deck_value_t *b_time_date_parts(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.date_parts");
+    if (c->err) return NULL;
+    time_t tt = (time_t)t;
+    struct tm tm; gmtime_r(&tt, &tm);
+    deck_value_t *m = deck_new_map(8);
+    if (!m) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "time.date_parts alloc"); return NULL; }
+    #define PUT_I(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = deck_new_int(v); deck_map_put(m, kk, vv); deck_release(kk); deck_release(vv); } while (0)
+    PUT_I("year",   tm.tm_year + 1900);
+    PUT_I("month",  tm.tm_mon + 1);
+    PUT_I("day",    tm.tm_mday);
+    PUT_I("hour",   tm.tm_hour);
+    PUT_I("minute", tm.tm_min);
+    PUT_I("second", tm.tm_sec);
+    #undef PUT_I
+    return m;
+}
+
+static deck_value_t *b_time_day_of_week(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.day_of_week");
+    if (c->err) return NULL;
+    time_t tt = (time_t)t;
+    struct tm tm; gmtime_r(&tt, &tm);
+    return deck_new_int(tm.tm_wday);    /* 0=Sunday .. 6=Saturday */
+}
+
+static deck_value_t *b_time_start_of_day(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.start_of_day");
+    if (c->err) return NULL;
+    return deck_new_int((t / 86400) * 86400);
+}
+
+static deck_value_t *b_time_duration_parts(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t d = ts_or_err(a[0], c, "time.duration_parts");
+    if (c->err) return NULL;
+    if (d < 0) d = -d;
+    deck_value_t *m = deck_new_map(8);
+    if (!m) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "time.duration_parts alloc"); return NULL; }
+    int64_t days    = d / 86400; d %= 86400;
+    int64_t hours   = d / 3600;  d %= 3600;
+    int64_t minutes = d / 60;    d %= 60;
+    int64_t seconds = d;
+    #define PUT_I(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = deck_new_int(v); deck_map_put(m, kk, vv); deck_release(kk); deck_release(vv); } while (0)
+    PUT_I("days",    days);
+    PUT_I("hours",   hours);
+    PUT_I("minutes", minutes);
+    PUT_I("seconds", seconds);
+    #undef PUT_I
+    return m;
+}
+
+static deck_value_t *b_time_duration_str(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t d = ts_or_err(a[0], c, "time.duration_str");
+    if (c->err) return NULL;
+    bool neg = d < 0;
+    if (neg) d = -d;
+    char buf[64];
+    int k;
+    if (d >= 86400)      k = snprintf(buf, sizeof(buf), "%s%lldd %lldh", neg ? "-" : "", (long long)(d / 86400), (long long)((d % 86400) / 3600));
+    else if (d >= 3600)  k = snprintf(buf, sizeof(buf), "%s%lldh %lldm", neg ? "-" : "", (long long)(d / 3600),  (long long)((d % 3600) / 60));
+    else if (d >= 60)    k = snprintf(buf, sizeof(buf), "%s%lldm %llds", neg ? "-" : "", (long long)(d / 60),    (long long)(d % 60));
+    else                 k = snprintf(buf, sizeof(buf), "%s%llds",       neg ? "-" : "", (long long)d);
+    return deck_new_str(buf, (uint32_t)k);
+}
+
+static deck_value_t *b_time_ago(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t t = ts_or_err(a[0], c, "time.ago");
+    if (c->err) return NULL;
+    int64_t now_s = deck_sdi_time_wall_epoch_s();
+    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
+    int64_t d = now_s - t;
+    char buf[64];
+    int k;
+    if (d < 0)            k = snprintf(buf, sizeof(buf), "in the future");
+    else if (d < 60)      k = snprintf(buf, sizeof(buf), "%llds ago", (long long)d);
+    else if (d < 3600)    k = snprintf(buf, sizeof(buf), "%lldm ago", (long long)(d / 60));
+    else if (d < 86400)   k = snprintf(buf, sizeof(buf), "%lldh ago", (long long)(d / 3600));
+    else                  k = snprintf(buf, sizeof(buf), "%lldd ago", (long long)(d / 86400));
     return deck_new_str(buf, (uint32_t)k);
 }
 
@@ -2314,6 +2567,24 @@ static const builtin_t BUILTINS[] = {
     { "time.now_us",            b_time_now_us,       0, 0 },
     { "time.duration",          b_time_duration,     2, 2 },
     { "time.to_iso",            b_time_to_iso,       1, 1 },
+    /* Concept #32 — §3 @builtin time completeness. Timestamps in epoch
+     * seconds, Durations in seconds. */
+    { "time.since",             b_time_since,        1, 1 },
+    { "time.until",             b_time_until,        1, 1 },
+    { "time.add",               b_time_add,          2, 2 },
+    { "time.sub",               b_time_sub,          2, 2 },
+    { "time.before",            b_time_before,       2, 2 },
+    { "time.after",             b_time_after,        2, 2 },
+    { "time.epoch",             b_time_epoch,        0, 0 },
+    { "time.format",            b_time_format,       2, 2 },
+    { "time.parse",             b_time_parse,        2, 2 },
+    { "time.from_iso",          b_time_from_iso,     1, 1 },
+    { "time.date_parts",        b_time_date_parts,   1, 1 },
+    { "time.day_of_week",       b_time_day_of_week,  1, 1 },
+    { "time.start_of_day",      b_time_start_of_day, 1, 1 },
+    { "time.duration_parts",    b_time_duration_parts, 1, 1 },
+    { "time.duration_str",      b_time_duration_str, 1, 1 },
+    { "time.ago",               b_time_ago,          1, 1 },
 
     /* system.info */
     { "system.info.device_id",  b_info_device_id,    0, 0 },

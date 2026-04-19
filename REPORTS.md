@@ -1099,3 +1099,41 @@ text.from_json("not-json") == :none
 **Running tally**: `text.*` now at **36/36**. §3 `@builtin text` is fully implemented — the first complete capability surface since the spec was written.
 
 **Next natural concepts**: `time.*` (4/18), `fs.*` (3/10 — needs SDI work for write/append/delete/mkdir/move), `nvs.*` (3/11 — needs SDI iterator + value-type support; also spec signature shift from 3-arg to 2-arg).
+
+### Concept #32 — time.* completeness + duration literals (spec §3 + §01 §3)
+
+**Drift**:
+- Runtime had only 4 `time.*` builtins (`now`, `now_us`, `duration`, `to_iso`). `os_time.deck` exercises 12+ methods.
+- `time.now` returned monotonic ms; `to_iso` expected epoch seconds — inconsistent units between ostensibly-related builtins.
+- Lexer never understood duration literals (`5s`, `2m`, `500ms`, `1h`, `1d`). `5s` lexed as `TOK_INT 5 | TOK_IDENT s` → parse error. Every fixture or annex that used duration literals failed to load silently.
+
+**Scope / decisions**:
+
+- **Unit convention**: Timestamp = epoch seconds (int); Duration = seconds (int). Matches the existing `to_iso` + the fixture comment `"parsed within 2s of t1"`. Alternatives (ms, µs, mixed) all either broke round-trips or added type ceremony not yet in the runtime.
+- **`time.now` rewritten** to return wall-clock epoch seconds (`deck_sdi_time_wall_epoch_s()`), falling back to monotonic seconds (`monotonic_us / 1_000_000`) when wall isn't set. That means `t1 > 0` and `t2 >= t1` still hold at boot (ordering doesn't depend on wall clock).
+- **`time.now_us` preserved** as a non-spec helper for benchmarks — boot-monotonic microseconds. Explicit second unit for Timestamp keeps the shape tight; callers who need sub-second precision for perf work use `now_us`.
+
+**Lexer (layer 0)**:
+
+- `scan_number` grew a duration-suffix pass after the integer literal completes. Suffixes are matched with a "next char must not be an ident char" guard — so `1slice` stays `INT(1)` + `IDENT("slice")`, and `5s` becomes `INT(5)` (5 seconds).
+- Multipliers: `ms → v / 1000` (truncated; ms precision is below the canonical unit), `s → v` (canonical), `m → v * 60`, `h → v * 3600`, `d → v * 86400`.
+- Float literals with suffix (`1.5s`) are rejected — ambiguous between "1500 ms" and "1 s rounded to 1". Integer-only keeps the grammar strict.
+
+**Runtime (layer 4) — 14 new builtins**:
+
+- `time.since(t)` / `time.until(t)` / `time.add(t, d)` / `time.sub(t, d)` — pure integer arithmetic.
+- `time.before(a, b)` / `time.after(a, b)` — comparisons.
+- `time.epoch()` — returns 0 (UNIX epoch Timestamp).
+- `time.format(t, fmt)` — strftime-compatible template, 128-byte output cap.
+- `time.parse(s, fmt)` — strptime + manual UTC epoch reconstruction (libc `timegm` is non-portable; inline computes days-from-epoch from Y/M/D with leap-year correction).
+- `time.from_iso(s)` — fixed-format `YYYY-MM-DDTHH:MM:SSZ` via sscanf. Rejects bad shapes with `:none`.
+- `time.date_parts(t)` — returns `{"year": N, "month": N, "day": N, "hour": N, "minute": N, "second": N}`.
+- `time.day_of_week(t)` — 0=Sunday..6=Saturday (matches `struct tm.tm_wday`).
+- `time.start_of_day(t)` — floor to UTC midnight (`(t / 86400) * 86400`).
+- `time.duration_parts(d)` — returns `{"days", "hours", "minutes", "seconds"}`.
+- `time.duration_str(d)` — human-readable: `"3d 2h"` / `"5h 30m"` / `"2m 15s"` / `"42s"` / prefix `-` for negatives.
+- `time.ago(t)` — relative phrasing: `"15s ago"` / `"3m ago"` / `"2h ago"` / `"5d ago"` / `"in the future"` for t > now.
+
+**Fixture caveat**: `os_time.deck` uses `parts.year` syntactically — that's a field-access on a map, which the current runtime doesn't support (map is accessed via `map.get`). That's a separate runtime concept (record/map field syntax). Concept #32 closes the **builtin-completeness** side; the fixture-compatibility side still depends on that field-access gap.
+
+**Running tally**: `time.*` now at 18/18. `text.*` 36/36. Remaining capabilities with silent runtime gaps: `fs.*` (3/10), `nvs.*` (3/11), plus the non-builtin concepts at session-#3 tail (declarative content eval, machine dispatch, streams, etc.).

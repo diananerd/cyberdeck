@@ -268,6 +268,44 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
     } else {
         out->as.i = (int64_t)strtoll(scratch, NULL, 10);
     }
+
+    /* Duration suffix (spec §01 §3 literals `500ms 1s 5m 1h 1d`).
+     * Canonical unit is seconds — ms divides by 1000 (truncated).
+     * Only runs on integer literals; `1.5s` is rejected as ambiguous.
+     * A suffix is only consumed when the next char after it is not another
+     * ident char, so `1slice` stays as `1` + IDENT `slice`. */
+    if (!seen_dot && lx->pos < lx->len) {
+        int c0 = peek(lx);
+        int c1 = peek_at(lx, 1);
+        int64_t v = out->as.i;
+#define NEXT_OK(at) do { int _nc = peek_at(lx, (at)); \
+    if (_nc == '_' || (_nc >= 'a' && _nc <= 'z') || (_nc >= 'A' && _nc <= 'Z') || (_nc >= '0' && _nc <= '9')) { \
+        goto no_dur_suffix; \
+    } } while (0)
+        if (c0 == 'm' && c1 == 's') {
+            NEXT_OK(2);
+            out->as.i = v / 1000;
+            advance(lx); advance(lx);
+        } else if (c0 == 's') {
+            NEXT_OK(1);
+            /* seconds — canonical unit, no multiplication */
+            advance(lx);
+        } else if (c0 == 'm') {
+            NEXT_OK(1);
+            out->as.i = v * 60;
+            advance(lx);
+        } else if (c0 == 'h') {
+            NEXT_OK(1);
+            out->as.i = v * 3600;
+            advance(lx);
+        } else if (c0 == 'd') {
+            NEXT_OK(1);
+            out->as.i = v * 86400;
+            advance(lx);
+        }
+#undef NEXT_OK
+    no_dur_suffix: ;
+    }
     return true;
 }
 
