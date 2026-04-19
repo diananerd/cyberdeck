@@ -554,8 +554,8 @@ The rule: the app declares the minimum in `@requires.deck_level`, and platforms 
   deck_os:    ">= 1"       # which surface API level
   runtime:    ">= 1.0"
   capabilities:
-    http:       ">= 1"
-    storage.fs: ">= 1"
+    network.http: ">= 1"
+    fs:           ">= 1"
 ```
 
 `deck_level` is a *separate* key from `deck_os`. `deck_os` tells you *which capabilities* are defined. `deck_level` tells you *whether the runtime is big enough to host them*.

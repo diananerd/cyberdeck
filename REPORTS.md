@@ -668,3 +668,19 @@ Additionally, several annexes and spec examples called the bare names at call si
 **Why this matters**: the question the user implicitly asked at the `len`/`length` point generalises — every pair of similar operations in Deck's spec should use **one** spelling and **one** qualification convention. §11 is the front-door lookup for a developer learning Deck's standard library; having it present three incompatible styles in adjacent subsections teaches the wrong pattern out of the gate. Now every collection op says `<module>.<method>(receiver, …)` the same way, and every annex that calls these ops does so through the same dispatch shape the runtime implements.
 
 **No code change** — runtime was already correct; this concept fixes the specs + annexes so they stop teaching the wrong vocabulary.
+
+### Concept #17 — §16 capability names match §3 canonical
+
+Session #3 continued — 2026-04-18.
+
+**Drift**: `16-deck-levels.md §9.1` example `@requires.capabilities` block had `http: ">= 1"` (bare, wrong) and `storage.fs: ">= 1"` (qualified, wrong). §3 defines these as `network.http` (qualified) and `fs` (bare). The §16 example was teaching *both* wrong directions of the same bare-vs-qualified question.
+
+**Fix**: single edit to §16 — `http: ">= 1"` → `network.http: ">= 1"` and `storage.fs: ">= 1"` → `fs: ">= 1"`. Now the example matches the canonical §3 vocabulary.
+
+**Flagged for a future concept, not this one**: §3 itself has a mixed pattern — some caps are qualified (`network.http`, `sensors.temperature`, `display.notify`, `system.info`, `crypto.aes`), others bare (`nvs`, `fs`, `db`, `cache`, `mqtt`, `ble`, `ota`, `notifications`, `api_client`, `markdown`, `i2c`, `spi`, `gpio`, `bt_classic`, `background_fetch`). Three rationalisations are possible:
+
+1. Qualify everything under a domain (`storage.nvs`, `storage.fs`, `storage.db`, `storage.cache`, `hardware.i2c`, `hardware.spi`, `hardware.gpio`, `hardware.bt_classic`, `network.mqtt`, `network.ble`, `system.ota`, `system.notifications`, `system.api`, `system.background_fetch`, `ui.markdown`). Big bulk change. Breaks `nvs.get(...)` syntax everywhere.
+2. Leave standalone caps bare; qualify only when there are siblings. This is the *current* pattern but explicit; inconsistent with `display.notify` (standalone at the `display.*` prefix) and `storage.local` (standalone at `storage.*`).
+3. Keep the status quo as authoritative. Small blast radius.
+
+No decision taken in this concept. Flagged for a future spec-level audit on capability-namespace minimalism. Root planning docs (`ARCHITECTURE.md`, `CHANGELOG.md`, `GROUND-STATE.md`) use a pre-spec `storage.*` naming convention that's also out of sync — also a separate audit.
