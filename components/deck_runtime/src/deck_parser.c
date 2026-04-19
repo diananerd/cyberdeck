@@ -1861,6 +1861,25 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
         else if (dec_is(&p->cur, "permissions"))    return parse_metadata_block(p);  /* F23.6 */
         else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */
+        /* Spec-declared top-level annotations the runtime parses-and-
+         * discards until real semantics land. Accepting them here keeps
+         * annex-style apps loadable today; each will get a dedicated
+         * concept when the runtime honours it:
+         *   @handles — deep-link patterns (§20)
+         *   @config  — typed persistent config (§6)
+         *   @stream  — reactive data sources (§10)
+         *   @task    — background tasks (§14)
+         *   @doc     — module / fn documentation (§17)
+         *   @example — executable doctest assertion (§17)
+         *   @test    — named test block (§17)
+         */
+        else if (dec_is(&p->cur, "handles"))        return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "config"))         return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "stream"))         return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "task"))           return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "doc"))            return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "example"))        return parse_opaque_block(p);
+        else if (dec_is(&p->cur, "test"))           return parse_opaque_block(p);
         else if (dec_is(&p->cur, "private")) {
             /* DL2 F22.9 — @private prefixes a fn declaration. */
             advance(p);

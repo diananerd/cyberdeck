@@ -733,3 +733,28 @@ Session #3 continued.
 **Verification**: `grep -rE "\bunwrap_opt\b"` across the repo returns only the §11.5 historical-reference note. Every call site migrated.
 
 **Why this matters**: this is exactly the lesson from concept #15a, applied generalised. When two functions differ only in the type of their wrapper argument — and the runtime already handles both — the spec should offer ONE callable. The user's durable rule: "when specs at equal authority disagree, pick whichever side aligns with the language's overall direction." Here §11.5 and §11.6 were the two sides, both internally correct, but presenting the same semantics under two names. Flattening them kills the choice paralysis for app authors and matches the polymorphic dispatch the runtime already ships.
+
+### Concept #21 — parse-and-discard stubs for unimplemented top-level annotations
+
+Session #3 continued.
+
+**Drift**: seven spec-declared top-level annotations were missing from the parser's dispatcher and would cause a hard parse error for any annex that used them:
+- `@handles` (§20) — deep-link URL patterns
+- `@config` (§6) — typed persistent config
+- `@stream` (§10) — reactive data sources
+- `@task` (§14) — background tasks
+- `@doc` (§17) — module / fn documentation
+- `@example` (§17) — executable doctest assertion
+- `@test` (§17) — named test block
+
+Their bodies are well-formed indented blocks — the parser already has a `parse_opaque_block` helper that consumes any indented suite and returns a stub node. Wiring each of the seven names to it is a 7-line change that unblocks annex loading without committing to their runtime semantics.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_parser.c:parse_top_item` — added seven dispatcher entries that route the new decorator names to `parse_opaque_block`. The block comment above the new lines states explicitly that each will get a dedicated concept when the runtime honours it.
+
+**What this does NOT do**:
+- No runtime behaviour is added. `@config` fields are still not readable, `@stream` emits nothing, `@task` never fires, `@handles` never matches a URL, etc.
+- The interp-level `@doc`/`@example`/`@test` within a `fn` body (spec §17 shows them between signature and `=`) is NOT handled here — only the top-level form. If an annex places them inside a fn, `parse_fn_decl` still rejects.
+
+**Why this matters**: annex-xx-bluesky uses `@config`, `@stream`, `@task`, `@doc` at top level. Until this concept, the ENTIRE annex fails at the first of these decorators — long before any substantive runtime code runs. With parse-and-discard stubs, the annex loads enough that subsequent concepts can add real semantics one at a time, under a harness that already reports load progress rather than a bare "unknown decorator" error at line 1. The user's combinatorial-audit rule in reverse: remove the cheap blockers first so the deeper bugs become reachable.
