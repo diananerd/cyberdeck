@@ -197,12 +197,18 @@ static deck_value_t *b_text_upper(deck_value_t **args, uint32_t n, deck_interp_c
         set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.upper expects str");
         return NULL;
     }
-    char buf[256]; uint32_t L = args[0]->as.s.len < 255 ? args[0]->as.s.len : 255;
+    uint32_t L = args[0]->as.s.len;
+    if (L > (1U << 16)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.upper: input > 64KB"); return NULL; }
+    if (L == 0) return deck_new_str("", 0);
+    char *buf = (char *)malloc(L + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.upper alloc"); return NULL; }
     for (uint32_t i = 0; i < L; i++) {
         char ch = args[0]->as.s.ptr[i];
         buf[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
     }
-    return deck_new_str(buf, L);
+    deck_value_t *out = deck_new_str(buf, L);
+    free(buf);
+    return out;
 }
 
 /* ---- math.* ---- */
@@ -263,12 +269,18 @@ static deck_value_t *b_text_lower(deck_value_t **args, uint32_t n, deck_interp_c
 {
     (void)n;
     if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.lower expects str"); return NULL; }
-    char buf[256]; uint32_t L = args[0]->as.s.len < 255 ? args[0]->as.s.len : 255;
+    uint32_t L = args[0]->as.s.len;
+    if (L > (1U << 16)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.lower: input > 64KB"); return NULL; }
+    if (L == 0) return deck_new_str("", 0);
+    char *buf = (char *)malloc(L + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.lower alloc"); return NULL; }
     for (uint32_t i = 0; i < L; i++) {
         char ch = args[0]->as.s.ptr[i];
         buf[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch;
     }
-    return deck_new_str(buf, L);
+    deck_value_t *out = deck_new_str(buf, L);
+    free(buf);
+    return out;
 }
 static deck_value_t *b_text_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -698,17 +710,21 @@ static deck_value_t *b_text_repeat(deck_value_t **args, uint32_t n, deck_interp_
     if (k <= 0) return deck_new_str("", 0);
     uint32_t single = args[0]->as.s.len;
     uint64_t total = (uint64_t)single * (uint64_t)k;
-    if (total > 1024) {
-        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.repeat: result > 1024 bytes");
+    if (total > (1U << 16)) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.repeat: result > 64KB");
         return NULL;
     }
-    char buf[1024];
+    if (total == 0) return deck_new_str("", 0);
+    char *buf = (char *)malloc((size_t)total + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.repeat alloc"); return NULL; }
     uint32_t off = 0;
     for (int64_t i = 0; i < k; i++) {
         memcpy(buf + off, args[0]->as.s.ptr, single);
         off += single;
     }
-    return deck_new_str(buf, off);
+    deck_value_t *out = deck_new_str(buf, off);
+    free(buf);
+    return out;
 }
 
 /* ---- text.* (continued — spec §3 completeness, concept #26) ---- */
