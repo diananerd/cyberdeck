@@ -1259,6 +1259,340 @@ static deck_value_t *b_text_hex_encode(deck_value_t **args, uint32_t n, deck_int
 
 /* Forward declaration — b_to_str lives further down (bare-builtin area). */
 static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+/* Forward declaration — cmp_str is defined below alongside query_build. */
+static int cmp_str(const void *a, const void *b);
+
+/* ---- text.json / text.from_json (concept #31, spec §3) ----
+ * Minimal JSON — RFC 8259 subset: no exponent on ints (floats OK),
+ * standard escapes (\n \t \r \" \\ \/ \b \f \uXXXX), strict grammar.
+ * Value ↔ JSON mapping:
+ *   null    ↔ unit
+ *   true    ↔ bool true
+ *   false   ↔ bool false
+ *   integer ↔ int
+ *   number  ↔ float (has '.' or 'e'/'E')
+ *   string  ↔ str
+ *   array   ↔ list
+ *   object  ↔ map (keys lex-sorted on emit for determinism)
+ *   atom/bytes/fn/tuple ↔ unsupported; serializer errors, parser never emits. */
+
+typedef struct {
+    char *buf;
+    uint32_t len;
+    uint32_t cap;
+    bool oom;
+} js_out_t;
+
+static void js_reserve(js_out_t *o, uint32_t extra)
+{
+    if (o->oom) return;
+    uint64_t need = (uint64_t)o->len + extra + 1;
+    if (need > o->cap) {
+        uint64_t newcap = o->cap ? o->cap : 64;
+        while (newcap < need) newcap *= 2;
+        if (newcap > (1U << 17)) { o->oom = true; return; }   /* 128 KB cap */
+        char *nb = (char *)realloc(o->buf, (size_t)newcap);
+        if (!nb) { o->oom = true; return; }
+        o->buf = nb;
+        o->cap = (uint32_t)newcap;
+    }
+}
+
+static void js_putc(js_out_t *o, char ch)
+{
+    js_reserve(o, 1);
+    if (o->oom) return;
+    o->buf[o->len++] = ch;
+}
+
+static void js_puts(js_out_t *o, const char *s, uint32_t n)
+{
+    js_reserve(o, n);
+    if (o->oom) return;
+    memcpy(o->buf + o->len, s, n);
+    o->len += n;
+}
+
+static void js_emit_str(js_out_t *o, const char *s, uint32_t n)
+{
+    js_putc(o, '"');
+    for (uint32_t i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        switch (ch) {
+            case '"':  js_puts(o, "\\\"", 2); break;
+            case '\\': js_puts(o, "\\\\", 2); break;
+            case '\n': js_puts(o, "\\n",  2); break;
+            case '\r': js_puts(o, "\\r",  2); break;
+            case '\t': js_puts(o, "\\t",  2); break;
+            case '\b': js_puts(o, "\\b",  2); break;
+            case '\f': js_puts(o, "\\f",  2); break;
+            default:
+                if (ch < 0x20) {
+                    static const char HEX[] = "0123456789abcdef";
+                    char esc[6] = { '\\', 'u', '0', '0', HEX[(ch >> 4) & 0xF], HEX[ch & 0xF] };
+                    js_puts(o, esc, 6);
+                } else {
+                    js_putc(o, (char)ch);
+                }
+                break;
+        }
+    }
+    js_putc(o, '"');
+}
+
+static bool json_emit_value(js_out_t *o, deck_value_t *v);
+
+static int cmp_strkey(const void *a, const void *b)
+{
+    return cmp_str(a, b);
+}
+
+static bool json_emit_value(js_out_t *o, deck_value_t *v)
+{
+    if (!v) { js_puts(o, "null", 4); return true; }
+    char scratch[40];
+    switch (v->type) {
+        case DECK_T_UNIT:   js_puts(o, "null", 4);  return true;
+        case DECK_T_BOOL:   js_puts(o, v->as.b ? "true" : "false", v->as.b ? 4 : 5); return true;
+        case DECK_T_INT: {
+            int k = snprintf(scratch, sizeof(scratch), "%lld", (long long)v->as.i);
+            js_puts(o, scratch, (uint32_t)k); return true;
+        }
+        case DECK_T_FLOAT: {
+            double x = v->as.f;
+            if (isnan(x) || isinf(x)) { js_puts(o, "null", 4); return true; }
+            int k = snprintf(scratch, sizeof(scratch), "%g", x);
+            js_puts(o, scratch, (uint32_t)k); return true;
+        }
+        case DECK_T_STR: js_emit_str(o, v->as.s.ptr, v->as.s.len); return true;
+        case DECK_T_LIST: {
+            js_putc(o, '[');
+            for (uint32_t i = 0; i < v->as.list.len; i++) {
+                if (i) js_putc(o, ',');
+                if (!json_emit_value(o, v->as.list.items[i])) return false;
+            }
+            js_putc(o, ']'); return true;
+        }
+        case DECK_T_MAP: {
+            js_putc(o, '{');
+            uint32_t used = 0;
+            for (uint32_t i = 0; i < v->as.map.len; i++) if (v->as.map.entries[i].used) used++;
+            if (used == 0) { js_putc(o, '}'); return true; }
+            deck_value_t **keys = (deck_value_t **)malloc(sizeof(deck_value_t *) * used);
+            if (!keys) { o->oom = true; return false; }
+            uint32_t ki = 0;
+            for (uint32_t i = 0; i < v->as.map.len; i++) {
+                if (!v->as.map.entries[i].used) continue;
+                deck_value_t *k = v->as.map.entries[i].key;
+                if (!k || k->type != DECK_T_STR) { free(keys); return false; }
+                keys[ki++] = k;
+            }
+            qsort(keys, used, sizeof(deck_value_t *), cmp_strkey);
+            for (uint32_t i = 0; i < used; i++) {
+                if (i) js_putc(o, ',');
+                js_emit_str(o, keys[i]->as.s.ptr, keys[i]->as.s.len);
+                js_putc(o, ':');
+                deck_value_t *val = deck_map_get(v, keys[i]);
+                if (!json_emit_value(o, val)) { free(keys); return false; }
+            }
+            free(keys);
+            js_putc(o, '}');
+            return true;
+        }
+        default: return false;   /* atom / bytes / fn / tuple — unsupported */
+    }
+}
+
+static deck_value_t *b_text_json(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    js_out_t o = { NULL, 0, 0, false };
+    bool ok = json_emit_value(&o, args[0]);
+    if (!ok || o.oom) {
+        free(o.buf);
+        if (o.oom) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.json: output too large or unsupported type"); return NULL; }
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.json: value type not representable in JSON");
+        return NULL;
+    }
+    deck_value_t *result = deck_new_str(o.buf ? o.buf : "", o.len);
+    free(o.buf);
+    return result;
+}
+
+/* ---- text.from_json (parser) ---- */
+typedef struct { const char *s; uint32_t i, L; bool err; } js_in_t;
+
+static deck_value_t *json_parse_value(js_in_t *p);
+
+static void js_skip_ws(js_in_t *p)
+{
+    while (p->i < p->L) {
+        char c = p->s[p->i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') p->i++;
+        else break;
+    }
+}
+
+static deck_value_t *json_parse_string(js_in_t *p)
+{
+    if (p->i >= p->L || p->s[p->i] != '"') { p->err = true; return NULL; }
+    p->i++;
+    char *buf = (char *)malloc(p->L - p->i + 1);
+    if (!buf) { p->err = true; return NULL; }
+    uint32_t o = 0;
+    while (p->i < p->L) {
+        char ch = p->s[p->i++];
+        if (ch == '"') {
+            deck_value_t *r = deck_new_str(buf, o);
+            free(buf);
+            return r;
+        }
+        if (ch == '\\') {
+            if (p->i >= p->L) { free(buf); p->err = true; return NULL; }
+            char esc = p->s[p->i++];
+            switch (esc) {
+                case '"':  buf[o++] = '"'; break;
+                case '\\': buf[o++] = '\\'; break;
+                case '/':  buf[o++] = '/'; break;
+                case 'n':  buf[o++] = '\n'; break;
+                case 'r':  buf[o++] = '\r'; break;
+                case 't':  buf[o++] = '\t'; break;
+                case 'b':  buf[o++] = '\b'; break;
+                case 'f':  buf[o++] = '\f'; break;
+                case 'u': {
+                    if (p->i + 4 > p->L) { free(buf); p->err = true; return NULL; }
+                    int cp = 0;
+                    for (int k = 0; k < 4; k++) {
+                        int nib = hex_nibble(p->s[p->i + k]);
+                        if (nib < 0) { free(buf); p->err = true; return NULL; }
+                        cp = (cp << 4) | nib;
+                    }
+                    p->i += 4;
+                    /* Simple UTF-8 encoding up to BMP (0..0xFFFF). */
+                    if (cp < 0x80) buf[o++] = (char)cp;
+                    else if (cp < 0x800) {
+                        buf[o++] = (char)(0xC0 | ((cp >> 6) & 0x1F));
+                        buf[o++] = (char)(0x80 | (cp & 0x3F));
+                    } else {
+                        buf[o++] = (char)(0xE0 | ((cp >> 12) & 0x0F));
+                        buf[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        buf[o++] = (char)(0x80 | (cp & 0x3F));
+                    }
+                    break;
+                }
+                default: free(buf); p->err = true; return NULL;
+            }
+        } else if ((unsigned char)ch < 0x20) {
+            /* raw control char — invalid per RFC 8259 */
+            free(buf); p->err = true; return NULL;
+        } else {
+            buf[o++] = ch;
+        }
+    }
+    free(buf); p->err = true; return NULL;   /* unterminated */
+}
+
+static deck_value_t *json_parse_number(js_in_t *p)
+{
+    uint32_t start = p->i;
+    bool is_float = false;
+    if (p->i < p->L && p->s[p->i] == '-') p->i++;
+    while (p->i < p->L && p->s[p->i] >= '0' && p->s[p->i] <= '9') p->i++;
+    if (p->i < p->L && p->s[p->i] == '.') {
+        is_float = true; p->i++;
+        while (p->i < p->L && p->s[p->i] >= '0' && p->s[p->i] <= '9') p->i++;
+    }
+    if (p->i < p->L && (p->s[p->i] == 'e' || p->s[p->i] == 'E')) {
+        is_float = true; p->i++;
+        if (p->i < p->L && (p->s[p->i] == '+' || p->s[p->i] == '-')) p->i++;
+        while (p->i < p->L && p->s[p->i] >= '0' && p->s[p->i] <= '9') p->i++;
+    }
+    uint32_t end = p->i;
+    if (end <= start || (end - start) > 32) { p->err = true; return NULL; }
+    char scratch[40]; memcpy(scratch, p->s + start, end - start); scratch[end - start] = 0;
+    if (is_float) return deck_new_float(strtod(scratch, NULL));
+    return deck_new_int(strtoll(scratch, NULL, 10));
+}
+
+static deck_value_t *json_parse_array(js_in_t *p)
+{
+    if (p->s[p->i] != '[') { p->err = true; return NULL; }
+    p->i++;
+    js_skip_ws(p);
+    deck_value_t *out = deck_new_list(4);
+    if (!out) { p->err = true; return NULL; }
+    if (p->i < p->L && p->s[p->i] == ']') { p->i++; return out; }
+    while (p->i < p->L) {
+        deck_value_t *v = json_parse_value(p);
+        if (p->err) { deck_release(out); return NULL; }
+        deck_list_push(out, v); deck_release(v);
+        js_skip_ws(p);
+        if (p->i < p->L && p->s[p->i] == ',') { p->i++; js_skip_ws(p); continue; }
+        if (p->i < p->L && p->s[p->i] == ']') { p->i++; return out; }
+        deck_release(out); p->err = true; return NULL;
+    }
+    deck_release(out); p->err = true; return NULL;
+}
+
+static deck_value_t *json_parse_object(js_in_t *p)
+{
+    if (p->s[p->i] != '{') { p->err = true; return NULL; }
+    p->i++;
+    js_skip_ws(p);
+    deck_value_t *out = deck_new_map(8);
+    if (!out) { p->err = true; return NULL; }
+    if (p->i < p->L && p->s[p->i] == '}') { p->i++; return out; }
+    while (p->i < p->L) {
+        js_skip_ws(p);
+        deck_value_t *k = json_parse_string(p);
+        if (p->err) { deck_release(out); return NULL; }
+        js_skip_ws(p);
+        if (p->i >= p->L || p->s[p->i] != ':') { deck_release(k); deck_release(out); p->err = true; return NULL; }
+        p->i++;
+        js_skip_ws(p);
+        deck_value_t *v = json_parse_value(p);
+        if (p->err) { deck_release(k); deck_release(out); return NULL; }
+        deck_map_put(out, k, v);
+        deck_release(k); deck_release(v);
+        js_skip_ws(p);
+        if (p->i < p->L && p->s[p->i] == ',') { p->i++; continue; }
+        if (p->i < p->L && p->s[p->i] == '}') { p->i++; return out; }
+        deck_release(out); p->err = true; return NULL;
+    }
+    deck_release(out); p->err = true; return NULL;
+}
+
+static deck_value_t *json_parse_value(js_in_t *p)
+{
+    js_skip_ws(p);
+    if (p->i >= p->L) { p->err = true; return NULL; }
+    char c = p->s[p->i];
+    if (c == '"') return json_parse_string(p);
+    if (c == '{') return json_parse_object(p);
+    if (c == '[') return json_parse_array(p);
+    if (c == 't' && p->i + 4 <= p->L && memcmp(p->s + p->i, "true", 4) == 0) { p->i += 4; return deck_retain(deck_true()); }
+    if (c == 'f' && p->i + 5 <= p->L && memcmp(p->s + p->i, "false", 5) == 0) { p->i += 5; return deck_retain(deck_false()); }
+    if (c == 'n' && p->i + 4 <= p->L && memcmp(p->s + p->i, "null", 4) == 0) { p->i += 4; return deck_retain(deck_unit()); }
+    if (c == '-' || (c >= '0' && c <= '9')) return json_parse_number(p);
+    p->err = true;
+    return NULL;
+}
+
+static deck_value_t *b_text_from_json(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.from_json expects str"); return NULL;
+    }
+    js_in_t p = { args[0]->as.s.ptr, 0, args[0]->as.s.len, false };
+    deck_value_t *v = json_parse_value(&p);
+    if (p.err || !v) { if (v) deck_release(v); return deck_new_none(); }
+    js_skip_ws(&p);
+    if (p.i != p.L) { deck_release(v); return deck_new_none(); }   /* trailing junk */
+    deck_value_t *some = deck_new_some(v);
+    deck_release(v);
+    return some;
+}
 
 /* text.format(tmpl, {name: value}) -> str — replaces {name} placeholders
  * with map-lookup values stringified via b_to_str. Missing keys keep the
@@ -2025,6 +2359,9 @@ static const builtin_t BUILTINS[] = {
     { "text.query_build",       b_text_query_build,   1, 1 },
     { "text.query_parse",       b_text_query_parse,   1, 1 },
     { "text.format",            b_text_format,        2, 2 },
+    /* Concept #31 — JSON. */
+    { "text.json",              b_text_json,          1, 1 },
+    { "text.from_json",         b_text_from_json,     1, 1 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },

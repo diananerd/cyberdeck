@@ -1072,3 +1072,30 @@ A→B shape: all three functions "work" on the fixtures that happen to use short
 **Why `{{` escape but no `}}` escape**: only `{` is ambiguous (starts a placeholder). `}` is always safe literal unless matched inside a `{…}` pair. Keeping the escape minimal matches the spec and reduces surprises.
 
 **Running tally**: `text.*` now at 34/36. Remaining: `json`, `from_json` — a proper recursive-descent JSON parser + stringifier is the next text concept. Biggest remaining spec §3 gap.
+
+### Concept #31 — text.json / text.from_json (spec §3 — RFC 8259 subset)
+
+**Drift**: last two `text.*` builtins missing. `os_text.deck` asserts both a round-trip and a parse-fail case:
+```
+text.from_json("{\"a\":1}") == :some {"a": 1}
+text.json({"a": 1}) == "{\"a\":1}"
+text.from_json("not-json") == :none
+```
+
+**Scope**: RFC 8259 subset — all six value kinds (null / bool / number / string / array / object), standard string escapes including `\uXXXX` (BMP only, UTF-8-encoded on emit), integer vs float discrimination on `.` / `e` / `E`, lex-sorted object keys on emit for determinism, 128 KB output cap.
+
+**Value mapping**:
+- `unit` ↔ `null`, `bool` ↔ `true` / `false`, `int` ↔ integer, `float` ↔ number with fractional/exponent (NaN / Inf → `null`), `str` ↔ string, `list` ↔ array, `map` (str keys only) ↔ object.
+- atom / bytes / fn / tuple — unsupported; serializer raises `DECK_RT_TYPE_MISMATCH`.
+
+**Fix applied**:
+
+- `b_text_json` — recursive emit into a growable `js_out_t` (power-of-two realloc, 128 KB cap). Map keys gathered + qsort'd. Control chars < 0x20 emitted as `\u00XX`.
+- `b_text_from_json` — recursive descent; strict RFC 8259 except for trailing whitespace. Keyword match for `true`/`false`/`null` is length-checked. Control chars raw in strings cause a parse error. Any syntactic failure or trailing garbage ⇒ `:none` (not a hard error), so apps can probe freely.
+- Forward-declared `cmp_str` (defined later with `query_build`) so JSON's key-sort helper reuses the same comparator.
+
+**Why not a dependency**: cJSON or mbedtls JSON would pull ~3000 LOC for a ~400-LOC hand-rolled subset. The inline impl is small enough to verify by inspection, matches the RFC for its advertised scope, and leaves no external-lib footguns.
+
+**Running tally**: `text.*` now at **36/36**. §3 `@builtin text` is fully implemented — the first complete capability surface since the spec was written.
+
+**Next natural concepts**: `time.*` (4/18), `fs.*` (3/10 — needs SDI work for write/append/delete/mkdir/move), `nvs.*` (3/11 — needs SDI iterator + value-type support; also spec signature shift from 3-arg to 2-arg).
