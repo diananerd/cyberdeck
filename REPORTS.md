@@ -489,3 +489,27 @@ Session #3 continued — 2026-04-18.
 - Spec `01-deck-lang §3.7` defines **atom-variant value construction** — `:some 42`, `:err "div0"`, `:active (temp: 82.3, max: 90.0)` — as first-class expressions. The parser currently treats a bare atom in expression position as a scalar atom literal; any following token is a parse error. So the spec form `if b == 0 then :err "div0" else :ok (a / b)` in `lang_variant_pat.deck` does not parse. Concept #11 follow-up: extend `parse_primary` so `TOK_ATOM` followed by a value-expression-start promotes to a variant-value node, and have the interp construct it as the same `(atom, payload)` tuple shape the `ok()/err()` builtins already produce. Once that lands, the pattern-match side from this concept will have canonical constructions to match against.
 
 **Why this matters (A → B pattern)**: this is the exact lesson the user flagged — you can write a beautifully canonical fixture `lang_match.deck` that the conformance harness reports as PASS simply because it never actually runs (it fails at the lexer). The deepening work in session #2 made the fixtures spec-canonical; until concept #10, that work was *invisible* to the runtime. Now the lexer and parser catch up, and the A → B gap (canonical deepening implies runtime coverage — which it did not) closes.
+
+### Concept #11 — atom-variant value construction (`:ctor payload`)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery (layer 1 ↔ layer 4)**: `01-deck-lang §3.7` declares `:some 42`, `:err :timeout`, `:active (temp: 82.3, max: 90.0)` as first-class value expressions (atom followed by a single primary = variant constructor). `parse_primary`'s `TOK_ATOM` case only produced a bare `AST_LIT_ATOM` and stopped there — any following primary was a parse error. `lang_variant_pat.deck` (deepened in session #2 to use canonical `if b == 0 then :err "div0" else :ok (a / b)`) fails to parse: `:err` becomes a bare atom and `"div0"` is then unexpected. The concept #10 pattern-side `:ctor binder` had nothing to destructure — `safe_div` never produced a variant value.
+
+**Fix applied**:
+
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_primary` — `TOK_ATOM` now looks ahead. When the next token clearly starts a primary (`INT`, `FLOAT`, `STRING`, `TRUE`, `FALSE`, `UNIT`, `NONE`, `SOME`, `ATOM`, `IDENT`, `(`, `[`, `{`), the atom is a variant constructor: parse the payload and build an `AST_LIT_TUPLE` of `(:ctor, payload)`. Otherwise the atom stays a bare literal. Desugars uniformly into the same 2-tuple shape the `ok()/err()` builtins already produce, so concept #10's pattern matcher destructures both paths identically.
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_pattern` — the `TOK_ATOM` case no longer routes through `parse_primary` (which would now eagerly consume a following IDENT as a payload, colliding with the pattern-side meaning of `:ctor binder`). Instead, construct the atom literal directly from the current token, advance, and then apply the concept #10 binder lookahead. Same behavior from the caller's perspective; no shared state between expression-position and pattern-position interpretations.
+- 2026-04-18 · layer 4 edit · `src/deck_interp.c:match_pattern AST_PAT_VARIANT` — generalized. Previously only `some / ok / err` ctors matched. Now any ctor matches against a 2-tuple `(:ctor, payload)`; `some` still matches `DECK_T_OPTIONAL` as a special case (preserving `some(42)` builtin-constructed values). Unknown-ctor rejection replaced by "fall through if the value isn't a matching tuple". This unlocks user-defined variants without touching the interp's value representation.
+
+**Verification**:
+- `let r = if b == 0 then :err "div0" else :ok (a / b)` parses into two variant-constructor tuples, both 2-tuples `(atom, value)`, both destructurable via `| :ok v -> …` / `| :err e -> …`.
+- `:some 42` in expression position produces a tuple `(:some, 42)`; `| :some x -> x` match arm via concept #10 binds `x = 42`. The `some(42)` builtin path (Optional) also matches `| :some x ->`. Both value shapes work through the same pattern form.
+- Bare `:atom` — used everywhere (`match :ready`, `:none` in patterns, list elements `[:a, :b]`) — is untouched: the lookahead only promotes when a primary follows.
+
+**Interaction with concept #10**: the earlier concept added the pattern-side `:ctor binder`; this concept adds the expression-side `:ctor payload`. Together they form the spec §3.7 ↔ §8 pair — construct variants with one form, destructure them with the mirror form, same atom text joining the two sides.
+
+**Scope checks**:
+- `:err - 1` (ambiguous with unary minus) resolves to bare atom `:err` then binary minus — spec §3.7 examples never use unary-minus payloads, so this reading is fine; callers who want `:err -1` write `:err (-1)`.
+- `match safe_div(10, 0) | :err e -> …` — scrutinee is a CALL, not an atom; my lookahead only fires on bare atoms.
+- `(:a, :b)` tuple literal — atoms followed by `,` aren't promoted; bare atoms in list/tuple literals unchanged.

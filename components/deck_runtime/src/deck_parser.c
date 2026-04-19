@@ -237,9 +237,47 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             n = acc;
             break;
         }
-        case TOK_ATOM:
-            n = mknode(p, AST_LIT_ATOM); if (!n) return NULL;
-            n->as.s = p->cur.text; advance(p); break;
+        case TOK_ATOM: {
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            const char *ctor = p->cur.text;
+            advance(p);
+            /* Spec 01-deck-lang §3.7 — atom variant value: `:ctor payload`.
+             * If the next token clearly starts a primary expression, this
+             * is a variant-constructor expression; otherwise it's a bare
+             * atom literal. Desugars to a 2-tuple (:ctor, payload) so the
+             * match-side `AST_PAT_VARIANT` (spec-canonical `:ctor x`) can
+             * destructure it uniformly. The existing `some()/ok()/err()`
+             * builtins keep their native shapes (Optional / tuple); the
+             * tuple shape produced here is compatible with `:ok x` /
+             * `:err x` match arms (both are tuple (:ctor, payload)). */
+            bool starts_primary = false;
+            switch (p->cur.type) {
+                case TOK_INT: case TOK_FLOAT: case TOK_STRING:
+                case TOK_KW_TRUE: case TOK_KW_FALSE: case TOK_KW_UNIT:
+                case TOK_KW_NONE: case TOK_KW_SOME:
+                case TOK_ATOM: case TOK_IDENT:
+                case TOK_LPAREN: case TOK_LBRACKET: case TOK_LBRACE:
+                    starts_primary = true; break;
+                default: break;
+            }
+            if (!starts_primary) {
+                n = ast_new(p->arena, AST_LIT_ATOM, ln, co); if (!n) return NULL;
+                n->as.s = ctor;
+                break;
+            }
+            ast_node_t *payload = parse_primary(p);
+            if (!payload) return NULL;
+            ast_node_t *atom_node = ast_new(p->arena, AST_LIT_ATOM, ln, co);
+            if (!atom_node) return NULL;
+            atom_node->as.s = ctor;
+            ast_node_t *tup = ast_new(p->arena, AST_LIT_TUPLE, ln, co);
+            if (!tup) return NULL;
+            ast_list_init(&tup->as.tuple_lit.items);
+            ast_list_push(p->arena, &tup->as.tuple_lit.items, atom_node);
+            ast_list_push(p->arena, &tup->as.tuple_lit.items, payload);
+            n = tup;
+            break;
+        }
         case TOK_KW_SOME: {
             /* DL2 F21.9 — `some` is a callable Optional constructor.
              * Treat as a bare ident so call dispatch finds the builtin. */
@@ -663,14 +701,17 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
         }
         case TOK_ATOM: {
             /* Spec 01-deck-lang §8 — atom variant pattern `:name binder`.
-             * When an atom is followed by an ident (the payload binder),
-             * treat as AST_PAT_VARIANT with the atom name as constructor
-             * and the binder as a single sub-pattern. Bare `:atom` stays
-             * a literal pattern. */
+             * Construct the atom literal directly (do NOT route through
+             * parse_primary, which now also treats `:atom value` as a
+             * variant-value constructor — that's expression position, not
+             * pattern position). When an atom is followed by an ident the
+             * arm is `:ctor binder`; bare `:atom` stays a literal pattern. */
             uint32_t ln = p->cur.line, co = p->cur.col;
             const char *atom_name = p->cur.text;
-            ast_node_t *atom_lit = parse_primary(p);
+            advance(p);
+            ast_node_t *atom_lit = ast_new(p->arena, AST_LIT_ATOM, ln, co);
             if (!atom_lit) return NULL;
+            atom_lit->as.s = atom_name;
             if (at(p, TOK_IDENT)) {
                 ast_node_t *sub = parse_pattern(p);
                 if (!sub) return NULL;

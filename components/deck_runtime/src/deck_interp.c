@@ -1055,29 +1055,29 @@ static bool match_pattern(deck_arena_t *a, deck_env_t *env,
             }
         }
         case AST_PAT_VARIANT: {
-            /* DL2 F22 — built-in variants:
-             *   some(p)  matches DECK_T_OPTIONAL with inner != NULL;
-             *            sub matches the inner value.
-             *   ok(p)    matches tuple (:ok,  v); sub matches v.
-             *   err(p)   matches tuple (:err, e); sub matches e.
+            /* DL2 F22 — built-in variants plus spec 01-deck-lang §3.7 atom
+             * variants. Accepted value shapes:
+             *   some(p) / :some x:  DECK_T_OPTIONAL with inner != NULL, or
+             *                       2-tuple (:some, payload) from a `:some x`
+             *                       constructor expression.
+             *   :ctor x   (generic):  2-tuple (:ctor, payload). `ok`, `err`,
+             *                       and every user-declared variant go here.
              */
             if (!val) return false;
             const char *ctor = pat->as.pat_variant.ctor;
             if (!ctor) return false;
-            if (strcmp(ctor, "some") == 0) {
-                if (val->type != DECK_T_OPTIONAL || val->as.opt.inner == NULL) return false;
-                if (pat->as.pat_variant.n_subs != 1) return false;
+            if (pat->as.pat_variant.n_subs != 1) return false;
+            if (strcmp(ctor, "some") == 0 &&
+                val->type == DECK_T_OPTIONAL && val->as.opt.inner != NULL) {
                 return match_pattern(a, env, pat->as.pat_variant.subs[0], val->as.opt.inner);
             }
-            if (strcmp(ctor, "ok") == 0 || strcmp(ctor, "err") == 0) {
-                if (val->type != DECK_T_TUPLE || val->as.tuple.arity != 2) return false;
+            if (val->type == DECK_T_TUPLE && val->as.tuple.arity == 2) {
                 deck_value_t *tag = val->as.tuple.items[0];
                 if (!tag || tag->type != DECK_T_ATOM) return false;
                 if (strcmp(tag->as.atom, ctor) != 0) return false;
-                if (pat->as.pat_variant.n_subs != 1) return false;
                 return match_pattern(a, env, pat->as.pat_variant.subs[0], val->as.tuple.items[1]);
             }
-            return false;   /* unknown ctor */
+            return false;
         }
         default: return false;
     }
