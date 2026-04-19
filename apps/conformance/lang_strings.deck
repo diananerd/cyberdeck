@@ -10,10 +10,10 @@
 -- Coverage goal: language-level string handling per §01 §2.5, §2.6,
 -- §2.7, §7.4. Focus on LITERALS and OPERATORS, not `text.*` builtins
 -- (those live in os_text.deck). Old version used `<>` for concat and
--- `text.len` / `starts_with` — none of which are in the spec.
+-- `starts_with` / `ends_with` — none of which are in the spec.
 --
--- Spec: §7.4 concat uses `++`; §11.1 length is implicit via `text.length`
--- (see os_text.deck for builtin coverage).
+-- Spec: §7.4 concat uses `++`; §3 text.len / text.starts / text.ends
+-- (unified `len` convention, see os_text.deck for full coverage).
 @on launch:
   -- Basic literal equality.
   let ok_eq    = "hello" == "hello"
@@ -42,7 +42,7 @@
 
   -- Escape sequences (§2.5 — standard set).
   let ok_esc   = "\n" != ""
-              and text.length("\t") == 1
+              and text.len("\t") == 1
               and "quote:\"" == "quote:" ++ "\""
               and "backslash:\\" == "backslash:" ++ "\\"
 
@@ -59,7 +59,7 @@ three
 
   -- UTF-8 input is allowed in literals (§2.1 Encoding).
   let emoji    = "café ☕"
-  let ok_utf8  = text.length(emoji) > 0
+  let ok_utf8  = text.len(emoji) > 0
               and text.contains(emoji, "café")
 
   -- Comparison is lexicographic (per §7.2).

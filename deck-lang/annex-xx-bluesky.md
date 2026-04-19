@@ -310,7 +310,7 @@ bluesky/
 
   transition :submit
     from :open s
-    when: text.length(s.text) > 0 and text.length(s.text) <= 300
+    when: text.len(s.text) > 0 and text.len(s.text) <= 300
     to   :posting (text: s.text)
 
   transition :done   from :posting _  to :closed
@@ -1261,7 +1261,7 @@ fn do_unfollow (p: Profile) -> unit !api =
               | :none -> unit
             text :post_text  value: s.text  max_length: 300
               on -> Compose.send(:update, text: event.value)
-            "{text.length(s.text)}/300"
+            "{text.len(s.text)}/300"
             trigger "Post"   -> do_post(s.text, s.reply_to)
             trigger "Cancel" -> do
               Compose.send(:cancel)

@@ -18,10 +18,10 @@
   let ok_heap   = system.info.free_heap() > 0
 
   -- Identifiers: present, non-empty, stable shape.
-  let ok_devid  = text.length(system.info.device_id())    > 0
-  let ok_model  = text.length(system.info.device_model()) > 0
-  let ok_osname = text.length(system.info.os_name())      > 0
-  let ok_osver  = text.length(system.info.os_version())   > 0
+  let ok_devid  = text.len(system.info.device_id())    > 0
+  let ok_model  = text.len(system.info.device_model()) > 0
+  let ok_osname = text.len(system.info.os_name())      > 0
+  let ok_osver  = text.len(system.info.os_version())   > 0
 
   -- App identity: echoes the @app block above.
   let ok_aid    = system.info.app_id()      == "conf.os.info"
@@ -38,7 +38,7 @@
   let v         = system.info.versions()
   let ok_ver    = v.edition_current >= 2025
               && v.deck_os          >= 1
-              && text.length(v.runtime) > 0
+              && text.len(v.runtime) > 0
               && v.sdi_major        >= 1
               && v.app_id           == "conf.os.info"
 

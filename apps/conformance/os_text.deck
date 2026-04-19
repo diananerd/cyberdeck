@@ -17,7 +17,7 @@
   -- Case + length.
   let ok_up    = text.upper("Deck") == "DECK" && text.upper("") == ""
   let ok_low   = text.lower("Deck") == "deck"
-  let ok_len   = text.length("Deck") == 4 && text.length("") == 0
+  let ok_len   = text.len("Deck") == 4 && text.len("") == 0
 
   -- Prefix / suffix / contains / count / index.
   let ok_sw    = text.starts("railway", "rail") && not text.starts("railway", "way")

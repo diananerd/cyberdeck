@@ -175,7 +175,7 @@ Each child flow defines its own internal navigation. Examples for WiFi (`WifiFlo
   transition :first_pin_done
     from :set_pin s
     to   :confirm_pin (first: s.digits, digits: "")
-    when: text.length(s.digits) == 4
+    when: text.len(s.digits) == 4
 
   transition :confirm_digit (d: str)
     from :confirm_pin s
@@ -184,13 +184,13 @@ Each child flow defines its own internal navigation. Examples for WiFi (`WifiFlo
   transition :confirm_done
     from :confirm_pin s
     to   :saved
-    when: text.length(s.digits) == 4 and s.digits == s.first
+    when: text.len(s.digits) == 4 and s.digits == s.first
     before -> security.set_pin(s.digits)
 
   transition :mismatch
     from :confirm_pin s
     to   :set_pin (digits: "")
-    when: text.length(s.digits) == 4 and s.digits != s.first
+    when: text.len(s.digits) == 4 and s.digits != s.first
     before -> notify.send("PINS DO NOT MATCH", :error)
 
   transition :clear_pin

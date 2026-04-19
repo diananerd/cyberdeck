@@ -29,7 +29,7 @@
   let ok_none = s4 == "no interp here"
 
   -- Function call inside interpolation.
-  let s5 = "length={text.length(name)}"
+  let s5 = "length={text.len(name)}"
   let ok_fn = s5 == "length=5"
 
   -- Escape: `\{` produces a literal brace.

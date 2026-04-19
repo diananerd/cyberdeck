@@ -9,7 +9,7 @@
 
 @on launch:
   let e        = ""
-  let ok_len0  = text.length(e) == 0
+  let ok_len0  = text.len(e) == 0
   let ok_up    = text.upper(e) == ""
   let ok_low   = text.lower(e) == ""
   let ok_cat1  = (e ++ "x") == "x"

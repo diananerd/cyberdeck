@@ -44,7 +44,7 @@ fn all_entries_valid (es: [FsEntry]) -> bool =
   match es
     | [] -> true
     | e :: r ->
-        text.length(e.name) > 0
+        text.len(e.name) > 0
           && e.size >= 0
           && e.modified > 0
           && all_entries_valid(r)

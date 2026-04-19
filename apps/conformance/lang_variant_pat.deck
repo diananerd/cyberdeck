@@ -37,7 +37,7 @@ fn safe_div (a, b) =
 
   let r4 = match safe_div(10, 0)
              | :ok _   -> false
-             | :err e  -> text.length(e) > 0
+             | :err e  -> text.len(e) > 0
   let ok_r4 = r4
 
   -- Plain atom pattern (no payload).

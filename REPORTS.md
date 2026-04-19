@@ -615,3 +615,23 @@ Session #3 continued — 2026-04-18.
 **Why this matters (A → B pattern)**: the split-vocabulary situation was the cleanest possible demonstration of the user's framing — half the fixtures testing the spec vocabulary were silently failing, half the fixtures testing the runtime vocabulary were passing, and the harness treated the suite as green. Unifying under the spec names forces either-pass-or-fail coherence. No backward-compat shim: a layer-4 author that reintroduces `text.len` would have to do so explicitly.
 
 **Deferred (related, not this concept)**: list.len is actually spec-canonical too (§11.2 uses `len`, not `length`) — text uses `length` while list uses `len`. That's a spec inconsistency, not a runtime one; the runtime already matches spec for both. Not fixing the spec in this concept; flagged for a possible `11.2/03-deck-os §3 naming consistency audit` later.
+
+### Concept #15a — unify spec under `len` (Deck minimalism)
+
+Session #3 continued — 2026-04-18.
+
+**User direction (durable)**: "even between specs can exist contradictions; follow the whole philosophy or direction of the spec. Our language wants to be minimalist — prefer `len` everywhere." The philosophical framing: a spec that teaches two vocabularies for the same concept seeds three-way drift just as badly as a spec/runtime mismatch. Cross-spec contradictions are in scope for the same combinatorial audit, resolved by the language's overarching direction (minimalism).
+
+**Drift being closed**: §3 used `text.length` while §11.2 used `list.len`. Concept #15 (previous) flipped runtime + fixtures + tests to `text.length` to match §3 — but that landed the wrong side. §11.2's `len` is the right direction because `len` pervades Deck's other short names (`fn`, `let`, `str`, `int`, `do`, `is`, …). `length` is the outlier.
+
+**Fix applied**:
+
+- 2026-04-18 · layer 1 edit · `deck-lang/03-deck-os.md §3` — `length (s: str) -> int` → `len (s: str) -> int`. Single-line spec change. `starts`/`ends` remain short and need no update (they were already minimalist).
+- 2026-04-18 · layer 2 edit · `annex-c-settings.md` — three `text.length(s.digits)` sites migrated to `text.len`. `annex-xx-bluesky.md` — two `text.length(s.text)` sites migrated.
+- 2026-04-18 · layer 4 edit · `components/deck_runtime/src/deck_interp.c` — BUILTINS entry flipped from `"text.length"` back to `"text.len"`; `starts`/`ends` registrations from concept #15 preserved. Error message `"text.length expects str"` → `"text.len expects str"`. Comment on fs.list docstring also updated.
+- 2026-04-18 · layer 6 edit · 12 conformance fixtures bulk-migrated from `text.length(` to `text.len(` via a Python one-liner: `edge_empty_strings`, `edge_escapes`, `edge_long_string`, `edge_unicode`, `lang_fn_typed`, `lang_interp_basic`, `lang_literals`, `lang_strings`, `lang_variant_pat`, `os_fs_list`, `os_info`, `os_text`. Two stale doc-comments (`edge_unicode` reference note, `lang_strings` spec pointer) also updated.
+- 2026-04-18 · layer 5 edit · `deck_interp_test.c` — `text.length("hello")` spot-check → `text.len("hello")`.
+
+**Verification**: `grep -rE 'text\.length'` across the whole repo returns zero matches. `len` is now the single spelling for string length, matching `list.len`, `map.len` (when the future map.len lands), and every other minimalist short name in Deck.
+
+**Why this matters (the user's framing, broader)**: the combinatorial audit isn't just "spec vs code"; it's every pair of authoritative artefacts, including spec-to-spec. A contradiction at that layer is exactly as dangerous as one at any other layer because it seeds inconsistent mental models across the codebase. The rule of thumb when two specs disagree: honour the language's **philosophy**, not whichever side happens to be cited first. Deck's philosophy is minimalism — shortest correct form wins.

@@ -31,9 +31,9 @@
 
   -- String.
   let s       = "hello"
-  let ok_str  = text.length(s) == 5
+  let ok_str  = text.len(s) == 5
              && "" == ""
-             && text.length("") == 0
+             && text.len("") == 0
 
   -- Atom (plain).
   let ok_atom = :ok == :ok

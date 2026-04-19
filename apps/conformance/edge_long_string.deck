@@ -12,7 +12,7 @@
   let two   = base ++ base
   let four  = two ++ two
   let eight = four ++ four
-  let ok_len  = text.length(eight) == 208
+  let ok_len  = text.len(eight) == 208
   let ok_head = text.starts(eight, "abcdefgh")
   let ok_tail = text.ends(eight, "stuvwxyz")
   let ok_mid  = text.contains(eight, "xyzabc")

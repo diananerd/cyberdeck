@@ -150,7 +150,7 @@ Always in scope. No `@use`. No `!effect`. Implemented by the interpreter, identi
   trim       (s: str)                        -> str
   upper      (s: str)                        -> str
   lower      (s: str)                        -> str
-  length     (s: str)                        -> int
+  len        (s: str)                        -> int
   contains   (s: str, sub: str)             -> bool
   starts     (s: str, prefix: str)          -> bool
   ends       (s: str, suffix: str)          -> bool
