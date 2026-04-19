@@ -107,7 +107,7 @@ static bool t_hello(const char *name)
 }
 static bool t_match_wild(const char *name)
 {
-    const char *src = APP_HDR_DL1 "\n@on launch:\n  match 1\n    0 => log.info(\"z\")\n    _ => log.info(\"match wild branch taken\")\n";
+    const char *src = APP_HDR_DL1 "\n@on launch:\n  match 1\n    | 0 -> log.info(\"z\")\n    | _ -> log.info(\"match wild branch taken\")\n";
     deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
     CHECK(rc == DECK_RT_OK, "run");
     return true;

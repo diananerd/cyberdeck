@@ -656,10 +656,37 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
         }
         case TOK_INT: case TOK_FLOAT: case TOK_STRING:
         case TOK_KW_TRUE: case TOK_KW_FALSE: case TOK_KW_UNIT:
-        case TOK_KW_NONE:
-        case TOK_ATOM: {
+        case TOK_KW_NONE: {
             ast_node_t *wrap = mknode(p, AST_PAT_LIT); if (!wrap) return NULL;
             wrap->as.pat_lit = parse_primary(p);
+            return wrap;
+        }
+        case TOK_ATOM: {
+            /* Spec 01-deck-lang §8 — atom variant pattern `:name binder`.
+             * When an atom is followed by an ident (the payload binder),
+             * treat as AST_PAT_VARIANT with the atom name as constructor
+             * and the binder as a single sub-pattern. Bare `:atom` stays
+             * a literal pattern. */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            const char *atom_name = p->cur.text;
+            ast_node_t *atom_lit = parse_primary(p);
+            if (!atom_lit) return NULL;
+            if (at(p, TOK_IDENT)) {
+                ast_node_t *sub = parse_pattern(p);
+                if (!sub) return NULL;
+                ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+                if (!n) return NULL;
+                ast_node_t **subs = deck_arena_alloc(p->arena, sizeof(ast_node_t *));
+                if (!subs) return NULL;
+                subs[0] = sub;
+                n->as.pat_variant.ctor   = atom_name;
+                n->as.pat_variant.subs   = subs;
+                n->as.pat_variant.n_subs = 1;
+                return n;
+            }
+            ast_node_t *wrap = ast_new(p->arena, AST_PAT_LIT, ln, co);
+            if (!wrap) return NULL;
+            wrap->as.pat_lit = atom_lit;
             return wrap;
         }
         default:
@@ -680,10 +707,21 @@ static ast_node_t *parse_match(deck_parser_t *p)
     ast_arm_t arms[32];
     uint32_t n_arms = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n_arms < 32) {
+        /* Spec 01-deck-lang §8 — each arm is written `| pattern -> expr`.
+         * The leading `|` is required by the canonical form. We tolerate
+         * its absence for one-arm matches and historic fixtures; future
+         * deepening should add a lint to prefer the explicit `|`. */
+        if (at(p, TOK_BAR)) advance(p);
         ast_node_t *pat = parse_pattern(p); if (!pat) return NULL;
         ast_node_t *guard = NULL;
         if (at(p, TOK_KW_WHEN)) { advance(p); guard = parse_expr_prec(p, 0); if (!guard) return NULL; }
-        if (!expect(p, TOK_FAT_ARROW, "expected '=>' in match arm")) return NULL;
+        if (!at(p, TOK_ARROW)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "expected '->' in match arm (spec 01-deck-lang §8); "
+                    "the legacy '=>' arrow is no longer accepted");
+            return NULL;
+        }
+        advance(p); /* -> */
         ast_node_t *body = parse_expr_prec(p, 0); if (!body) return NULL;
         while (at(p, TOK_NEWLINE)) advance(p);
         arms[n_arms].pattern = pat;

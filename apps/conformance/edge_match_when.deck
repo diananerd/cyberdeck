@@ -10,9 +10,9 @@
 @on launch:
   let x = 7
   let r = match x
-    n when n < 0  => "negative"
-    n when n == 0 => "zero"
-    n when n < 10 => "small"
-    _             => "big"
+    | n when n < 0 -> "negative"
+    | n when n == 0 -> "zero"
+    | n when n < 10 -> "small"
+    | _ -> "big"
   let ok = r == "small"
   log.info(if ok then "DECK_CONF_OK:edge.match_when" else "DECK_CONF_FAIL:edge.match_when")

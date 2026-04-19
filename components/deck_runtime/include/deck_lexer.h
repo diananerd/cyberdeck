@@ -53,6 +53,7 @@ typedef enum {
     TOK_AND_AND, TOK_OR_OR, TOK_BANG,
     TOK_ASSIGN, TOK_ARROW, TOK_FAT_ARROW,
     TOK_PIPE, TOK_PIPE_OPT, TOK_CONCAT,
+    TOK_BAR,   /* Spec 01-deck-lang §8 — standalone `|` at start of match arm */
 
     /* Punctuation */
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACKET, TOK_RBRACKET,

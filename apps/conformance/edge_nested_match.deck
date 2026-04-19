@@ -11,11 +11,11 @@
   let a = :ready
   let b = 2
   let r = match a
-    :ready => match b
-      1 => "ready-1"
-      2 => "ready-2"
-      _ => "ready-?"
-    :boot  => "boot"
-    _      => "other"
+    | :ready -> match b
+      | 1 -> "ready-1"
+      | 2 -> "ready-2"
+      | _ -> "ready-?"
+    | :boot -> "boot"
+    | _ -> "other"
   let ok = r == "ready-2"
   log.info(if ok then "DECK_CONF_OK:edge.nested_match" else "DECK_CONF_FAIL:edge.nested_match")

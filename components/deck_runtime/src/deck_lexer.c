@@ -68,6 +68,7 @@ static const char *const s_tok_names[TOK_COUNT] = {
     [TOK_PIPE]         = "|>",
     [TOK_PIPE_OPT]     = "|>?",
     [TOK_CONCAT]       = "<>",
+    [TOK_BAR]          = "|",
     [TOK_LPAREN]       = "(",
     [TOK_RPAREN]       = ")",
     [TOK_LBRACKET]     = "[",
@@ -568,8 +569,8 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
                 else                 { emit(out, TOK_PIPE, lx->line, lx->col); }
                 return true;
             }
-            set_error(lx, "unexpected '|'");
-            emit(out, TOK_ERROR, lx->line, lx->col);
+            /* Spec 01-deck-lang §8 — standalone `|` starts a match arm. */
+            emit(out, TOK_BAR, lx->line, lx->col);
             return true;
         case '-':
             advance(lx);

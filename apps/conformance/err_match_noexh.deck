@@ -9,6 +9,6 @@
 
 @on launch:
   let r = match 42
-    0  => "zero"
-    42 => "answer"
+    | 0 -> "zero"
+    | 42 -> "answer"
   log.info("DECK_CONF_FAIL:err.match_should_have_failed_load")

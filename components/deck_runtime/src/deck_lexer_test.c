@@ -107,6 +107,10 @@ static const lex_case_t CASES[] = {
     { "pipes",         "|> |>?",
       { TOK_PIPE, TOK_PIPE_OPT, TOK_EOF } },
 
+    /* 22b. Standalone `|` (match-arm bar) vs `||` vs `|>` */
+    { "bar_vs_or",     "| || |>",
+      { TOK_BAR, TOK_OR_OR, TOK_PIPE, TOK_EOF } },
+
     /* 23. Concat */
     { "concat",        "a <> b",
       { TOK_IDENT, TOK_CONCAT, TOK_IDENT, TOK_EOF } },

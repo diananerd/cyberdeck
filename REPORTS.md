@@ -464,3 +464,28 @@ Session #3 continued — 2026-04-18.
 **Deferred, stated**:
 - Relative `./path` resolution (spec §4.2) is a real feature the runtime doesn't implement yet. The parser rejects it with a specific error rather than silently producing a non-functioning AST node. Layer-4 follow-up to add local-module resolution when the local-module graph (spec §01 §748) is wired.
 - `when: cond` expression is parsed but discarded. Runtime-evaluated gating (spec §4.1 "re-evaluated continuously by the runtime") is a post-DL1 feature. Current impl treats `when:` as graceful-degradation optional — the call returns `:err :unavailable` when the capability can't be honored, consistent with `optional` semantics.
+
+### Concept #10 — spec-canonical match arms (`| pattern -> expr`)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery (layer 0 lexer ↔ layer 4 parser ↔ layer 6 fixtures)**: spec `01-deck-lang §8` writes every match arm as `| pattern -> expr`. The lexer emitted `"unexpected '|'"` on a standalone `|`, the parser accepted only the non-spec `=>` arrow (TOK_FAT_ARROW), and 20+ fixtures used the canonical `| … ->` form — meaning they failed at the **lexer** before the parser ever got involved. Meanwhile other fixtures + three unit-test files used `=>` form which parsed fine. The conformance harness reported PASS for the legacy-form fixtures and silently never ran the canonical ones. Textbook A → B split.
+
+**Fix applied**:
+
+- 2026-04-18 · layer 0 edit · `components/deck_runtime/include/deck_lexer.h` + `src/deck_lexer.c` — new `TOK_BAR` for standalone `|`. The `|`-prefix case in `scan_operator` no longer emits TOK_ERROR; it emits `TOK_BAR`. `|>` and `||` still produce their own tokens (unchanged).
+- 2026-04-18 · layer 0 edit · `src/deck_lexer_test.c` — new `bar_vs_or` test covering `| || |>` → `(TOK_BAR, TOK_OR_OR, TOK_PIPE)`.
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_match` — each arm may start with optional `TOK_BAR`. The arrow is now `TOK_ARROW` (spec-canonical `->`). The legacy `TOK_FAT_ARROW` (`=>`) produces a parse error whose message explicitly points at §8 and states the legacy arrow is no longer accepted. No dual-arrow shim.
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_pattern` — `TOK_ATOM` case extended: when an atom is followed by an ident, produce `AST_PAT_VARIANT` with `ctor = atom text` and one sub-pattern (the binder). This makes `:some x`, `:ok v`, `:err _` canonical atom-variant patterns parse. Bare `:atom` followed by `->` or `when` still produces the literal-atom pattern (existing behavior).
+- 2026-04-18 · layer 6 edit · bulk-migrated `=>` → `| … ->` in 5 fixtures (`app_assets`, `edge_match_deep`, `edge_match_when`, `edge_nested_match`, `err_match_noexh`) via a Python transform that (a) inserts the leading `|` with its indent preserved and (b) replaces `=>` with `->`.
+- 2026-04-18 · layer 5 edit · `src/deck_loader_test.c` + `src/deck_interp_test.c` — four hard-coded match cases (`ok_match_wildcard`, `ok_match_ident`, `err_nonexhaustive`, `ok_match_three_arms`, `t_match_wild` src string) rewritten to canonical `| pattern -> expr` form.
+
+**Verification**:
+- `grep -E "=>" apps/conformance/*.deck` returns only three comment lines documenting the old form — zero match-arm usages.
+- `lang_match.deck` / `lang_variant_pat.deck` / `lang_pipe_is.deck` were already spec-canonical from the session #2 deepening; with the lexer + parser fixes they now actually parse. They did not before.
+- Interp's `match_pattern` for `AST_PAT_VARIANT` maps `some/ok/err` ctor names against the existing built-in `Optional` / `Result` value shapes — so `:some x`, `:ok v`, `:err e` patterns destructure values produced by the `some()/ok()/err()` builtins.
+
+**Gap flagged, not this concept**:
+- Spec `01-deck-lang §3.7` defines **atom-variant value construction** — `:some 42`, `:err "div0"`, `:active (temp: 82.3, max: 90.0)` — as first-class expressions. The parser currently treats a bare atom in expression position as a scalar atom literal; any following token is a parse error. So the spec form `if b == 0 then :err "div0" else :ok (a / b)` in `lang_variant_pat.deck` does not parse. Concept #11 follow-up: extend `parse_primary` so `TOK_ATOM` followed by a value-expression-start promotes to a variant-value node, and have the interp construct it as the same `(atom, payload)` tuple shape the `ok()/err()` builtins already produce. Once that lands, the pattern-match side from this concept will have canonical constructions to match against.
+
+**Why this matters (A → B pattern)**: this is the exact lesson the user flagged — you can write a beautifully canonical fixture `lang_match.deck` that the conformance harness reports as PASS simply because it never actually runs (it fails at the lexer). The deepening work in session #2 made the fixtures spec-canonical; until concept #10, that work was *invisible* to the runtime. Now the lexer and parser catch up, and the A → B gap (canonical deepening implies runtime coverage — which it did not) closes.

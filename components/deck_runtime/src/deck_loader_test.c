@@ -53,15 +53,15 @@ static const loader_case_t CASES[] = {
       APP_HEADER_DL1
       "\n@on launch:\n"
       "  match 1\n"
-      "    0 => log.info(\"zero\")\n"
-      "    _ => log.info(\"nonzero\")\n",
+      "    | 0 -> log.info(\"zero\")\n"
+      "    | _ -> log.info(\"nonzero\")\n",
       DECK_LOAD_OK, 0 },
 
     { "ok_match_ident",
       APP_HEADER_DL1
       "\n@on launch:\n"
       "  match 1\n"
-      "    x => log.info(\"bound\")\n",
+      "    | x -> log.info(\"bound\")\n",
       DECK_LOAD_OK, 0 },
 
     /* --- stage 1: parse errors --- */
@@ -109,8 +109,8 @@ static const loader_case_t CASES[] = {
       APP_HEADER_DL1
       "\n@on launch:\n"
       "  match 1\n"
-      "    0 => log.info(\"zero\")\n"
-      "    1 => log.info(\"one\")\n",
+      "    | 0 -> log.info(\"zero\")\n"
+      "    | 1 -> log.info(\"one\")\n",
       DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, 5 },
 
     /* --- stage 6: deck_level below required --- */
@@ -162,9 +162,9 @@ static const loader_case_t CASES[] = {
       APP_HEADER_DL1
       "\n@on launch:\n"
       "  match 1\n"
-      "    0 => log.info(\"z\")\n"
-      "    1 => log.info(\"o\")\n"
-      "    _ => log.info(\"x\")\n",
+      "    | 0 -> log.info(\"z\")\n"
+      "    | 1 -> log.info(\"o\")\n"
+      "    | _ -> log.info(\"x\")\n",
       DECK_LOAD_OK, 0 },
 
     /* --- dotted capability reaches through multiple dots --- */
