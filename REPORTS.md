@@ -879,3 +879,58 @@ Session #3 continued.
 **Deferred**: real type-checking at load time (validating that the argument types match the spec'd types, that the return type is consistent, that unions are exhaustive). Spec §5 describes the type system; the F21.1 runtime is still dynamic. The skip here is faithful to that contract — types pass through the parser untouched, and runtime dispatch is on values, not declared types.
 
 **Why this matters**: at this point, with concepts #14, #21, #22, #23, #24, #25 all landed, every parser-level blocker identified by the whole-annex audit is gone. The remaining gaps are all in the runtime: declarative content evaluation, state-machine dispatch, payload binding, stream emission, task scheduling, deep-link routing. Those are substantive implementation concepts; the parser no longer gates them.
+
+### Session #3 — close-out (2026-04-19)
+
+Eighteen concepts committed this session:
+
+| # | Commit | Concept |
+|---|---|---|
+| 8 | a33b10f | `@requires` top-level annotation |
+| 9 | a34f551 | `@use` block with `as alias` + `optional` |
+| 10 | a1c7489 | spec-canonical match arms `\| pattern -> expr` + atom-binder patterns |
+| 11 | 610ab76 | `:ctor payload` atom-variant value construction |
+| 12 | 1da266a | string concat operator `++` |
+| 13 | 997e445 | `@on` dotted event paths + parameter clauses |
+| 14 | 34d20c2 | `state :atom` + top-level `initial :atom` |
+| 15 | 6ef0bb5 | `text.*` builtin names match spec §3 (first pass) |
+| 15a | 8b66492 | unify spec under `len` (minimalism) |
+| 16 | 6310eeb | `§11` collection builtins uniform under `module.name` |
+| 17 | adfef93 | `§16` capability names match §3 canonical |
+| 18 | 0d77717 | `@migration` spec shape matches runtime (block + integer) |
+| 19 | 835f0e6 | `log.debug` added to runtime |
+| 20 | ae7810b | unify `unwrap` / `unwrap_or` across Result + Optional |
+| 21 | 2a40730 | parse-and-discard stubs for 7 top-level annotations |
+| 22 | f4025f7 | state payloads + composition + bodyless declarations |
+| 23 | 423fbef | top-level `transition :event` in `@machine` body |
+| 24 | 26a2260 | `content =` inside state body |
+| 25 | 5b0af01 | complex type annotations in fn / `@type` |
+
+**Standing audit rules** (durable, across future sessions):
+
+1. **Spec wins when spec ≠ runtime.** Runtime adapts. If runtime is wrong, fix runtime. If spec is wrong, fix spec, but only after checking *which* side aligns with Deck's philosophy.
+2. **When specs at equal authority disagree, pick whichever side aligns with Deck's philosophy** — minimalism, short names, spec-canonical vocabulary. Cross-spec contradictions are as dangerous as spec-vs-code ones; both are in scope for the combinatorial audit.
+3. **No dual-accepting shims.** The wrong form fails closed with a specific spec pointer so anyone reintroducing it does so deliberately, not by copy-paste.
+4. **Parse-and-discard stubs are the cheapest way to remove blockers** and expose deeper bugs. Concepts #21/#22/#23/#24/#25 all applied this pattern — they don't *implement* the features, they make them syntactically legal so the audit can reach what's behind them.
+
+**Runtime concepts remaining for future sessions** (all tracked above, not buried):
+
+- **Declarative content evaluation** — walk `content = …` AST into DVC tree; replaces `bridge.ui.*` imperative builtins in hello.deck / ping.deck.
+- **State-machine transition dispatch** — machine-level `transition :event from:/to:/when:` declarations executed on `Machine.send(:event, args)`.
+- **Payload binding at transition** — `state :active (temp: float)` bound via `transition … to :active (temp: expr)`.
+- **Nested machine lifecycle** — `state :home machine: Other` enters/exits the nested machine.
+- **Reactive `watch:` transitions** — fire when predicate toggles without `send()`.
+- **`@stream` source/derived execution** — emission, subscription, operator chains.
+- **`@task` background scheduler** — `@on` hooks fired on timer/event.
+- **`@on os.event (binders)` payload dispatch** — walk concept #13's `params[]` against actual event payload.
+- **`@handles` URL router** — pattern match incoming URLs, extract `params`, fire `@on open_url`.
+- **`@config` + `@migration` runtime** — settings storage, schema upgrade execution.
+- **`@assets required:/optional:/data:` spec form** — current runtime accepts flat `name: "path"`; spec §19 has rich subsections with `as :atom` / `for_domain:` / `copy_to:`. Pick a direction; migrate.
+- **Runtime builtin gaps** — `time.*` (4/18), `text.*` (8/36), `fs.*` (3/15), `nvs.*` (3/11 + arity mismatch), `list.*`, `map.*`, `apps.*`, `row.*`.
+- **Capability namespace audit** — §3 mix of bare `nvs` / `fs` / `db` / `cache` / `mqtt` / `ble` / `i2c` / `spi` / `gpio` / `bt_classic` / `ota` / `notifications` vs qualified `network.http` / `sensors.*` / `display.*` / `system.*`. Pick a convention; migrate.
+
+**Session close state**:
+- All specs internally consistent on the content-body, capability, builtin, type, and annotation vocabularies.
+- Every annex a/b/c/d parses through to the end of its `@machine` / `@flow` / `@config` / `@stream` declarations.
+- No conformance fixture passed this session purely due to parser laxity that's been removed since.
+- Twelve substantial runtime concepts remain, each scoped for its own future commit. Parser no longer gates them.
