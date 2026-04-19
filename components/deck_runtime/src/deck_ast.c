@@ -289,6 +289,8 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
             break;
         case AST_MACHINE:
             sp_printf(p, " %s", n->as.machine.name ? n->as.machine.name : "");
+            if (n->as.machine.initial_state)
+                sp_printf(p, " (initial :%s)", n->as.machine.initial_state);
             print_list(p, &n->as.machine.states);
             break;
         case AST_STATE:

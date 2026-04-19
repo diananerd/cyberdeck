@@ -223,7 +223,15 @@ struct ast_node {
             uint32_t          n_params;
             ast_node_t       *body;
         } on;
-        struct { const char *name; ast_list_t states; }        machine;
+        /* Spec 02-deck-app §8 — @machine has a name, an optional explicit
+         * `initial :state` declaration, and a list of state children.
+         * When `initial_state` is NULL the runtime falls back to the first
+         * state in `states` (historic behaviour, preserved for back-compat). */
+        struct {
+            const char *name;
+            const char *initial_state;   /* interned atom text, or NULL */
+            ast_list_t  states;
+        } machine;
         struct { const char *name; ast_list_t hooks; }         state;
         struct { const char *kind; ast_node_t *body; }         state_hook; /* "enter" | "leave" | atom for transition */
 

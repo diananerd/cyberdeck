@@ -1924,7 +1924,20 @@ static void run_state_hooks(deck_interp_ctx_t *c, const ast_node_t *state,
 static deck_err_t run_machine(const ast_node_t *machine, deck_interp_ctx_t *c)
 {
     if (!machine || machine->as.machine.states.len == 0) return DECK_RT_OK;
-    const ast_node_t *state = machine->as.machine.states.items[0];
+    /* Spec 02-deck-app §8.2 — honour explicit `initial :atom` if declared;
+     * else fall back to the first state in declaration order. */
+    const ast_node_t *state = NULL;
+    if (machine->as.machine.initial_state) {
+        state = find_state(machine, machine->as.machine.initial_state);
+        if (!state) {
+            ESP_LOGE(TAG, "machine '%s' initial :%s not found",
+                     machine->as.machine.name,
+                     machine->as.machine.initial_state);
+            return DECK_RT_PATTERN_FAILED;
+        }
+    } else {
+        state = machine->as.machine.states.items[0];
+    }
     ESP_LOGI(TAG, "machine '%s' start state :%s",
              machine->as.machine.name, state->as.state.name);
 

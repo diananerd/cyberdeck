@@ -117,6 +117,18 @@ static const parser_case_t CASES[] = {
       "  state a:\n"
       "    transition :b\n",
       "(module (machine m (state a (transition :b))))" },
+    /* Spec 02-deck-app §8.2 — `state :atom` form (no trailing colon)
+     * plus top-level `initial :atom` declaration. */
+    { "mod_machine_spec_form", TEST_MODULE,
+      "@machine onboard\n"
+      "  state :welcome\n"
+      "    transition :collect\n"
+      "  state :collect\n"
+      "    transition :done\n"
+      "  state :done\n"
+      "    transition :welcome\n"
+      "  initial :welcome\n",
+      "(module (machine onboard (initial :welcome) (state welcome (transition :collect)) (state collect (transition :done)) (state done (transition :welcome))))" },
     { "mod_state_enter", TEST_MODULE,
       "@machine m\n"
       "  state idle:\n"

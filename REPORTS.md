@@ -561,3 +561,35 @@ Event names can be dotted paths rooted in OS-provided events (`os.*`, `hardware.
 - Binder / pattern semantics at dispatch time (bind `s` from `event.ssid`, or filter-reject when `event.action != :press`) follow from the existing pattern-match machinery plus a small helper that, given an event record, walks the `params[]` array and either extends the environment (binders) or fails the match (value patterns). Deferred to the same runtime-dispatch concept.
 
 **Why this matters (A → B pattern)**: §11 is the single most-referenced part of the app model in realistic Deck apps (every annex uses `@on os.*` or `@on hardware.*`). Leaving the parser stuck on single-IDENT form meant every annex-style app would have thrown a parse error at load — but the conformance harness only exercises lifecycle events, so the gap was invisible. This commit makes the spec-canonical form parse; the absence of runtime dispatch is now the explicit next step, tracked in this REPORTS entry rather than silently buried.
+
+### Concept #14 — `state :atom_name` + top-level `initial :atom` (spec §8.2)
+
+Session #3 continued — 2026-04-18.
+
+**Discovery**: spec §8.2 writes state declarations as `state :atom_name` (atom prefix, no trailing colon) and supports a top-level `initial :name` entry in the machine body so the entry state is explicit. Every annex (a/b/c/d/xx) uses this form. The parser's `parse_state_decl` accepts only `state IDENT:` (bare identifier + mandatory colon), and `parse_machine_decl` rejects anything that isn't a `state` child — no `initial` allowed. Annexes therefore can't load on the current runtime; only the simpler conformance fixtures parse. A→B: tests pass because fixtures follow the parser, not the spec.
+
+**Scope of this concept** (intentionally narrow):
+- Atom-named states with optional colon.
+- Top-level `initial :atom` with runtime wiring so machines enter the declared initial state.
+
+**Deferred to later concepts** (flagged in REPORTS so they don't disappear):
+- State payloads `(field: Type, …)` (§8.3)
+- State composition `state :x machine: Y` / `flow: Y` (§8.3)
+- Top-level `transition :event from :x to :y when: … before: … after: …` (§8.4)
+- Reactive `watch:` transitions (§8.6)
+- `@flow` body accepting full machine grammar (§9, currently `step` sugar only)
+
+**Fix applied**:
+
+- 2026-04-18 · layer 4 edit · `include/deck_ast.h` — `AST_MACHINE` union payload gains `initial_state: const char *`. When NULL the runtime falls back to the first state in declaration order (historic behavior preserved so every existing fixture keeps running).
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_state_decl` — accepts `state :atom` (canonical) or `state IDENT:` (legacy). For the atom form the trailing colon is tolerated (`state :x:`) but not required; for the IDENT form the colon stays mandatory and the error points at §8.3 to nudge migration. The intern'd state name comes through the same `st->as.state.name` slot either way, so downstream code needs no changes.
+- 2026-04-18 · layer 4 edit · `src/deck_parser.c:parse_machine_decl` — body loop now accepts `state …` OR `initial :atom`. Duplicate `initial` is rejected with a specific error. `initial` is a bare identifier in the lexer (not reserved), so the branch matches on text equality. Anything else still errors with a clearer `"expected \`state\` or \`initial\` in @machine body"`.
+- 2026-04-18 · layer 4 edit · `src/deck_interp.c:run_machine` — if `machine.initial_state` is set, `find_state` locates it; missing → `DECK_RT_PATTERN_FAILED` with a descriptive log. NULL → previous behaviour (first state).
+- 2026-04-18 · layer 4 edit · `src/deck_ast.c:ast_print AST_MACHINE` — when `initial_state` is set, emits `(initial :name)` as the first child so the S-expr golden reflects it.
+- 2026-04-18 · layer 5 edit · `src/deck_parser_test.c` — new `mod_machine_spec_form` case exercising `state :welcome` + `state :collect` + `state :done` + `initial :welcome` with dotted-ident states disallowed and the print output `(machine onboard (initial :welcome) (state welcome …) (state collect …) (state done …))`.
+
+**Verification**:
+- Existing `mod_machine` test (legacy `state a:` form) remains a golden `(module (machine m (state a (transition :b))))` — unchanged by this concept because `initial_state` is NULL for that case and the state name intern is the same.
+- `@flow` desugaring (which internally builds `AST_MACHINE` via `ast_new`) doesn't set `initial_state`, so every existing flow fixture falls back to "first step" — same behavior as before.
+
+**Why this matters (A → B pattern)**: annexes can now begin to parse. The remaining §8 features (payloads, composition, top-level transitions, watch) are bigger but orthogonal — each can land as its own concept without regressing what #14 unlocks. The explicit `initial` declaration also removes a subtle fragility: until now, reordering the `state` children silently re-picked the initial state; an app author that moved a state for readability could change runtime behaviour without warning. With `initial :atom` in place, the entry point is source-controlled and named.

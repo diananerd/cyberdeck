@@ -1508,11 +1508,26 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
 {
     ast_node_t *st = mknode(p, AST_STATE); if (!st) return NULL;
     advance(p); /* state */
-    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected state name"); return NULL; }
-    st->as.state.name = p->cur.text;
-    advance(p);
-    if (!expect(p, TOK_COLON, "expected ':' after state name")) return NULL;
-    if (!expect(p, TOK_NEWLINE, "expected newline after state ':'")) return NULL;
+    /* Spec 02-deck-app §8.3 — canonical name form is `state :atom`.
+     * Legacy form `state IDENT:` (bare identifier + trailing colon)
+     * is also accepted so existing conformance fixtures keep working.
+     * The trailing colon is optional when the name is an atom. */
+    if (at(p, TOK_ATOM)) {
+        st->as.state.name = p->cur.text;
+        advance(p);
+        if (at(p, TOK_COLON)) advance(p);   /* tolerate `state :x:` */
+    } else if (at(p, TOK_IDENT)) {
+        st->as.state.name = p->cur.text;
+        advance(p);
+        if (!expect(p, TOK_COLON,
+                    "expected ':' after state name (legacy form); "
+                    "spec §8.3 prefers `state :atom_name` with no colon"))
+            return NULL;
+    } else {
+        set_err(p, DECK_LOAD_PARSE_ERROR, "expected state name");
+        return NULL;
+    }
+    if (!expect(p, TOK_NEWLINE, "expected newline after state name")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented state body")) return NULL;
     ast_list_init(&st->as.state.hooks);
@@ -1558,13 +1573,35 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
     if (!expect(p, TOK_INDENT, "expected indented machine body")) return NULL;
     ast_list_init(&m->as.machine.states);
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
-        if (!at(p, TOK_KW_STATE)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'state' in machine body");
-            return NULL;
+        if (at(p, TOK_KW_STATE)) {
+            ast_node_t *st = parse_state_decl(p); if (!st) return NULL;
+            ast_list_push(p->arena, &m->as.machine.states, st);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            continue;
         }
-        ast_node_t *st = parse_state_decl(p); if (!st) return NULL;
-        ast_list_push(p->arena, &m->as.machine.states, st);
-        while (at(p, TOK_NEWLINE)) advance(p);
+        /* Spec 02-deck-app §8.2 — top-level `initial :atom` declaration.
+         * `initial` is a bare ident, not a reserved keyword. */
+        if (at(p, TOK_IDENT) && p->cur.text &&
+            strcmp(p->cur.text, "initial") == 0) {
+            advance(p); /* initial */
+            if (!at(p, TOK_ATOM)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "expected `:atom` after `initial` in @machine body");
+                return NULL;
+            }
+            if (m->as.machine.initial_state) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "@machine declares `initial` more than once");
+                return NULL;
+            }
+            m->as.machine.initial_state = p->cur.text;
+            advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            continue;
+        }
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "expected `state` or `initial` in @machine body");
+        return NULL;
     }
     if (!expect(p, TOK_DEDENT, "expected dedent closing machine")) return NULL;
     return m;
