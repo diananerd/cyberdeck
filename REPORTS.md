@@ -1137,3 +1137,18 @@ text.from_json("not-json") == :none
 **Fixture caveat**: `os_time.deck` uses `parts.year` syntactically — that's a field-access on a map, which the current runtime doesn't support (map is accessed via `map.get`). That's a separate runtime concept (record/map field syntax). Concept #32 closes the **builtin-completeness** side; the fixture-compatibility side still depends on that field-access gap.
 
 **Running tally**: `time.*` now at 18/18. `text.*` 36/36. Remaining capabilities with silent runtime gaps: `fs.*` (3/10), `nvs.*` (3/11), plus the non-builtin concepts at session-#3 tail (declarative content eval, machine dispatch, streams, etc.).
+
+### Concept #33 — map field access: accept both atom and string keys
+
+**Drift**: `AST_DOT` field access (`obj.field`) only looked up **atom** keys in maps. Records built via `@type Foo { … }` use atom keys, so they worked. Maps built from external sources — `text.from_json` output, `time.date_parts` return, `text.query_parse` output — use **string** keys. `obj.field` always returned `:none` on those, silently breaking field access for anything JSON-adjacent.
+
+Adjacent complication: `time.date_parts` used string keys (matching the JSON/query convention), which made my concept-#32 builtin useless for `parts.year` access right out of the gate. The fixture `os_time.deck` written for the date_parts builtin ended up expecting Option-wrap (`:some y -> …`), likely because the author noticed the lookup returned `:none` on every string-keyed map and tried to model field access as partial.
+
+**Resolution**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` AST_DOT case — try atom key first (preserves record semantics); on miss, try string key. Both `{name: "diana"}` (atom key via record-literal sugar) and `{"year": 2026}` (string key from JSON / date_parts) now respond to `obj.field`.
+- 2026-04-19 · layer 6 edit · `apps/conformance/os_time.deck` — rewrote the `parts` assertions to use the canonical raw-value semantics (`parts.year >= 2024 and parts.year <= 2200`), matching the convention already used in `lang_type_record.deck` and `lang_with_update.deck`. The Option-wrap pattern in the old fixture was the A→B misread of a silent-miss — it "passed" because `:none` matched the alternative branch when there shouldn't have been one.
+
+**Why not wrap in Option**: making `obj.field` always return `:some(v)` / `:none` would be the "safer" shape but breaks every existing record-access pattern in the codebase (`u.name == "diana"`, `e.is_dir`, `p.user.name`, …). Those would all need `| :some v -> v` unwrapping inserted. Since field access on a record is inherently "I know this field exists because the type has it", keeping raw-value semantics is the match with how humans read the syntax. For genuinely-optional lookups, `map.get(m, key)` still returns `:some/:none` — apps that want option semantics use that.
+
+**Consequence**: `time.date_parts` and `time.duration_parts` now work via `parts.year` / `parts.days` etc. `text.from_json(...)` outputs get dot-accessed the same way. `text.query_parse("a=1&b=2")` yields `{"a": "1", "b": "2"}` → `q.a == "1"`.

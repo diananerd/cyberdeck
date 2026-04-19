@@ -61,10 +61,12 @@
               && time.parse("garbage", fmt)        == :none
 
   -- Date decomposition returns an expected shape.
+  -- Field access `parts.year` returns the raw value (not Option-wrapped),
+  -- matching the convention used by record types (lang_type_record.deck).
   let parts    = time.date_parts(t1)
-  let ok_parts = match parts.year
-                   | :some y -> y >= 2024 && y <= 2200
-                   | :none   -> false
+  let ok_parts = parts.year >= 2024 and parts.year <= 2200
+              and parts.month >= 1 and parts.month <= 12
+              and parts.day >= 1 and parts.day <= 31
 
   -- epoch() returns the zero timestamp (UNIX 1970-01-01).
   let ep       = time.epoch()

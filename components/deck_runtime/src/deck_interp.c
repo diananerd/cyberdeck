@@ -3129,16 +3129,21 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
                 if (b && b->min_arity == 0) { r = b->fn(NULL, 0, c); break; }
             }
             /* DL2 F22.2: record/map field access. Evaluate obj and look
-             * up the field as an interned atom key. Missing field → none.
-             * Records are just maps with conventional keys (or maps with
-             * an extra `:__type` tag). */
+             * up the field. Records use atom keys; maps built from external
+             * sources (JSON objects, time.date_parts) use string keys — try
+             * both so `obj.field` Just Works regardless of how the map was
+             * constructed. Missing field → none. */
             deck_value_t *obj = deck_interp_run(c, env, n->as.dot.obj);
             if (!obj) break;
             if (obj->type == DECK_T_MAP) {
-                deck_value_t *key = deck_new_atom(n->as.dot.field);
-                if (!key) { deck_release(obj); break; }
-                deck_value_t *v = deck_map_get(obj, key);
-                deck_release(key);
+                deck_value_t *akey = deck_new_atom(n->as.dot.field);
+                deck_value_t *v = akey ? deck_map_get(obj, akey) : NULL;
+                if (akey) deck_release(akey);
+                if (!v) {
+                    deck_value_t *skey = deck_new_str_cstr(n->as.dot.field);
+                    v = skey ? deck_map_get(obj, skey) : NULL;
+                    if (skey) deck_release(skey);
+                }
                 r = v ? deck_retain(v) : deck_new_none();
                 deck_release(obj);
                 break;
