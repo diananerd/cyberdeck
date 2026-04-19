@@ -98,7 +98,7 @@ const char *ast_binop_name(binop_t op)
         case BINOP_NE:    return "!=";
         case BINOP_AND:   return "&&";
         case BINOP_OR:    return "||";
-        case BINOP_CONCAT:return "<>";
+        case BINOP_CONCAT:return "++";
         case BINOP_PIPE:  return "|>";
         case BINOP_PIPE_OPT: return "|>?";
         case BINOP_IS:    return "is";

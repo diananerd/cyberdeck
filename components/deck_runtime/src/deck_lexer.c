@@ -67,7 +67,7 @@ static const char *const s_tok_names[TOK_COUNT] = {
     [TOK_FAT_ARROW]    = "=>",
     [TOK_PIPE]         = "|>",
     [TOK_PIPE_OPT]     = "|>?",
-    [TOK_CONCAT]       = "<>",
+    [TOK_CONCAT]       = "++",
     [TOK_BAR]          = "|",
     [TOK_LPAREN]       = "(",
     [TOK_RPAREN]       = ")",
@@ -524,7 +524,11 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
 
     /* Single / double-char operators and punctuation. */
     switch (c) {
-        case '+': advance(lx); emit(out, TOK_PLUS,  lx->line, lx->col); return true;
+        case '+':
+            advance(lx);
+            if (peek(lx) == '+') { advance(lx); emit(out, TOK_CONCAT, lx->line, lx->col); }
+            else                 { emit(out, TOK_PLUS,   lx->line, lx->col); }
+            return true;
         case '*':
             advance(lx);
             if (peek(lx) == '*') { advance(lx); emit(out, TOK_POW, lx->line, lx->col); }
@@ -535,7 +539,6 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
         case '<':
             advance(lx);
             if (peek(lx) == '=') { advance(lx); emit(out, TOK_LE, lx->line, lx->col); }
-            else if (peek(lx) == '>') { advance(lx); emit(out, TOK_CONCAT, lx->line, lx->col); }
             else                 { emit(out, TOK_LT, lx->line, lx->col); }
             return true;
         case '>':

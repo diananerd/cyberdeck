@@ -513,3 +513,24 @@ Session #3 continued — 2026-04-18.
 - `:err - 1` (ambiguous with unary minus) resolves to bare atom `:err` then binary minus — spec §3.7 examples never use unary-minus payloads, so this reading is fine; callers who want `:err -1` write `:err (-1)`.
 - `match safe_div(10, 0) | :err e -> …` — scrutinee is a CALL, not an atom; my lookahead only fires on bare atoms.
 - `(:a, :b)` tuple literal — atoms followed by `,` aren't promoted; bare atoms in list/tuple literals unchanged.
+
+### Concept #12 — string concat operator `++` (spec §7.4)
+
+Session #3 continued — 2026-04-18.
+
+**Three-way divergence**: spec `01-deck-lang §7.4` uses `++` for string concatenation. The lexer emitted `TOK_CONCAT` only on `<>` (never on `++`). Session #2 deepening rewrote `lang_strings.deck` and `lang_list_basic.deck` to spec-canonical `++`; those fixtures have been parse-erroring since the deepening commit (`++` lexes as two `TOK_PLUS` tokens → "unexpected +"). Two other fixtures (`edge_empty_strings.deck`, `edge_unicode.deck`, `edge_long_string.deck`) and three unit tests stuck with `<>`. Neither camp noticed the drift because the conformance harness dutifully reports PASS on whichever fixtures happen to parse.
+
+**Fix applied (top-down, no shim)**:
+
+- 2026-04-18 · layer 0 edit · `src/deck_lexer.c` — `+` handler now peeks for a second `+` and emits `TOK_CONCAT` for `++`. `<>` handling removed from the `<` branch (only `<=` and `<` remain). `TOK_CONCAT` display name flipped from `"<>"` to `"++"`.
+- 2026-04-18 · layer 4 edit · `src/deck_ast.c:ast_binop_name` — `BINOP_CONCAT` prints as `"++"`.
+- 2026-04-18 · layer 4 edit · `src/deck_interp.c:do_concat` — error message `"<> needs two strings"` → `"++ needs two strings"`.
+- 2026-04-18 · layer 5 edit · `src/deck_lexer_test.c` — the `concat` lexer case input swapped to `a ++ b`. `src/deck_parser_test.c:concat` case swapped both input (`"a" ++ "b"`) and expected golden (`(binop ++ (str "a") (str "b"))`). `src/deck_interp_test.c` concat spot-check updated to `"foo" ++ "bar"`.
+- 2026-04-18 · layer 6 edit · fixtures `edge_empty_strings.deck`, `edge_unicode.deck`, `edge_long_string.deck` migrated to `++`.
+
+**Verification**:
+- `grep -rn "<>" apps/ components/deck_runtime/src/` returns zero matches outside comment lines. The operator no longer exists in the runtime.
+- `lang_strings.deck` + `lang_list_basic.deck` (already canonical per session #2) now actually parse — the concat lines are TOK_STRING TOK_CONCAT TOK_STRING instead of TOK_STRING TOK_PLUS TOK_PLUS TOK_STRING.
+- Previously-passing `edge_empty_strings` / `edge_unicode` / `edge_long_string` continue to pass under the new operator via one-to-one substitution of the literal.
+
+**Why this matters (A → B pattern)**: yet another textbook case. The deepening work renamed the operator in the *fixtures* without touching the *lexer*, so the fixtures "looked right" but were silently un-parseable. Meanwhile the still-legacy fixtures continued to pass, giving the conformance harness green lights that implied more coverage than existed. Concept #12 closes the lexer/spec gap and rewrites the remaining legacy fixtures so there's exactly one operator in use everywhere. Backwards-compat would require dual acceptance (`++` and `<>`), which the no-shim rule rejects — removing `<>` forces anyone who reintroduces it to explicitly choose dual-accept, not copy-paste a stale lexer.

@@ -1497,7 +1497,7 @@ static deck_value_t *do_concat(deck_interp_ctx_t *c, deck_value_t *L, deck_value
                                 uint32_t ln, uint32_t co)
 {
     if (L->type != DECK_T_STR || R->type != DECK_T_STR) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, ln, co, "<> needs two strings");
+        set_err(c, DECK_RT_TYPE_MISMATCH, ln, co, "++ needs two strings");
         return NULL;
     }
     char buf[256];

@@ -9,9 +9,9 @@
 
 @on launch:
   let base  = "abcdefghijklmnopqrstuvwxyz"
-  let two   = base <> base
-  let four  = two <> two
-  let eight = four <> four
+  let two   = base ++ base
+  let four  = two ++ two
+  let eight = four ++ four
   let ok_len  = text.len(eight) == 208
   let ok_head = text.starts_with(eight, "abcdefgh")
   let ok_tail = text.ends_with(eight, "stuvwxyz")

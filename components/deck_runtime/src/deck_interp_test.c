@@ -47,7 +47,7 @@ static bool t_logic(const char *name)
 static bool t_short_circuit(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("false && (1 / 0 == 0)", &e); CHECK(e == DECK_RT_OK, "no div0"); CHECK(v && !v->as.b, "false"); deck_release(v); return true; }
 static bool t_concat(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("\"foo\" <> \"bar\"", &e); CHECK(v && v->type == DECK_T_STR, "str"); CHECK(v->as.s.len == 6 && memcmp(v->as.s.ptr, "foobar", 6) == 0, "foobar"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("\"foo\" ++ \"bar\"", &e); CHECK(v && v->type == DECK_T_STR, "str"); CHECK(v->as.s.len == 6 && memcmp(v->as.s.ptr, "foobar", 6) == 0, "foobar"); deck_release(v); (void)e; return true; }
 static bool t_neg(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("-(5)", &e); CHECK(v && v->as.i == -5, "-5"); deck_release(v); (void)e; return true; }
 static bool t_if(const char *name)

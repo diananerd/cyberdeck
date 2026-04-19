@@ -112,7 +112,7 @@ static const lex_case_t CASES[] = {
       { TOK_BAR, TOK_OR_OR, TOK_PIPE, TOK_EOF } },
 
     /* 23. Concat */
-    { "concat",        "a <> b",
+    { "concat",        "a ++ b",
       { TOK_IDENT, TOK_CONCAT, TOK_IDENT, TOK_EOF } },
 
     /* 24. Parens and brackets */

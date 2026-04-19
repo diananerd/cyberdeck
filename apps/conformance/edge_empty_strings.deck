@@ -12,9 +12,9 @@
   let ok_len0  = text.len(e) == 0
   let ok_up    = text.upper(e) == ""
   let ok_low   = text.lower(e) == ""
-  let ok_cat1  = (e <> "x") == "x"
-  let ok_cat2  = ("y" <> e) == "y"
-  let ok_cat3  = (e <> e) == ""
+  let ok_cat1  = (e ++ "x") == "x"
+  let ok_cat2  = ("y" ++ e) == "y"
+  let ok_cat3  = (e ++ e) == ""
   let ok_ct    = not text.contains("", "anything")
   let ok = ok_len0 and ok_up and ok_low and ok_cat1 and ok_cat2 and ok_cat3 and ok_ct
   log.info(if ok then "DECK_CONF_OK:edge.empty_strings" else "DECK_CONF_FAIL:edge.empty_strings")
