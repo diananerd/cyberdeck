@@ -1630,8 +1630,49 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
             while (at(p, TOK_NEWLINE)) advance(p);
             continue;
         }
+        /* Spec 02-deck-app §8.4 — top-level `transition :event …` with
+         * optional `(args)` and an indented clause block of
+         * from:/to:/when:/before:/after:/watch:. Parse-and-discard today:
+         * the runtime doesn't honour machine-level transitions yet (every
+         * executing transition lives inside a state body via the legacy
+         * simple form). This stub lets annex machines parse; the actual
+         * dispatch of top-level transitions is a separate concept. */
+        if (at(p, TOK_KW_TRANSITION)) {
+            advance(p); /* transition */
+            /* `:event_atom` */
+            if (at(p, TOK_ATOM)) advance(p);
+            /* Optional `(args)` — eat matching parens. */
+            if (at(p, TOK_LPAREN)) {
+                advance(p);
+                uint32_t depth = 1;
+                while (depth > 0 && !at(p, TOK_EOF)) {
+                    if (at(p, TOK_LPAREN)) depth++;
+                    else if (at(p, TOK_RPAREN)) { if (--depth == 0) break; }
+                    advance(p);
+                }
+                if (!expect(p, TOK_RPAREN,
+                            "expected ')' closing top-level transition args"))
+                    return NULL;
+            }
+            /* Trailing text on the header line (e.g. `from * to :x` inline) —
+             * rare but allowed. Consume until NEWLINE. */
+            while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
+                advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            /* Optional indented clause block — discard entirely. */
+            if (at(p, TOK_INDENT)) {
+                advance(p);
+                uint32_t depth = 1;
+                while (depth > 0 && !at(p, TOK_EOF)) {
+                    if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                    else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+                    else                        { advance(p); }
+                }
+            }
+            continue;
+        }
         set_err(p, DECK_LOAD_PARSE_ERROR,
-                "expected `state` or `initial` in @machine body");
+                "expected `state`, `initial`, or `transition` in @machine body");
         return NULL;
     }
     if (!expect(p, TOK_DEDENT, "expected dedent closing machine")) return NULL;

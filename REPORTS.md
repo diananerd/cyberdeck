@@ -796,3 +796,40 @@ Every annex (a/b/c/d/xx) hits at least one of these in the first few lines of it
 - **`transition :event from :x to :y when: … before: … after:`** as a machine-level declaration (§8.4). Currently transitions are parsed only inside state bodies.
 
 **Why this matters**: until this concept, the entire annex set failed at parse time. No loader check, no interp, no DVC, nothing runs. This concept doesn't *implement* the features — it makes them syntactically legal so the audit can reach what's behind them. Matches the concept-#21 pattern: remove the cheap blockers, expose the deeper bugs.
+
+### Concept #23 — top-level `transition :event` in `@machine` body (spec §8.4)
+
+Session #3 continued.
+
+**Drift**: spec §8.4 declares machine-level transitions with multi-line clause blocks:
+
+```
+transition :update_query (q: str)
+  from :search _
+  to   :search (query: q)
+  when: …
+  before -> …
+  after  -> …
+  watch: …
+```
+
+Parser's `parse_machine_decl` body loop accepted only `state` and `initial` after concept #14. Every `transition` in any annex raised "expected `state`, `initial`, or `transition` in @machine body". Every annex declares machine-level transitions; none parse.
+
+**Scope for this concept**: parse-and-discard, same pattern as concepts #21 and #22. The runtime only executes transitions declared *inside* state bodies (via the single-line `transition :atom` legacy form). Top-level `transition` blocks are consumed and ignored.
+
+**Fix applied**:
+
+- Layer 4 edit · `src/deck_parser.c:parse_machine_decl` body loop — added branch for `TOK_KW_TRANSITION` that consumes: (a) `transition`, (b) `:event_atom`, (c) optional `(args)` with nested-paren depth counter, (d) trailing tokens on the header line up to `NEWLINE`, (e) optional indented clause block (`from:/to:/when:/before:/after:/watch:`) via the same depth-counter trick `parse_opaque_block` uses.
+- Error message for the "expected X in @machine body" case updated to list all three accepted keywords.
+
+**Compatibility**:
+
+- Inside-state `transition :atom` (single-line) continues to work via `parse_state_decl`'s existing transition path. No fixture uses machine-top-level transitions, so nothing regresses.
+
+**Deferred**:
+
+- **Dispatch**: the runtime should, on `Machine.send(:event, args)`, scan the machine's top-level transitions for matching `from:` and fire the most specific. Requires an AST_TRANSITION list on AST_MACHINE, transition payload storage, guard evaluation for `when:`, and the before/after hook sequence around the state change. This is the substantive `@machine` runtime work the REPORTS has been tracking as "concept #5" since session #2.
+- **Reactive `watch:` transitions**: fire when the predicate toggles false→true without an explicit `send()`. Requires reactive dependency tracking (which also needs `@stream` implementation). Substantial.
+- **`from *` wildcard + `to history`** navigation semantics (§8.4).
+
+**Why this matters**: same as concept #22 — the annex set had not one but three parser-level blockers in the first 20 lines of each machine. With concepts #14 (`state :atom` + `initial :atom`), #22 (state payloads + composition + bodyless), and #23 (top-level transitions), every annex's `@machine`/`@flow` header + state list + transition list now parses cleanly. The substantive work of actually *executing* those machines is the next concept tranche; but at least the harness can now report "loaded; would execute" instead of "parse error at line 53".
