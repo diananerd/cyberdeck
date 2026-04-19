@@ -1048,6 +1048,245 @@ static deck_value_t *b_text_pad_left  (deck_value_t **a, uint32_t n, deck_interp
 static deck_value_t *b_text_pad_right (deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)n; return text_pad_impl(c, a, +1); }
 static deck_value_t *b_text_pad_center(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)n; return text_pad_impl(c, a,  0); }
 
+/* ---- text.* codecs (spec §3, concept #28) ---- */
+
+static const char B64_ENC[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static deck_value_t *b_text_base64_encode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.base64_encode expects str"); return NULL;
+    }
+    const unsigned char *s = (const unsigned char *)args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    if (L > (1U << 15)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.base64_encode: input > 32KB"); return NULL; }
+    uint32_t out_len = 4 * ((L + 2) / 3);
+    char *buf = (char *)malloc((size_t)out_len + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.base64_encode alloc"); return NULL; }
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < L; i += 3) {
+        uint32_t b0 = s[i];
+        uint32_t b1 = (i + 1 < L) ? s[i + 1] : 0;
+        uint32_t b2 = (i + 2 < L) ? s[i + 2] : 0;
+        uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+        buf[o++] = B64_ENC[(triple >> 18) & 0x3F];
+        buf[o++] = B64_ENC[(triple >> 12) & 0x3F];
+        buf[o++] = (i + 1 < L) ? B64_ENC[(triple >> 6) & 0x3F] : '=';
+        buf[o++] = (i + 2 < L) ? B64_ENC[triple & 0x3F] : '=';
+    }
+    deck_value_t *out = deck_new_str(buf, o);
+    free(buf);
+    return out;
+}
+
+/* Base64 decode table: -1 = invalid, -2 = padding '=', -3 = whitespace (skip). */
+static int b64_val(char ch)
+{
+    if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+    if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+    if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+    if (ch == '+') return 62;
+    if (ch == '/') return 63;
+    if (ch == '=') return -2;
+    if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') return -3;
+    return -1;
+}
+
+static deck_value_t *b_text_base64_decode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.base64_decode expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    if (L > (1U << 16)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.base64_decode: input > 64KB"); return NULL; }
+    char *buf = (char *)malloc((size_t)(L * 3 / 4) + 3);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.base64_decode alloc"); return NULL; }
+    uint32_t o = 0;
+    int quad[4]; uint32_t qn = 0;
+    int pad = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        int v = b64_val(s[i]);
+        if (v == -3) continue;       /* whitespace ignored */
+        if (v == -1) { free(buf); return deck_new_none(); }
+        if (v == -2) { pad++; quad[qn++] = 0; }
+        else {
+            if (pad) { free(buf); return deck_new_none(); }   /* non-pad after pad */
+            quad[qn++] = v;
+        }
+        if (qn == 4) {
+            uint32_t triple = ((uint32_t)quad[0] << 18) | ((uint32_t)quad[1] << 12) |
+                              ((uint32_t)quad[2] << 6)  |  (uint32_t)quad[3];
+            if (pad <= 2) buf[o++] = (char)((triple >> 16) & 0xFF);
+            if (pad <= 1) buf[o++] = (char)((triple >> 8)  & 0xFF);
+            if (pad == 0) buf[o++] = (char)(triple         & 0xFF);
+            qn = 0;
+        }
+    }
+    if (qn != 0) { free(buf); return deck_new_none(); }   /* incomplete quad */
+    deck_value_t *inner = deck_new_str(buf, o);
+    free(buf);
+    if (!inner) return NULL;
+    deck_value_t *some = deck_new_some(inner);
+    deck_release(inner);
+    return some;
+}
+
+static bool url_unreserved(unsigned char ch)
+{
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' ||
+           ch == '.' || ch == '~';
+}
+
+static deck_value_t *b_text_url_encode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.url_encode expects str"); return NULL;
+    }
+    const unsigned char *s = (const unsigned char *)args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    if ((uint64_t)L * 3 > (1U << 16)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.url_encode: input too large"); return NULL; }
+    char *buf = (char *)malloc((size_t)L * 3 + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.url_encode alloc"); return NULL; }
+    static const char HEX[] = "0123456789ABCDEF";
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        unsigned char ch = s[i];
+        if (url_unreserved(ch)) {
+            buf[o++] = (char)ch;
+        } else {
+            buf[o++] = '%';
+            buf[o++] = HEX[(ch >> 4) & 0xF];
+            buf[o++] = HEX[ch & 0xF];
+        }
+    }
+    deck_value_t *out = deck_new_str(buf, o);
+    free(buf);
+    return out;
+}
+
+static int hex_nibble(char ch)
+{
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+/* url_decode: %-decodes; also treats `+` as space (form-encoding variant). */
+static deck_value_t *b_text_url_decode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.url_decode expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    char *buf = (char *)malloc((size_t)L + 1);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.url_decode alloc"); return NULL; }
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        char ch = s[i];
+        if (ch == '%' && i + 2 < L) {
+            int hi = hex_nibble(s[i + 1]);
+            int lo = hex_nibble(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                buf[o++] = (char)((hi << 4) | lo);
+                i += 2;
+                continue;
+            }
+        }
+        buf[o++] = ch;
+    }
+    deck_value_t *out = deck_new_str(buf, o);
+    free(buf);
+    return out;
+}
+
+/* hex_encode takes a list-of-int (each 0-255) or a DECK_T_BYTES. Spec §3
+ * calls it `[byte]`; the runtime materializes byte lists as int lists. */
+static deck_value_t *b_text_hex_encode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    const uint8_t *src = NULL;
+    uint32_t src_len = 0;
+    uint8_t *heap_src = NULL;   /* for list conversion */
+    if (args[0] && args[0]->type == DECK_T_BYTES) {
+        src = args[0]->as.bytes.buf;
+        src_len = args[0]->as.bytes.len;
+    } else if (args[0] && args[0]->type == DECK_T_LIST) {
+        src_len = args[0]->as.list.len;
+        if (src_len > 0) {
+            heap_src = (uint8_t *)malloc(src_len);
+            if (!heap_src) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.hex_encode alloc"); return NULL; }
+            for (uint32_t i = 0; i < src_len; i++) {
+                deck_value_t *v = args[0]->as.list.items[i];
+                if (!v || v->type != DECK_T_INT) {
+                    free(heap_src);
+                    set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.hex_encode: list element %u not int", (unsigned)i);
+                    return NULL;
+                }
+                int64_t x = v->as.i;
+                if (x < 0 || x > 255) {
+                    free(heap_src);
+                    set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.hex_encode: byte out of range");
+                    return NULL;
+                }
+                heap_src[i] = (uint8_t)x;
+            }
+            src = heap_src;
+        }
+    } else {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.hex_encode expects [byte] or bytes"); return NULL;
+    }
+    if (src_len > (1U << 15)) { if (heap_src) free(heap_src); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "text.hex_encode: input > 32KB"); return NULL; }
+    static const char HEX[] = "0123456789abcdef";
+    char *buf = (char *)malloc((size_t)src_len * 2 + 1);
+    if (!buf) { if (heap_src) free(heap_src); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.hex_encode alloc"); return NULL; }
+    for (uint32_t i = 0; i < src_len; i++) {
+        buf[2 * i]     = HEX[(src[i] >> 4) & 0xF];
+        buf[2 * i + 1] = HEX[src[i] & 0xF];
+    }
+    deck_value_t *out = deck_new_str(buf, src_len * 2);
+    free(buf);
+    if (heap_src) free(heap_src);
+    return out;
+}
+
+/* hex_decode returns a list-of-int (each 0-255) wrapped in :some, or :none. */
+static deck_value_t *b_text_hex_decode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "text.hex_decode expects str"); return NULL;
+    }
+    const char *s = args[0]->as.s.ptr;
+    uint32_t L = args[0]->as.s.len;
+    if (L % 2 != 0) return deck_new_none();
+    uint32_t out_n = L / 2;
+    deck_value_t *out = deck_new_list(out_n);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "text.hex_decode alloc"); return NULL; }
+    for (uint32_t i = 0; i < out_n; i++) {
+        int hi = hex_nibble(s[2 * i]);
+        int lo = hex_nibble(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) {
+            deck_release(out);
+            return deck_new_none();
+        }
+        deck_value_t *byte_v = deck_new_int((hi << 4) | lo);
+        if (!byte_v) { deck_release(out); return NULL; }
+        deck_list_push(out, byte_v);
+        deck_release(byte_v);
+    }
+    deck_value_t *some = deck_new_some(out);
+    deck_release(out);
+    return some;
+}
+
 /* ---- os.sleep_ms (DL2) ---- */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -1486,6 +1725,13 @@ static const builtin_t BUILTINS[] = {
     { "text.pad_left",          b_text_pad_left,     3, 3 },
     { "text.pad_right",         b_text_pad_right,    3, 3 },
     { "text.pad_center",        b_text_pad_center,   3, 3 },
+    /* Concept #28 — §3 codecs. Self-contained implementations (no SDI). */
+    { "text.base64_encode",     b_text_base64_encode, 1, 1 },
+    { "text.base64_decode",     b_text_base64_decode, 1, 1 },
+    { "text.url_encode",        b_text_url_encode,    1, 1 },
+    { "text.url_decode",        b_text_url_decode,    1, 1 },
+    { "text.hex_encode",        b_text_hex_encode,    1, 1 },
+    { "text.hex_decode",        b_text_hex_decode,    1, 1 },
 
     /* list (DL2 F21.4 + F22 stdlib) */
     { "list.len",               b_list_len,          1, 1 },

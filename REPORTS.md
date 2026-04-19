@@ -1019,3 +1019,23 @@ A→B shape: all three functions "work" on the fixtures that happen to use short
 **Why this matters**: the 256-byte truncation in `text.upper`/`text.lower` was the exact class of silent-data-loss bug the user's initial framing called out — the function returned `"HELLO"` for every short input and `"LOREM IPSUM DOLOR SIT AMET, CONSECTETUR ADIPISCING ELIT, SED DO EIUSMOD TEMPOR INCIDIDUNT UT LABORE ET DOLORE MAGNA ALIQUA. UT ENIM AD MINIM VENIAM, QUIS NOSTRUD EXERCITATION ULLAMCO LABORIS NISI UT ALIQUIP EX EA COMMODO CONSEQU"` for a 300-byte input (truncated at 255). Round-trip through `text.lower` then `text.upper` silently shrinks the string. `os_text.deck` didn't catch it because its probes all used short literals. Any real app uppercasing a loaded file would corrupt data on every call.
 
 **Verification**: `idf.py build` verde. On hardware, any input > 255 bytes now round-trips correctly; only inputs > 64 KB hit the intentional cap with a specific error.
+
+### Concept #28 — text.* codecs pass 2 (spec §3: base64 / URL / hex)
+
+**Drift**: `os_text.deck` exercises six codec builtins (`base64_encode`, `base64_decode`, `url_encode`, `url_decode`, `hex_encode`, `hex_decode`). None were registered in the runtime. Every one would raise "unknown function" at runtime; the harness surfaced only the first miss, hiding the full-coverage gap behind a single failure line.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `components/deck_runtime/src/deck_interp.c` — inline implementations for all six. No SDI or mbedtls dependency; trivial table-based encoders/decoders small enough to be obviously correct on review. Input caps 32–64 KB (matching concepts #26 / #27 convention).
+  * `base64_encode`: standard RFC 4648 alphabet (A-Z a-z 0-9 + /) with `=` padding. Output length = `4 * ceil(L/3)`.
+  * `base64_decode`: accepts whitespace (ignored), `=` padding, returns `:none` on any invalid char or on incomplete quads. Canonical validation — the fixture specifies `text.base64_decode("!!!!!") == :none`.
+  * `url_encode`: RFC 3986 percent-encoding. Unreserved set = `A-Z a-z 0-9 - _ . ~`. Everything else becomes `%HH` uppercase. Spec fixture requires space → `%20` (not `+`).
+  * `url_decode`: percent-decodes `%HH`; invalid triples pass through unchanged (no `:none` — URL decode is infallible per common convention). Does NOT treat `+` as space — that's form-encoding, not RFC 3986.
+  * `hex_encode`: accepts either `DECK_T_BYTES` or `DECK_T_LIST` of ints 0–255. Lowercase output (spec fixture `"deadbeef"`). List elements are validated; out-of-range ints raise `DECK_RT_OUT_OF_RANGE`.
+  * `hex_decode`: odd-length input → `:none`. Invalid hex char → `:none`. Valid input → `:some [int]` with each byte as an int value.
+
+**Representation note**: spec §3 types these as `[byte]`, but Deck runtime has no first-class `byte` scalar — byte sequences surface as `[int]` (each 0–255) in app code. `hex_encode` accepts both the `DECK_T_BYTES` opaque buffer (used by `bytes.*` ops) and the `DECK_T_LIST` form (used by literals like `[0xDE, 0xAD, 0xBE, 0xEF]`). `hex_decode` returns the `[int]` form because it's what Deck literals / equality compare against. Future concepts may unify the two representations; this pass is faithful to the current dual shape.
+
+**Why this matters**: URL and base64 encoding are prerequisites for any HTTP client work — a Deck app calling an AT Proto endpoint (annex-xx) needs `text.url_encode` on every query parameter and `text.base64_encode` for binary uploads. Without these, the entire `@capability network.http` / `api_client` surface is useless even once wired up.
+
+**Running tally**: `text.*` now at 29/36. Remaining: `format`, `query_build`, `query_parse`, `json`, `from_json`, `bytes`, `from_bytes`. The `json/from_json` pair is the biggest remaining piece (full JSON parser + serializer) — candidate for its own concept. `format` requires a `{name}` template parser + map lookup. `query_build/parse` compose on top of `url_encode/decode` — small. `bytes/from_bytes` are str ↔ [int] round-trips — trivial.
