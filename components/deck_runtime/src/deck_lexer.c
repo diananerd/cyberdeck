@@ -328,13 +328,20 @@ static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
             return true;
         }
         if (c == '"') { advance(lx); break; }
-        if (c == '$' && peek_at(lx, 1) == '{') {
-            /* DL2 F21.7 — interpolation `${...}`. Track brace depth so
-             * `${ {x: 1} }` works, then continue scanning the string. */
+        if ((c == '$' && peek_at(lx, 1) == '{') || c == '{') {
+            /* Spec §2.6 — interpolation `{expr}` (canonical form). The
+             * legacy `${expr}` form is also accepted and normalised to
+             * `${...}` in the raw buffer so the parser's splitter sees
+             * a single shape. Track brace depth so `{ {k: v} }` works. */
             has_interp = true;
             if (kr + 2 >= sizeof(raw)) { set_error(lx, "string too long"); return false; }
-            raw[kr++] = (char)advance(lx); /* $ */
-            raw[kr++] = (char)advance(lx); /* { */
+            if (c == '$') {
+                raw[kr++] = (char)advance(lx); /* $ */
+                raw[kr++] = (char)advance(lx); /* { */
+            } else {
+                raw[kr++] = '$';
+                raw[kr++] = (char)advance(lx); /* { */
+            }
             int depth = 1;
             while (depth > 0) {
                 int ic = peek(lx);
@@ -360,6 +367,11 @@ static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
                 case '\\': out_c = '\\'; break;
                 case '"':  out_c = '"';  break;
                 case '0':  out_c = '\0'; break;
+                /* Spec §2.6 — `\{` and `\}` produce literal braces inside
+                 * interpolated strings (otherwise `{` would start an
+                 * interpolation block). */
+                case '{':  out_c = '{';  break;
+                case '}':  out_c = '}';  break;
                 default:
                     set_error(lx, "unknown escape sequence");
                     emit(out, TOK_ERROR, line, col);
