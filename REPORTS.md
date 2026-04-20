@@ -1977,3 +1977,28 @@ The fixture's intent (`length_acc` walking a 1000-element list to test TCO) is s
 - Consistent with concept #63's Optional↔tuple bridge on equality: `:some v` is now interchangeable across pipe, equality, and pattern-match, regardless of which path constructed it.
 
 **Why this matters (fixture-as-spec drift)**: the fixture was silently teaching wrapper-preserving semantics to every reader. If it had stayed green under a wrapper-preserving runtime, every Deck author reading the fixture would copy the wrong mental model, and every `|>?` chain authored downstream would expect the wrong output shape. Catching this via the combinatorial audit prevents that divergence from propagating.
+
+### Concept #66 — named call arguments (spec §6.6)
+
+**Drift**: spec §6.6 allows `fn(a: 7, b: 8)` — binding call args to parameters by name. `lang_fn_basic.deck:54` uses this. Parser only supported positional: `parse_expr_prec(0)` for each arg meant IDENT+COLON failed at "expected `)` after call args". Silent blocker for any fixture or annex using the spec §6.6 form.
+
+**Fix applied (parser + AST + runtime)**:
+
+- 2026-04-20 · layer 4 AST · `include/deck_ast.h` — `AST_CALL.call` payload gained `const char **arg_names`. NULL = all-positional (legacy); non-NULL = parallel array of length `args.len` with one name per arg. Spec §6.6 forbids mixing, so a given call is either all-positional or all-named.
+- 2026-04-20 · layer 4 parser · `src/deck_parser.c:parse_postfix` call branch extended:
+  * Before parsing each arg expression, peek for `IDENT COLON` — if matched, consume name + colon and mark as named.
+  * First arg sets the call's mode; subsequent args must match or raise "cannot mix positional and named args in one call (spec §6.6)".
+  * Names collected into local 16-entry buffer; arena-duped only when all-named (keeps positional-call path allocation-free).
+- 2026-04-20 · layer 4 runtime · `src/deck_interp.c:invoke_user_fn` — when `arg_names` is set, each arg's bind name is looked up by matching `arg_names[i]` against `fn.params[p]` (linear scan; n_params ≤ 16). Missing name → "fn '%s' has no parameter '%s' (spec §6.6)". Order doesn't matter: each arg binds to its named param.
+- 2026-04-20 · layer 4 runtime · `src/deck_interp.c:trap_tail_call` — when a tail-called fn receives named args, the evaluated values are reordered to match `fn.params[i]` positional order before landing in `pending_tc.args[]` (the trampoline rebinds positionally). Missing or duplicate names error out.
+- 2026-04-20 · layer 5 test · `t_named_call_args` — `fn sub (a, b) = a - b` called both as `sub(a: 10, b: 3)` (order matches params) and `sub(b: 3, a: 10)` (reversed). Both must produce 7. Registered in `CASES[]`.
+
+**Scope**:
+- User-defined fns only. Bare and dotted builtins (e.g. `math.abs(x: 5)`) currently ignore `arg_names` — builtins are positional in spec §3 (signatures like `math.min(a: int, b: int)` are documentation, not callable by name). A future concept may extend if needed; no fixture uses it.
+- `trap_tail_call` correctly handles named args for self-recursive and mutual tail calls — the name-to-slot reorder happens once per trap.
+
+**Verification**: `idf.py build` succeeds. `lang_fn_basic.deck:54` `add(a: 7, b: 8) == 15` now parses and evaluates correctly.
+
+**What's still deferred**: builtins (which don't need it per spec §3); partial application via named args (e.g. `sub(a: 10)` with `b` omitted — spec doesn't allow this either, per §6.6 "A `CallExpr` with both positional arguments and named arguments is a load error" which implies all params must be covered).
+
+**Why this matters**: named args become load-bearing the moment a fn has ≥ 3 params. The fixture already uses them with 2 params as a deliberate test; annexes with config forms / event handlers that take many fields would hit this much sooner. Pre-concept, every annex that followed spec §6.6 would fail to load on the first named call — silent blocker identical in shape to the `|>?` gap (concept #65) and the `list.reduce` arg order (concept #61).

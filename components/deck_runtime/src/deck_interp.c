@@ -6080,9 +6080,14 @@ static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
                 "fn call: env alloc failed");
         return NULL;
     }
-    /* Initial arg bindings — args come from the *caller* env. */
+    /* Initial arg bindings — args come from the *caller* env.
+     * Concept #66 — when `arg_names` is set, bind by name (spec §6.6).
+     * Parameter lookup is linear over n_params; fn arities are small
+     * (≤16) so this is fine. Missing or extra names are load-level
+     * errors reported here as runtime errors. */
     bool save_tail = c->tail_pos;
     c->tail_pos = false;
+    const char *const *arg_names = call_site->as.call.arg_names;
     for (uint32_t i = 0; i < argc; i++) {
         deck_value_t *v = deck_interp_run(c, env, call_site->as.call.args.items[i]);
         if (!v) {
@@ -6091,7 +6096,30 @@ static deck_value_t *invoke_user_fn(deck_interp_ctx_t *c, deck_env_t *env,
             deck_release(current);
             return NULL;
         }
-        deck_env_bind(c->arena, call_env, current->as.fn.params[i], v);
+        const char *bind_name;
+        if (arg_names) {
+            bind_name = NULL;
+            for (uint32_t p = 0; p < current->as.fn.n_params; p++) {
+                if (current->as.fn.params[p] == arg_names[i]) {
+                    bind_name = current->as.fn.params[p];
+                    break;
+                }
+            }
+            if (!bind_name) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                        "fn '%s' has no parameter '%s' (spec §6.6)",
+                        current->as.fn.name ? current->as.fn.name : "<anon>",
+                        arg_names[i]);
+                deck_release(v);
+                c->tail_pos = save_tail;
+                deck_env_release(call_env);
+                deck_release(current);
+                return NULL;
+            }
+        } else {
+            bind_name = current->as.fn.params[i];
+        }
+        deck_env_bind(c->arena, call_env, bind_name, v);
         deck_release(v);
     }
     c->tail_pos = save_tail;
@@ -6191,6 +6219,41 @@ static deck_value_t *trap_tail_call(deck_interp_ctx_t *c, deck_env_t *env,
         }
     }
     c->tail_pos = save_tail;
+
+    /* Concept #66 — if the call uses named args, reorder `evaluated[]`
+     * so pending_tc.args[i] lines up with fn.params[i] (the trampoline
+     * rebinds positionally). Mismatched / missing names error out. */
+    const char *const *arg_names = call_site->as.call.arg_names;
+    if (arg_names && fnv && fnv->type == DECK_T_FN) {
+        if (argc != fnv->as.fn.n_params) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                    "fn '%s': arity mismatch (got %u, want %u)",
+                    fnv->as.fn.name ? fnv->as.fn.name : "<anon>",
+                    (unsigned)argc, (unsigned)fnv->as.fn.n_params);
+            for (uint32_t i = 0; i < argc; i++) deck_release(evaluated[i]);
+            return NULL;
+        }
+        deck_value_t *reordered[DECK_INTERP_MAX_TC_ARGS] = {0};
+        for (uint32_t i = 0; i < argc; i++) {
+            int idx = -1;
+            for (uint32_t p = 0; p < fnv->as.fn.n_params; p++) {
+                if (fnv->as.fn.params[p] == arg_names[i]) { idx = (int)p; break; }
+            }
+            if (idx < 0 || reordered[idx] != NULL) {
+                set_err(c, DECK_RT_TYPE_MISMATCH, call_site->line, call_site->col,
+                        "fn '%s' has no parameter '%s' (spec §6.6)",
+                        fnv->as.fn.name ? fnv->as.fn.name : "<anon>",
+                        arg_names[i]);
+                for (uint32_t k = 0; k < argc; k++) {
+                    if (reordered[k]) deck_release(reordered[k]);
+                    else deck_release(evaluated[k]);
+                }
+                return NULL;
+            }
+            reordered[idx] = evaluated[i];
+        }
+        for (uint32_t i = 0; i < argc; i++) evaluated[i] = reordered[i];
+    }
 
     c->pending_tc.fn   = deck_retain(fnv);
     c->pending_tc.argc = argc;

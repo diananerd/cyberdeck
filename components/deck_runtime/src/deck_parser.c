@@ -547,17 +547,56 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
             advance(p);
             ast_node_t *c = mknode(p, AST_CALL); if (!c) return NULL;
             c->as.call.fn = head;
+            c->as.call.arg_names = NULL;
             ast_list_init(&c->as.call.args);
+            /* Concept #66 — spec §6.6: named call args `fn(a: 7, b: 8)`.
+             * A leading IDENT followed by COLON marks a named arg; the
+             * whole call must then be all-named (no mixing). We decide
+             * mode on the first arg and enforce consistency across the
+             * list. Collect names in a local buffer and copy into the
+             * arena only when all-named (saves an alloc for positional
+             * calls). */
+            const char *names_buf[16];
+            uint32_t    n_named = 0;
+            bool        all_named = false;
             if (!at(p, TOK_RPAREN)) {
                 for (;;) {
+                    const char *name = NULL;
+                    if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                        name = p->cur.text;
+                        advance(p);   /* ident */
+                        advance(p);   /* : */
+                    }
+                    /* First arg sets the mode. Subsequent args must match. */
+                    if (c->as.call.args.len == 0) {
+                        all_named = (name != NULL);
+                    } else if ((name != NULL) != all_named) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                                "cannot mix positional and named args in one call (spec §6.6)");
+                        return NULL;
+                    }
                     ast_node_t *arg = parse_expr_prec(p, 0);
                     if (!arg) return NULL;
                     ast_list_push(p->arena, &c->as.call.args, arg);
+                    if (all_named) {
+                        if (n_named >= 16) {
+                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                                    "too many named args (max 16)");
+                            return NULL;
+                        }
+                        names_buf[n_named++] = name;
+                    }
                     if (!at(p, TOK_COMMA)) break;
                     advance(p);
                 }
             }
             if (!expect(p, TOK_RPAREN, "expected ')' after call args")) return NULL;
+            if (all_named && n_named > 0) {
+                c->as.call.arg_names =
+                    deck_arena_memdup(p->arena, names_buf,
+                                      n_named * sizeof(char *));
+                if (!c->as.call.arg_names) return NULL;
+            }
             head = c;
             continue;
         }

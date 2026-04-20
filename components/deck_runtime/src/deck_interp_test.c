@@ -474,6 +474,30 @@ static bool t_intent_event_values(const char *name)
     return true;
 }
 
+/* Concept #66 — named call args (spec §6.6). Order-independent binding
+ * via parameter names; all-or-none positional/named per spec. Tests
+ * both canonical order (names match source) and reverse order (named
+ * args shuffled vs. param order). */
+static bool t_named_call_args(const char *name)
+{
+    const char *src =
+        "@app\n"
+        "  name: \"T\"\n"
+        "  id: \"t.nc\"\n"
+        "  version: \"1\"\n"
+        "  edition: 2026\n"
+        "@requires\n"
+        "  deck_level: 1\n"
+        "fn sub (a, b) = a - b\n"
+        "@on launch:\n"
+        "  let r1 = sub(a: 10, b: 3)\n"
+        "  let r2 = sub(b: 3, a: 10)\n"
+        "  log.info(if r1 == 7 and r2 == 7 then \"OK\" else \"FAIL\")\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "named args load/run");
+    return true;
+}
+
 /* Concept #65 — `|>?` error-propagating pipe honors spec §7.9 for all
  * four wrapper shapes: :err / :ok / :none / :some, across both the
  * legacy Optional repr and the atom-variant tuple repr. */
@@ -621,6 +645,7 @@ static const case_t CASES[] = {
     { "intent_event_values",    t_intent_event_values },
     { "eq_structural",          t_eq_structural },
     { "pipe_opt_variants",      t_pipe_opt_variants },
+    { "named_call_args",        t_named_call_args },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

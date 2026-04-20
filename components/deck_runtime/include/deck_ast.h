@@ -167,7 +167,12 @@ struct ast_node {
 
         struct { binop_t op; ast_node_t *lhs; ast_node_t *rhs; } binop;
         struct { unary_t op; ast_node_t *expr; }                 unary;
-        struct { ast_node_t *fn;  ast_list_t args; }             call;
+        struct { ast_node_t *fn;  ast_list_t args;
+                 /* Concept #66 — named-arg mode (spec §6.6). When
+                  * `arg_names` is non-NULL it's a parallel array of
+                  * length args.len; positional and named cannot mix
+                  * (load error per spec). NULL = all-positional. */
+                 const char **arg_names; }                        call;
         struct { ast_node_t *obj; const char *field; }           dot;
         struct { ast_node_t *cond; ast_node_t *then_; ast_node_t *else_; } if_;
         struct { const char *name; ast_node_t *value; ast_node_t *body; }  let;
