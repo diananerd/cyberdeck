@@ -1319,3 +1319,23 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why unify on [int] output even when input was `DECK_T_BYTES`**: the two representations coexist for historical reasons (the dedicated `DECK_T_BYTES` type pre-dates the list-literal byte shape). `os_text.deck` compares with `==` against `[0x48, 0x69]` — expects list shape. Having every byte-producer return `DECK_T_LIST` of ints means literal equality works without `bytes_to_list` conversion at the call site. A future concept could add a `bytes.to_buffer([int]) -> DECK_T_BYTES` if a caller genuinely needs the packed form.
 
 **Running tally**: `bytes.*` now at 8/8. Seven §3 capabilities complete: `text` (36/36), `time` (18/18), `nvs` (13/13), `fs` (10/10), `math` (33/33), `system.info` (11/11), `bytes` (8/8). Every DL1-mandatory `@builtin` surface from §3 is at 100% builtin coverage.
+
+### Concept #41 — list.* completeness pass 1 (spec §11.2)
+
+**Drift**: runtime had 7 list methods (len/head/tail/get/map/filter/reduce); spec §11.2 declares ~35. Every annex uses methods runtime doesn't have — `list.last`, `list.contains`, `list.any/all`, `list.find`, `list.append`, etc.
+
+**Fix applied (layer 4)**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` — 17 new builtins plus a shared `values_equal` helper for structural equality (used by `list.contains`; interning assumption lets string/atom compare via pointer equality).
+  * **Accessors**: `list.last` (returns `T?`).
+  * **Builders**: `list.append(xs, item)`, `list.prepend(item, xs)`, `list.reverse(xs)`, `list.take(xs, n)`, `list.drop(xs, n)` — all return new lists; inputs are immutable (runtime convention).
+  * **Predicates with fn arg**: `list.find(xs, fn)`, `list.find_index(xs, fn)`, `list.count_where(xs, fn)`, `list.any(xs, fn)`, `list.all(xs, fn)`, `list.none(xs, fn)`. All use the existing `call_fn_value_c` to invoke user-provided functions.
+  * **Value-based**: `list.contains(xs, item)` uses the new `values_equal` helper.
+  * **Numeric aggregates**: `list.sum` (int), `list.sum_f` (float; also accepts ints), `list.avg` (returns `float?` since empty-list has no average).
+  * **Restructuring**: `list.flatten([[T]]) -> [T]`.
+
+**Deferred**: `list.sort` / `sort_by` / `sort_desc`, `list.group_by`, `list.chunk`, `list.window`, `list.zip` / `zip_with`, `list.flat_map`, `list.unique` / `unique_by`, `list.partition`, `list.tabulate`, `list.scan`, `list.enumerate`, `list.interleave`, `list.min_by` / `max_by`, `list.sort_by_str` / `sort_by_desc`. Most of these are ~10 lines each; split into a pass 2 concept.
+
+**Why the shared `values_equal`**: three use cases (`list.contains`, future `list.unique`, future `map.has`) need structural equality on arbitrary runtime values. The existing `do_compare` handles the `==` binop but short-circuits on mismatched types and doesn't recurse into lists / tuples. Pulling out a dedicated recursive helper avoids duplicating the logic.
+
+**Running tally**: `list.*` now at 24/~35. Spec §11.2 mostly covered; pass 2 will close sort/zip/group/etc.

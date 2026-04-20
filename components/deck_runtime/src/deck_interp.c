@@ -722,6 +722,294 @@ static deck_value_t *b_list_reduce(deck_value_t **args, uint32_t n, deck_interp_
     return acc;
 }
 
+/* Structural equality — used by list.contains, list.unique, map.has, etc.
+ * Strings and atoms are interned, so pointer equality suffices.
+ * Numeric mixed (int vs float) compares by promoted double value. */
+static bool values_equal(deck_value_t *a, deck_value_t *b)
+{
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->type != b->type) {
+        if ((a->type == DECK_T_INT || a->type == DECK_T_FLOAT) &&
+            (b->type == DECK_T_INT || b->type == DECK_T_FLOAT)) {
+            double x = a->type == DECK_T_INT ? (double)a->as.i : a->as.f;
+            double y = b->type == DECK_T_INT ? (double)b->as.i : b->as.f;
+            return x == y;
+        }
+        return false;
+    }
+    switch (a->type) {
+        case DECK_T_INT:   return a->as.i == b->as.i;
+        case DECK_T_FLOAT: return a->as.f == b->as.f;
+        case DECK_T_STR:   return a->as.s.ptr == b->as.s.ptr;
+        case DECK_T_ATOM:  return a->as.atom == b->as.atom;
+        case DECK_T_BOOL:  return a->as.b == b->as.b;
+        case DECK_T_UNIT:  return true;
+        case DECK_T_LIST: {
+            if (a->as.list.len != b->as.list.len) return false;
+            for (uint32_t i = 0; i < a->as.list.len; i++)
+                if (!values_equal(a->as.list.items[i], b->as.list.items[i])) return false;
+            return true;
+        }
+        case DECK_T_TUPLE: {
+            if (a->as.tuple.arity != b->as.tuple.arity) return false;
+            for (uint32_t i = 0; i < a->as.tuple.arity; i++)
+                if (!values_equal(a->as.tuple.items[i], b->as.tuple.items[i])) return false;
+            return true;
+        }
+        default: return a == b;
+    }
+}
+
+/* ---- list.* completeness (concept #41, spec §11.2) ---- */
+
+static deck_value_t *b_list_last(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.last(xs)"); return NULL; }
+    if (args[0]->as.list.len == 0) return deck_new_none();
+    return deck_new_some(args[0]->as.list.items[args[0]->as.list.len - 1]);
+}
+
+static deck_value_t *b_list_append(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.append(xs, item)"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    deck_value_t *out = deck_new_list(L + 1);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) deck_list_push(out, args[0]->as.list.items[i]);
+    deck_list_push(out, args[1]);
+    return out;
+}
+
+static deck_value_t *b_list_prepend(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[1] || args[1]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.prepend(item, xs)"); return NULL; }
+    uint32_t L = args[1]->as.list.len;
+    deck_value_t *out = deck_new_list(L + 1);
+    if (!out) return NULL;
+    deck_list_push(out, args[0]);
+    for (uint32_t i = 0; i < L; i++) deck_list_push(out, args[1]->as.list.items[i]);
+    return out;
+}
+
+static deck_value_t *b_list_reverse(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.reverse(xs)"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) deck_list_push(out, args[0]->as.list.items[L - 1 - i]);
+    return out;
+}
+
+static deck_value_t *b_list_take(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.take(xs, int)"); return NULL;
+    }
+    int64_t k = args[1]->as.i;
+    uint32_t L = args[0]->as.list.len;
+    if (k < 0) k = 0;
+    if ((uint64_t)k > L) k = L;
+    deck_value_t *out = deck_new_list((uint32_t)k);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < (uint32_t)k; i++) deck_list_push(out, args[0]->as.list.items[i]);
+    return out;
+}
+
+static deck_value_t *b_list_drop(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.drop(xs, int)"); return NULL;
+    }
+    int64_t k = args[1]->as.i;
+    uint32_t L = args[0]->as.list.len;
+    if (k < 0) k = 0;
+    if ((uint64_t)k > L) k = L;
+    deck_value_t *out = deck_new_list(L - (uint32_t)k);
+    if (!out) return NULL;
+    for (uint32_t i = (uint32_t)k; i < L; i++) deck_list_push(out, args[0]->as.list.items[i]);
+    return out;
+}
+
+static deck_value_t *b_list_contains(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_LIST) return deck_retain(deck_false());
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        if (values_equal(args[0]->as.list.items[i], args[1])) return deck_retain(deck_true());
+    }
+    return deck_retain(deck_false());
+}
+
+static deck_value_t *b_list_find(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.find(xs, fn)"); return NULL;
+    }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) return deck_new_some(args[0]->as.list.items[i]);
+    }
+    return deck_new_none();
+}
+
+static deck_value_t *b_list_find_index(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.find_index(xs, fn)"); return NULL;
+    }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) return deck_new_some(deck_new_int((int64_t)i));
+    }
+    return deck_new_none();
+}
+
+static deck_value_t *b_list_count_where(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.count_where(xs, fn)"); return NULL;
+    }
+    int64_t cnt = 0;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        if (deck_is_truthy(r)) cnt++;
+        deck_release(r);
+    }
+    return deck_new_int(cnt);
+}
+
+static deck_value_t *b_list_any(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.any(xs, fn)"); return NULL;
+    }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) return deck_retain(deck_true());
+    }
+    return deck_retain(deck_false());
+}
+
+static deck_value_t *b_list_all(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.all(xs, fn)"); return NULL;
+    }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (!keep) return deck_retain(deck_false());
+    }
+    return deck_retain(deck_true());
+}
+
+static deck_value_t *b_list_none(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.none(xs, fn)"); return NULL;
+    }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) return deck_retain(deck_false());
+    }
+    return deck_retain(deck_true());
+}
+
+static deck_value_t *b_list_sum(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sum([int])"); return NULL; }
+    int64_t s = 0;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        if (!v || v->type != DECK_T_INT) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sum: non-int at %u", (unsigned)i); return NULL; }
+        s += v->as.i;
+    }
+    return deck_new_int(s);
+}
+
+static deck_value_t *b_list_sum_f(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sum_f([float])"); return NULL; }
+    double s = 0;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        if (!v || (v->type != DECK_T_FLOAT && v->type != DECK_T_INT)) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sum_f: non-number at %u", (unsigned)i); return NULL; }
+        s += v->type == DECK_T_INT ? (double)v->as.i : v->as.f;
+    }
+    return deck_new_float(s);
+}
+
+static deck_value_t *b_list_avg(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.avg([float])"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    if (L == 0) return deck_new_none();
+    double s = 0;
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        if (!v || (v->type != DECK_T_FLOAT && v->type != DECK_T_INT)) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.avg: non-number at %u", (unsigned)i); return NULL; }
+        s += v->type == DECK_T_INT ? (double)v->as.i : v->as.f;
+    }
+    return deck_new_some(deck_new_float(s / L));
+}
+
+static deck_value_t *b_list_flatten(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.flatten([[T]])"); return NULL; }
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        if (!v || v->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.flatten: non-list at %u", (unsigned)i); return NULL; }
+        total += v->as.list.len;
+    }
+    deck_value_t *out = deck_new_list(total);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *sub = args[0]->as.list.items[i];
+        for (uint32_t j = 0; j < sub->as.list.len; j++) deck_list_push(out, sub->as.list.items[j]);
+    }
+    return out;
+}
+
 /* ---- map.* (DL2 F21.6) ---- */
 static deck_value_t *b_map_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -3539,6 +3827,25 @@ static const builtin_t BUILTINS[] = {
     { "list.map",               b_list_map,          2, 2 },
     { "list.filter",            b_list_filter,       2, 2 },
     { "list.reduce",            b_list_reduce,       3, 3 },
+    /* Concept #41 — §11.2 list ops pass 1. Deferred: sort/group_by/chunk/
+     * window/zip/flat_map/unique/partition/tabulate/interleave/sort_*. */
+    { "list.last",              b_list_last,         1, 1 },
+    { "list.append",            b_list_append,       2, 2 },
+    { "list.prepend",           b_list_prepend,      2, 2 },
+    { "list.reverse",           b_list_reverse,      1, 1 },
+    { "list.take",              b_list_take,         2, 2 },
+    { "list.drop",              b_list_drop,         2, 2 },
+    { "list.contains",          b_list_contains,     2, 2 },
+    { "list.find",              b_list_find,         2, 2 },
+    { "list.find_index",        b_list_find_index,   2, 2 },
+    { "list.count_where",       b_list_count_where,  2, 2 },
+    { "list.any",               b_list_any,          2, 2 },
+    { "list.all",               b_list_all,          2, 2 },
+    { "list.none",              b_list_none,         2, 2 },
+    { "list.sum",               b_list_sum,          1, 1 },
+    { "list.sum_f",             b_list_sum_f,        1, 1 },
+    { "list.avg",               b_list_avg,          1, 1 },
+    { "list.flatten",           b_list_flatten,      1, 1 },
 
     /* map (DL2 F21.6) */
     { "map.len",                b_map_len,           1, 1 },
