@@ -4053,6 +4053,157 @@ static deck_value_t *b_asset_path(deck_value_t **args, uint32_t n, deck_interp_c
     return deck_new_none();
 }
 
+/* ---- Concept #46 — declarative content evaluator ----
+ *
+ * Walks an AST_CONTENT_BLOCK emitted by the parser (concept #45) and
+ * builds a DVC tree in s_bui_arena, then encodes + pushes to the bridge.
+ * Called at state entry (initial state in app_load, then on every
+ * machine.send). This is the event-driven mirror of bridge.ui.* — apps
+ * declare intent in `content = …` and the runtime produces the DVC tree
+ * on every transition.
+ *
+ * Currently handled item kinds:
+ *   trigger "label" [-> action_expr]        → DVC_TRIGGER + :label attr
+ *   navigate "label" [-> action_expr]       → DVC_NAVIGATE + :label attr
+ *   label <expr>                            → DVC_LABEL + :value attr (str)
+ *   rich_text <expr>                        → DVC_RICH_TEXT + :value
+ *   loading                                 → DVC_LOADING
+ *   error <expr>                            → DVC_TEXT  (error message)
+ *   raw <expr>                              → DVC_LABEL from expr.to_str
+ *   other kinds                             → silently skipped
+ *
+ * Intent binding is deferred (concept #47): triggers need an intent_id
+ * that the bridge sends back on tap, which maps to Machine.send(:event).
+ * Today the triggers render but the user can't interact with them.  */
+
+static deck_value_t *content_eval_expr(deck_interp_ctx_t *c, deck_env_t *env, ast_node_t *expr)
+{
+    if (!expr) return NULL;
+    return deck_interp_run(c, env, expr);
+}
+
+static const char *content_value_as_str(deck_value_t *v, char *buf, size_t cap)
+{
+    if (!v) return "";
+    switch (v->type) {
+        case DECK_T_STR: {
+            uint32_t L = v->as.s.len < cap - 1 ? v->as.s.len : (uint32_t)(cap - 1);
+            memcpy(buf, v->as.s.ptr, L);
+            buf[L] = 0;
+            return buf;
+        }
+        case DECK_T_INT:   snprintf(buf, cap, "%lld", (long long)v->as.i); return buf;
+        case DECK_T_FLOAT: snprintf(buf, cap, "%g", v->as.f); return buf;
+        case DECK_T_BOOL:  return v->as.b ? "true" : "false";
+        case DECK_T_ATOM:  snprintf(buf, cap, ":%s", v->as.atom); return buf;
+        case DECK_T_UNIT:  return "unit";
+        default:           return "";
+    }
+}
+
+static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *block)
+{
+    if (!block || block->kind != AST_CONTENT_BLOCK) return;
+    bui_ensure_init();
+    deck_dvc_node_t *root = deck_dvc_node_new(&s_bui_arena, DVC_FLOW);
+    if (!root) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "content: root alloc"); return; }
+
+    for (uint32_t i = 0; i < block->as.content_block.items.len; i++) {
+        const ast_node_t *ci = block->as.content_block.items.items[i];
+        if (!ci || ci->kind != AST_CONTENT_ITEM) continue;
+        const char *kind = ci->as.content_item.kind;
+        const char *label = ci->as.content_item.label;
+        ast_node_t *action = ci->as.content_item.action_expr;
+        ast_node_t *data   = ci->as.content_item.data_expr;
+        deck_dvc_node_t *node = NULL;
+
+        if (kind && strcmp(kind, "trigger") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_TRIGGER);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+        } else if (kind && strcmp(kind, "navigate") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_NAVIGATE);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+        } else if (kind && strcmp(kind, "loading") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
+        } else if (kind && strcmp(kind, "label") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+            if (node) {
+                char buf[128];
+                const char *s = NULL;
+                if (action) {
+                    deck_value_t *v = content_eval_expr(c, env, action);
+                    if (v) { s = content_value_as_str(v, buf, sizeof(buf)); deck_release(v); }
+                }
+                if (!s && label) s = label;
+                if (s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+            }
+        } else if (kind && strcmp(kind, "rich_text") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_RICH_TEXT);
+            if (node && data) {
+                deck_value_t *v = content_eval_expr(c, env, data);
+                if (v) {
+                    char buf[256];
+                    const char *s = content_value_as_str(v, buf, sizeof(buf));
+                    if (s && *s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+                    deck_release(v);
+                }
+            }
+        } else if (kind && strcmp(kind, "error") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+            if (node && action) {
+                deck_value_t *v = content_eval_expr(c, env, action);
+                if (v) {
+                    char buf[256];
+                    const char *s = content_value_as_str(v, buf, sizeof(buf));
+                    if (s && *s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+                    deck_release(v);
+                }
+            }
+        } else if (kind && strcmp(kind, "raw") == 0) {
+            /* Bare expression — render as DVC_LABEL from its string form. */
+            if (action) {
+                deck_value_t *v = content_eval_expr(c, env, action);
+                if (v) {
+                    node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                    if (node) {
+                        char buf[128];
+                        const char *s = content_value_as_str(v, buf, sizeof(buf));
+                        if (s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+                    }
+                    deck_release(v);
+                }
+            }
+        }
+        /* Other kinds (list/group/form/media/markdown…) skipped in pass 1. */
+
+        if (node) deck_dvc_add_child(&s_bui_arena, root, node);
+    }
+
+    /* Encode + push. Mirrors bridge.ui.render. */
+    size_t need = 0;
+    (void)deck_dvc_encode(root, NULL, 0, &need);
+    if (need == 0) { bui_reset(); return; }
+    uint8_t *buf = deck_arena_alloc(&s_bui_arena, need);
+    if (!buf) { bui_reset(); return; }
+    size_t wrote = 0;
+    if (deck_dvc_encode(root, buf, need, &wrote) != DECK_RT_OK) { bui_reset(); return; }
+    deck_sdi_bridge_ui_push_snapshot(buf, wrote);
+    bui_reset();
+}
+
+/* Helper — locate the content block in a state, render it with the given env. */
+static void content_render_state(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *state)
+{
+    if (!state || state->kind != AST_STATE) return;
+    for (uint32_t i = 0; i < state->as.state.hooks.len; i++) {
+        const ast_node_t *h = state->as.state.hooks.items[i];
+        if (h && h->kind == AST_CONTENT_BLOCK) {
+            content_render(c, env, h);
+            return;
+        }
+    }
+}
+
 /* bridge.ui.render(root_handle) — encode the tree rooted at `root_handle`,
  * push it via the SDI, then reset the render arena. Returns unit. */
 static deck_value_t *b_bui_render(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5548,6 +5699,8 @@ static deck_err_t run_machine(const ast_node_t *machine,
     if (machine->as.machine.transitions.len > 0) {
         const char *ignored = NULL;
         run_state_hooks(c, state, "enter", &ignored);
+        /* Concept #46 — render the initial state's declarative content. */
+        content_render_state(c, c->global, state);
         /* The machine now sits waiting for send() calls. The caller
          * (deck_runtime_app_load) records app->machine_state separately. */
         return c->err;
@@ -5766,6 +5919,10 @@ static deck_value_t *b_machine_send(deck_value_t **args, uint32_t n, deck_interp
         const char *ignored = NULL;
         run_state_hooks(c, dst_state, "enter", &ignored);
         if (c->err != DECK_RT_OK) { deck_env_release(bind_env); return NULL; }
+        /* Concept #46 — re-render the destination state's declarative
+         * content after on_enter runs, so apps see the state's UI on
+         * every transition. */
+        content_render_state(c, bind_env, dst_state);
     }
 
     if (match_tn->as.machine_transition.after_body) {

@@ -1453,3 +1453,41 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 **Scope note**: the parser is now rich-ish but still simplified — options like `badge:` / `message:` / the typed body of `list items \n item x -> …` are captured at token level but not separated into structured fields. Concept #46 will iteratively add those as each matters for a real annex. Keeping the AST shape flexible now (kind-as-string, raw action_expr) means #46 can evolve without schema churn.
 
 **A→B note**: the A→B bug here was "annex state machines parse successfully → their content renders". The first half was true (concept #24). The second half quietly was not — every `content =` block silently went to the void. This concept converts "parsed successfully" into "parsed into runnable AST," which is the prerequisite for the render half to become true in concept #46.
+
+### Concept #46 — declarative content walker → DVC push (spec §8.2 / §12)
+
+**Drift**: concept #45 stored `content = …` as structured AST; there was no walker to turn that AST into a DVC tree for the bridge. Apps using declarative content rendered nothing at runtime — every annex's UI was still dead.
+
+**Fix applied (runtime only)**:
+
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * `content_render(c, env, block)` — walks `AST_CONTENT_BLOCK` items, emits DVC nodes per kind into the existing `s_bui_arena`, encodes, pushes via `deck_sdi_bridge_ui_push_snapshot`. Reuses every piece of the bridge.ui.* plumbing that the pre-session scaffold already laid.
+  * Item-kind → DVC mapping (pass 1, conservative):
+    - `trigger "label"` → `DVC_TRIGGER` with `:label` attr
+    - `navigate "label"` → `DVC_NAVIGATE` with `:label` attr
+    - `loading` → `DVC_LOADING` (no attrs)
+    - `label <expr>` → `DVC_LABEL` with value stringified from expr or literal
+    - `rich_text <expr>` → `DVC_RICH_TEXT` with value
+    - `error <expr>` → `DVC_LABEL` (error-reason surface — distinct styling is bridge concern)
+    - `raw <expr>` → `DVC_LABEL` from value-to-str
+    - other kinds (list/group/form/media/markdown) — silently skipped in pass 1
+  * `content_value_as_str` helper — coerces any value type into a readable string for LABEL/RICH_TEXT (str/int/float/bool/atom/unit). Caps at 128 bytes to match existing label conventions.
+  * `content_render_state(c, env, state)` — finds the state's `AST_CONTENT_BLOCK` among `state.hooks` and renders it.
+  * Hooked into both state-entry moments:
+    - `run_machine` (event-driven branch): after the initial state's `on enter` runs, the initial content is rendered — first frame the user sees.
+    - `machine.send`: after the destination state's `on enter` runs, the new content is rendered — every transition redraws.
+
+**What this unblocks**: with concept #38 (payload binding on `@on`), #44 (machine transition dispatch), and #46 (content re-render), an event-driven annex app now runs end-to-end at the UI level:
+- User taps screen → bridge emits intent → runtime receives event.
+- `@on` handler fires, binds payload, calls `Machine.send(:evt, payload)`.
+- Transition runs when/before/state-change/on_enter/after.
+- New state's content is walked into a DVC tree and pushed to the bridge.
+- Bridge decodes DVC and re-lays out the screen.
+
+**What's still missing for full interactivity**:
+- **Intent binding** (concept #47 likely): triggers render but the bridge needs to know which event to send back on tap. Requires an intent-id table `intent_id → event_name + payload_builder`, and the bridge side wiring to call `deck_runtime_app_dispatch` or `machine.send` on tap. Without this, triggers are visible but non-interactive.
+- **List iteration** (concept #48 likely): `list posts \n item p -> ...` needs the walker to evaluate `posts`, iterate, materialize each item with bindings in scope. Concept #45's parser absorbs the nested block but doesn't unpack it.
+- **Form + field aggregation** (concept #49 likely): `form on submit ->` with nested typed fields.
+- **Reactive re-render on stream emission** — `@stream` integration.
+
+**A→B note**: combined with concepts #38 + #44 + #45, this concept closes the "annex apps declare content, runtime renders it, transitions redraw" story at the coarse level. Every annex's primary state can now render a minimal UI. Fine-grained interactivity depends on the intent-id wiring (#47).
