@@ -98,6 +98,7 @@ static ast_node_t *parse_match(deck_parser_t *p);
 static ast_node_t *parse_if(deck_parser_t *p);
 static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head);
 static ast_node_t *parse_fn_decl(deck_parser_t *p);
+static bool        skip_type_annotation(deck_parser_t *p);
 
 static ast_node_t *mknode(deck_parser_t *p, ast_kind_t k)
 {
@@ -824,6 +825,13 @@ static ast_node_t *parse_let_stmt(deck_parser_t *p)
     if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected name after 'let'"); return NULL; }
     n->as.let.name = p->cur.text;
     advance(p);
+    /* Spec §5.1 — optional `: Type` annotation on let bindings. The
+     * runtime is dynamically typed; we parse-and-discard the annotation
+     * so the author's documentation survives the parser. */
+    if (at(p, TOK_COLON)) {
+        advance(p);
+        if (!skip_type_annotation(p)) return NULL;
+    }
     if (!expect(p, TOK_ASSIGN, "expected '=' in let binding")) return NULL;
     n->as.let.value = parse_expr_prec(p, 0); if (!n->as.let.value) return NULL;
     n->as.let.body  = NULL; /* body attached by enclosing suite */

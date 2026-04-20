@@ -398,12 +398,42 @@ static void stage4_capability_bind(deck_loader_t *l)
 
 static bool match_has_wildcard(const ast_node_t *m)
 {
+    /* First pass: any arm with a top-level wildcard / ident (catch-all)
+     * or with NO guard covering the entire variant space is "exhaustive"
+     * enough for the current loader's purposes. */
+    bool has_some_with_binder = false, has_none = false;
+    bool has_ok = false, has_err = false;
+    bool has_true = false, has_false = false;
     for (uint32_t i = 0; i < m->as.match.n_arms; i++) {
         const ast_node_t *pat = m->as.match.arms[i].pattern;
-        if (pat && pat->kind == AST_PAT_WILD) return true;
-        /* A bare ident pattern (binds any value) also catches all. */
-        if (pat && pat->kind == AST_PAT_IDENT) return true;
+        const ast_node_t *guard = m->as.match.arms[i].guard;
+        if (!pat) continue;
+        /* Any unguarded catch-all arm makes the match exhaustive. */
+        if (!guard) {
+            if (pat->kind == AST_PAT_WILD) return true;
+            if (pat->kind == AST_PAT_IDENT) return true;
+        }
+        /* Spec §8 — Optional `:some x` + `:none`, Result `:ok x` + `:err x`,
+         * and full `true`/`false` coverage are exhaustive without wildcard. */
+        if (pat->kind == AST_PAT_VARIANT && pat->as.pat_variant.ctor) {
+            const char *c = pat->as.pat_variant.ctor;
+            if (strcmp(c, "some") == 0) has_some_with_binder = true;
+            else if (strcmp(c, "ok") == 0) has_ok = true;
+            else if (strcmp(c, "err") == 0) has_err = true;
+        }
+        if (pat->kind == AST_PAT_LIT && pat->as.pat_lit) {
+            const ast_node_t *lit = pat->as.pat_lit;
+            if (lit->kind == AST_LIT_ATOM && lit->as.s) {
+                if (strcmp(lit->as.s, "none") == 0) has_none = true;
+            }
+            if (lit->kind == AST_LIT_BOOL) {
+                if (lit->as.b) has_true = true; else has_false = true;
+            }
+        }
     }
+    if (has_some_with_binder && has_none) return true;
+    if (has_ok && has_err) return true;
+    if (has_true && has_false) return true;
     return false;
 }
 
