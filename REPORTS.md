@@ -1780,3 +1780,58 @@ trigger app.name -> do
 ```
 
 …all of these run end-to-end on the device now.
+
+### Session #5 — 2026-04-19 — P0 test-infrastructure audit
+
+User directive: "audit full real world and production ready in all types of tests, test coverage, not flaky or bypasses". Sub-agent produced a detailed audit; P0 findings addressed this session.
+
+**Fixtures rewritten from unconditional sentinels to real gates** (REPORTS.md had flagged these as A→B bypasses):
+- `app_machine.deck` — sentinel now fires from `ready.on_enter`; only reached if `boot.on_enter` + transition + state change all succeed. run_machine aborts on any hook error, so a broken chain never emits OK.
+- `app_flow.deck` — sentinel in final step only; per-step logs for visual order audit.
+- `app_machine_hooks.deck` — sentinel in `ready.on_enter` (end of hook chain); each hook logs a distinct line.
+- `app_bridge_ui.deck` — replaced legacy `bridge.ui.*` imperative builders with spec-canonical declarative `content =`. Sentinel in final state's on_enter; only reached if content_render didn't crash on intermediate state.
+
+**Fuzz/pressure assertions tightened**:
+- Phase-1 random garbage: **must** yield `ok_cnt == 0`. Previously lumped p1+p2 counts and couldn't distinguish.
+- Heap pressure: `rc` must be a pressure-related error (NO_MEMORY or PARSE_ERROR). Previously accepted any non-OK rc.
+
+**Spec-level parser gaps closed** (closed multiple silent-parse-failure paths):
+- Lexer: added spec §2.2 comment syntax `--` (single-line) and `---` (multi-line). Previously only `#` was accepted; 42 of 80 fixtures used `--` and silently failed at the lexer.
+- Lexer: added spec §2.6 bare `{expr}` interpolation (was only `\${expr}`), plus `\{` / `\}` literal-brace escapes.
+- Lexer + parser: binop line continuation. A line whose first non-space token is `&&` / `||` / `++` / `|>` / `and` / `or` is absorbed as a continuation of the previous expression, not a top-level statement.
+- Parser: `TOK_KW_SEND` accepted as field name after `.` so `Machine.send(:e)` / `machine.send(:e)` parse.
+- Parser: inline trailing `[on] [event_atom]? -> action` after options, so `form on submit -> …` / `toggle :x state: s on -> …` parse without `on` short-circuiting the expression parser.
+- Parser: `err_missing_colon` fixture wording restored to spec-canonical "app field name".
+
+**Runtime gaps closed**:
+- Sequential @machine now renders declarative `content =` on each state entry (parity with event-driven branch). Previously dropped content on sequential machines.
+
+**New C-side test coverage**:
+- Parser: 3 new cases over AST_CONTENT_ITEM shapes (inline option bag, tail-arrow label/action shift, `on [atom]? ->` form). AST printer extended to emit structured output for content_block / content_item so the cases are round-trippable. Parser suite grew 61 → 64, all PASS.
+- Interp: 3 new end-to-end tests for concepts #58/#59/#60 via `deck_runtime_app_intent_v` — captured-action dispatch (non-Machine.send action fires), scalar `event.value` delivery, keyed `event.values` delivery. Each asserts a Deck-side NVS side-effect from C. Interp suite grew 48 → 51, all PASS.
+
+**Hardware results (commit 40a10a1)**:
+- parser selftest: **64/64 PASS** (was 60/61 — 1 fail resolved, 3 new cases added)
+- interp selftest: **51/51 PASS** (was 47/48 — migration fix + 3 new cases)
+- loader, lexer, runtime selftests: all PASS
+- conformance suites: **5/5 PASS** (was 3/5)
+- conformance stress: **15/15 PASS, 0 outliers** (was 14/15)
+- .deck fixtures: **47/80 PASS** (was 23/80 pre-lexer-fix; +24 unlocked)
+
+**Deferred / still failing (33 .deck fixtures)**:
+The remaining fixtures hit a variety of deeper parser gaps that each require dedicated concept passes:
+- Triple-quoted multi-line strings (`"""…"""`).
+- Complex match arms: `expected '->' in match arm`, `expected pattern`, `expected newline after match scrutinee` — patterns like `:some x when …` or multi-arm with guards and nested destructure.
+- Function body forms: some `lang.fn.*` fail on `expected 'else' in if expression` (conditional inside fn body hits parser path that requires `else`).
+- `lang.lambda.inline`, `lang.tco.deep`, `lang.list.basic`, `lang.tuple.basic`, `lang.map.basic` — various arity / pattern / let issues not yet triaged.
+
+These are honest reds (tests describe behavior the runtime doesn't yet fully implement), not silent passes. The conformance harness now reports truth: what works (47) and what doesn't (33). Each failing fixture becomes a targeted layer-4 task for future sessions.
+
+**Commits in this session**:
+- `00ce250` — P0 test audit: fixture bypass fixes + lexer/parser/runtime spec gaps
+- `8eafeda` — concept #58/#59/#60 unit tests + `on [atom]? ->` tolerance
+- `3322ff1` — parser tests for concept #57/#58 + err wording fix
+- `74aaf1e` — fix migration test (nvs.set spec arity)
+- `854b4ab` — heap-pressure stress: accept parse_error too
+- `3994c9b` — lexer+parser: binop line continuation
+- `40a10a1` — lexer: bare `{expr}` + `\{` / `\}` escapes
