@@ -13,14 +13,14 @@
 --   - `ok(42)` / `err("boom")` as constructor fns — non-spec; §3.7
 --     uses atom variants :ok/:err.
 --   - `!is_int` — non-spec negation (§7.3 is `not`).
---   - list.reduce signature: (xs, fn, init) in old; §11.2 is
---     (xs, init, fn) — order matters.
+--   - list.reduce signature: spec §11.2 is (xs, init, fn) — order
+--     matters. Concept #61 aligned runtime to spec.
 @on launch:
   -- ---- list ops (§11.2) ----
   let xs      = [1, 2, 3, 4, 5]
   let doubled = list.map(xs, x -> x * 2)
   let evens   = list.filter(xs, x -> x % 2 == 0)
-  let sum     = list.reduce(xs, (acc, n) -> acc + n, 0)
+  let sum     = list.reduce(xs, 0, (acc, n) -> acc + n)
 
   let ok_list = list.len(doubled) == 5
            and doubled == [2, 4, 6, 8, 10]

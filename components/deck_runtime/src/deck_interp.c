@@ -741,22 +741,50 @@ static deck_value_t *b_list_filter(deck_value_t **args, uint32_t n, deck_interp_
     }
     return out;
 }
+/* Spec §11.2: list.reduce(xs, init, fn) — init second, fn third.
+ * Concept #61: runtime previously had (xs, fn, init); migrated to spec
+ * canonical to close a three-way drift (spec/runtime/fixture). */
 static deck_value_t *b_list_reduce(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
     if (!args[0] || args[0]->type != DECK_T_LIST ||
-        !args[1] || args[1]->type != DECK_T_FN || !args[2]) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.reduce(list, fn, init)"); return NULL;
+        !args[1] ||
+        !args[2] || args[2]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.reduce(xs, init, fn)"); return NULL;
     }
-    deck_value_t *acc = deck_retain(args[2]);
+    deck_value_t *acc = deck_retain(args[1]);
     for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
         deck_value_t *callargs[2] = { acc, args[0]->as.list.items[i] };
-        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 2);
+        deck_value_t *r = call_fn_value_c(c, args[2], callargs, 2);
         deck_release(acc);
         if (!r) return NULL;
         acc = r;
     }
     return acc;
+}
+
+/* Spec §11.2: list.scan(xs, init, fn) -> [U]. Like reduce but emits the
+ * accumulator after each step (excluding init), giving a running fold. */
+static deck_value_t *b_list_scan(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] ||
+        !args[2] || args[2]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.scan(xs, init, fn)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.list.len);
+    deck_value_t *acc = deck_retain(args[1]);
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *callargs[2] = { acc, args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[2], callargs, 2);
+        deck_release(acc);
+        if (!r) { deck_release(out); return NULL; }
+        acc = r;
+        deck_list_push(out, acc);
+    }
+    deck_release(acc);
+    return out;
 }
 
 /* Structural equality — used by list.contains, list.unique, map.has, etc.
@@ -4890,6 +4918,7 @@ static const builtin_t BUILTINS[] = {
     { "list.map",               b_list_map,          2, 2 },
     { "list.filter",            b_list_filter,       2, 2 },
     { "list.reduce",            b_list_reduce,       3, 3 },
+    { "list.scan",              b_list_scan,         3, 3 },
     /* Concept #41 — §11.2 list ops pass 1. Deferred: sort/group_by/chunk/
      * window/zip/flat_map/unique/partition/tabulate/interleave/sort_*. */
     { "list.last",              b_list_last,         1, 1 },

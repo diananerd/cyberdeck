@@ -1835,3 +1835,39 @@ These are honest reds (tests describe behavior the runtime doesn't yet fully imp
 - `854b4ab` — heap-pressure stress: accept parse_error too
 - `3994c9b` — lexer+parser: binop line continuation
 - `40a10a1` — lexer: bare `{expr}` + `\{` / `\}` escapes
+
+### Session #6 — 2026-04-20
+
+User directive (continuation): *"Sigamos iterando y arreglando el codebase (sigamos trabajando como REPORTS.md)"*. Build verified green at HEAD before any work (standing rule #5). Picking the next concept by auditing the still-failing fixtures from session #5's tail.
+
+### Concept #61 — `list.reduce` + `list.scan` arg order canonical (`xs, init, fn`)
+
+**Three-way drift** (the textbook A→B pattern the user keeps catching):
+- Spec `01-deck-lang §11.2 line 835`: `list.reduce(xs: [T], init: U, fn: (U,T) -> U)` — **init second, fn third**.
+- Runtime `deck_interp.c:744`: `b_list_reduce` indexed `args[1]` as fn and `args[2]` as init — **fn second, init third** (opposite of spec).
+- Fixtures split:
+  * `lang_list_basic.deck:52` and `lang_stdlib_basic.deck:23` used the runtime shape `(xs, fn, init)` — **passed** because runtime accepted them.
+  * `lang_lambda_inline.deck:47` and `lang_fn_typed.deck:38` used the spec shape `(xs, init, fn)` — **silently failed** because runtime tried to call `init` as a function and bailed.
+  * `lang_stdlib_basic.deck:16-17` even contained a comment acknowledging the spec form `(xs, init, fn)` while the code on line 23 used the runtime form. Self-aware drift.
+
+Additionally, `list.scan` (spec line 840) was declared but **never registered** at runtime — silent miss.
+
+**Resolution per standing rules**: spec wins; align runtime to spec; migrate the runtime-shape fixtures. No dual-accept shim — the wrong shape now fails closed with a specific error message.
+
+**Fix applied**:
+
+- 2026-04-20 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c`:
+  * `b_list_reduce` arg indices flipped: `acc = retain(args[1])` and call site uses `args[2]` as fn. Type check now requires `args[2] == DECK_T_FN`. Error message updated to spec-canonical `"list.reduce(xs, init, fn)"`.
+  * `b_list_scan` added — same shape as reduce but accumulates each step into a result list (spec §11.2: running fold). Output list pre-sized to input length to avoid resize churn.
+  * BUILTINS table gains `{ "list.scan", b_list_scan, 3, 3 }` right after the reduce entry.
+- 2026-04-20 · layer 6 fixtures · two migrated to spec-canonical:
+  * `apps/conformance/lang_list_basic.deck:52` — `list.reduce(xs, (acc, n) -> acc + n, 0)` → `list.reduce(xs, 0, (acc, n) -> acc + n)`.
+  * `apps/conformance/lang_stdlib_basic.deck:23` — same flip; comment lines 16-17 updated to record the resolution rather than continuing to teach the wrong form.
+
+**Verification**: `idf.py build` succeeds. Pre-existing benign warning `fs_list_cb defined but not used` is unrelated (introduced by concept #36's rewrite of `fs.list` to the FsEntry record callback; the old name-only callback is dead code from that migration — flagged for cleanup, not in scope here).
+
+**Why this matters (A→B)**: this is the cleanest example yet of "tests pass, reality breaks": four fixtures, two of them PASSING because they happened to align with the wrong runtime shape, two of them silently FAILING because they followed the spec — and a self-aware comment in one fixture documenting the disagreement without resolving it. Picking spec as authoritative collapses all four onto one truth: the fixtures that used to pass via runtime-coincidence start failing until migrated, the fixtures that documented spec start passing. The harness now reports a single coherent truth instead of an averaged green over a contradictory pair.
+
+**No fixture migration needed for** `lang_lambda_inline.deck` and `lang_fn_typed.deck` — they were already spec-canonical and start passing automatically with the runtime fix.
+
+**Deferred**: `list.scan` has no fixture coverage yet; future deepening of `lang_list_basic.deck` should add a probe (e.g. `list.scan([1,2,3], 0, (a,n) -> a+n) == [1, 3, 6]`).
