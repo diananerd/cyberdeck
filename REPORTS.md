@@ -1339,3 +1339,23 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why the shared `values_equal`**: three use cases (`list.contains`, future `list.unique`, future `map.has`) need structural equality on arbitrary runtime values. The existing `do_compare` handles the `==` binop but short-circuits on mismatched types and doesn't recurse into lists / tuples. Pulling out a dedicated recursive helper avoids duplicating the logic.
 
 **Running tally**: `list.*` now at 24/~35. Spec §11.2 mostly covered; pass 2 will close sort/zip/group/etc.
+
+### Concept #42 — map.* + tup.* completeness (spec §11.3 + §11.4)
+
+**Drift**:
+- Runtime had 5 `map.*` methods (len, get, put, keys, values). Spec §11.3 declares 13.
+- Runtime registration was `map.put` but spec §11.3 calls it `map.set` (aligns with `nvs.set`). Fixture `lang_map_basic.deck` used `map.put` (matching runtime); annex-xx-bluesky + spec used `map.set`. Classic split-vocabulary.
+- `tup.*` had **zero** registrations. Spec §11.4 declares 6.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c`:
+  * `map.put` registration renamed to `map.set` — no shim (no-dual-accept rule from concepts #8, #10, #12 etc). Underlying C fn `b_map_put_b` unchanged; just the dispatch name flipped.
+  * `map.count` added as a spec §11.3 alias that points at the same C fn as `map.len`. The spec has both names for readability; runtime points at one implementation.
+  * 8 new `map.*` builtins: `delete`, `has`, `merge` (right-biased), `is_empty`, `map_values` (applies fn to values), `filter` (fn takes key+val), `to_list` (emits `[(k, v)]` tuples), `from_list` (accepts `[(k, v)]`).
+  * 6 new `tup.*` builtins: `fst`, `snd`, `third`, `swap`, `map_fst`, `map_snd`. Type-check arity explicitly (fst/snd need arity ≥ 2; third needs ≥ 3; swap requires exactly 2).
+- 2026-04-19 · layer 6 edit · `apps/conformance/lang_map_basic.deck` — `map.put(m, :role, :user)` → `map.set(m, :role, :user)`. Only caller that used the legacy name.
+
+**Why `map.merge` is right-biased**: given `merge(a, b)`, the intuitive reading is "update `a` with `b`'s values". JavaScript `Object.assign(target, source)`, Python `dict | dict`, Elixir `Map.merge` — all agree on right-bias. Spec is silent; runtime picks the common-sense convention and notes it explicitly in REPORTS so future authors don't invent a different one.
+
+**Running tally**: `map.*` now at 13/13. `tup.*` now at 6/6. Spec §11.3 + §11.4 complete. Combined with concept #41, the entire §11.2–§11.4 standard-collection surface is 43/47 methods registered (missing only the `list.*` pass-2 sort/zip/group family).

@@ -29,8 +29,8 @@
   let ok_has  = map.has(m, :age)
              and not map.has(m, :missing)
 
-  -- put returns a NEW map; original is unchanged (immutability).
-  let m2      = map.put(m, :role, :user)
+  -- set returns a NEW map; original is unchanged (immutability).
+  let m2      = map.set(m, :role, :user)
   let ok_put  = map.get(m2, :role) == :some :user
   let ok_orig = map.get(m, :role)  == :some :admin   -- m unchanged
 

@@ -1074,6 +1074,211 @@ static deck_value_t *b_map_values(deck_value_t **args, uint32_t n, deck_interp_c
     return out;
 }
 
+/* ---- map.* completeness (concept #42, spec §11.3) ---- */
+
+static deck_value_t *b_map_delete(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.delete(m, k)"); return NULL; }
+    deck_value_t *m = args[0];
+    deck_value_t *out = deck_new_map(m->as.map.cap > 0 ? m->as.map.cap : 4);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.delete alloc"); return NULL; }
+    for (uint32_t i = 0; i < m->as.map.len; i++) {
+        if (!m->as.map.entries[i].used) continue;
+        deck_value_t *k = m->as.map.entries[i].key;
+        if (values_equal(k, args[1])) continue;
+        deck_map_put(out, k, m->as.map.entries[i].val);
+    }
+    return out;
+}
+
+static deck_value_t *b_map_has(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_MAP) return deck_retain(deck_false());
+    deck_value_t *v = deck_map_get(args[0], args[1]);
+    return deck_retain(v ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_map_merge(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP ||
+        !args[1] || args[1]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.merge(a, b)"); return NULL;
+    }
+    uint32_t cap = args[0]->as.map.cap + args[1]->as.map.cap;
+    if (cap < 4) cap = 4;
+    deck_value_t *out = deck_new_map(cap);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.merge alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++) {
+        if (args[0]->as.map.entries[i].used)
+            deck_map_put(out, args[0]->as.map.entries[i].key, args[0]->as.map.entries[i].val);
+    }
+    /* Right-biased: b's values overwrite a's on key conflict. */
+    for (uint32_t i = 0; i < args[1]->as.map.len; i++) {
+        if (args[1]->as.map.entries[i].used)
+            deck_map_put(out, args[1]->as.map.entries[i].key, args[1]->as.map.entries[i].val);
+    }
+    return out;
+}
+
+static deck_value_t *b_map_is_empty(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0] || args[0]->type != DECK_T_MAP) return deck_retain(deck_true());
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++)
+        if (args[0]->as.map.entries[i].used) return deck_retain(deck_false());
+    return deck_retain(deck_true());
+}
+
+static deck_value_t *b_map_map_values(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.map_values(m, fn)"); return NULL;
+    }
+    deck_value_t *out = deck_new_map(args[0]->as.map.cap > 0 ? args[0]->as.map.cap : 4);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.map_values alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++) {
+        if (!args[0]->as.map.entries[i].used) continue;
+        deck_value_t *ca[1] = { args[0]->as.map.entries[i].val };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(out); return NULL; }
+        deck_map_put(out, args[0]->as.map.entries[i].key, r);
+        deck_release(r);
+    }
+    return out;
+}
+
+static deck_value_t *b_map_filter(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.filter(m, fn)"); return NULL;
+    }
+    deck_value_t *out = deck_new_map(args[0]->as.map.cap > 0 ? args[0]->as.map.cap : 4);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.filter alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++) {
+        if (!args[0]->as.map.entries[i].used) continue;
+        deck_value_t *ca[2] = { args[0]->as.map.entries[i].key, args[0]->as.map.entries[i].val };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 2);
+        if (!r) { deck_release(out); return NULL; }
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep)
+            deck_map_put(out, args[0]->as.map.entries[i].key, args[0]->as.map.entries[i].val);
+    }
+    return out;
+}
+
+/* map.to_list: emit [(k, v)] tuples. */
+static deck_value_t *b_map_to_list(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.to_list(m)"); return NULL; }
+    deck_value_t *out = deck_new_list(args[0]->as.map.len);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.to_list alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.len; i++) {
+        if (!args[0]->as.map.entries[i].used) continue;
+        deck_value_t *items[2] = { args[0]->as.map.entries[i].key, args[0]->as.map.entries[i].val };
+        deck_value_t *t = deck_new_tuple(items, 2);
+        if (!t) { deck_release(out); return NULL; }
+        deck_list_push(out, t); deck_release(t);
+    }
+    return out;
+}
+
+/* map.from_list: accept [(k, v)] and build a map. */
+static deck_value_t *b_map_from_list(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.from_list([(k,v)])"); return NULL; }
+    deck_value_t *out = deck_new_map(args[0]->as.list.len + 4);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "map.from_list alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *t = args[0]->as.list.items[i];
+        if (!t || t->type != DECK_T_TUPLE || t->as.tuple.arity != 2) {
+            deck_release(out);
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "map.from_list: element %u not (k, v)", (unsigned)i);
+            return NULL;
+        }
+        deck_map_put(out, t->as.tuple.items[0], t->as.tuple.items[1]);
+    }
+    return out;
+}
+
+/* ---- tup.* (concept #42, spec §11.4) ---- */
+
+static deck_value_t *b_tup_fst(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity < 2) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.fst((A, B))"); return NULL;
+    }
+    return deck_retain(args[0]->as.tuple.items[0]);
+}
+
+static deck_value_t *b_tup_snd(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity < 2) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.snd((A, B))"); return NULL;
+    }
+    return deck_retain(args[0]->as.tuple.items[1]);
+}
+
+static deck_value_t *b_tup_third(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity < 3) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.third((A, B, C))"); return NULL;
+    }
+    return deck_retain(args[0]->as.tuple.items[2]);
+}
+
+static deck_value_t *b_tup_swap(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity != 2) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.swap((A, B))"); return NULL;
+    }
+    deck_value_t *items[2] = { args[0]->as.tuple.items[1], args[0]->as.tuple.items[0] };
+    return deck_new_tuple(items, 2);
+}
+
+static deck_value_t *b_tup_map_fst(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity != 2 ||
+        !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.map_fst((A, B), fn)"); return NULL;
+    }
+    deck_value_t *ca[1] = { args[0]->as.tuple.items[0] };
+    deck_value_t *mapped = call_fn_value_c(c, args[1], ca, 1);
+    if (!mapped) return NULL;
+    deck_value_t *items[2] = { mapped, args[0]->as.tuple.items[1] };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(mapped);
+    return t;
+}
+
+static deck_value_t *b_tup_map_snd(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_TUPLE || args[0]->as.tuple.arity != 2 ||
+        !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "tup.map_snd((A, B), fn)"); return NULL;
+    }
+    deck_value_t *ca[1] = { args[0]->as.tuple.items[1] };
+    deck_value_t *mapped = call_fn_value_c(c, args[1], ca, 1);
+    if (!mapped) return NULL;
+    deck_value_t *items[2] = { args[0]->as.tuple.items[0], mapped };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(mapped);
+    return t;
+}
+
 /* ---- bytes.* (concept #40 — spec §3 @builtin bytes) ----
  * Accepts DECK_T_BYTES (the dedicated buffer value) or DECK_T_LIST of ints
  * (the byte-literal shape `[0xDE, 0xAD]`). Outputs are emitted as DECK_T_LIST
@@ -3849,10 +4054,29 @@ static const builtin_t BUILTINS[] = {
 
     /* map (DL2 F21.6) */
     { "map.len",                b_map_len,           1, 1 },
+    { "map.count",              b_map_len,           1, 1 },   /* spec §11.3 alias */
     { "map.get",                b_map_get_b,         2, 2 },
-    { "map.put",                b_map_put_b,         3, 3 },
+    /* Spec §11.3 calls the spec-canonical name `map.set`; the legacy
+     * `map.put` is not registered (no-shim policy from concept #8 etc). */
+    { "map.set",                b_map_put_b,         3, 3 },
     { "map.keys",               b_map_keys,          1, 1 },
     { "map.values",             b_map_values,        1, 1 },
+    /* Concept #42 — §11.3 map completeness. */
+    { "map.delete",             b_map_delete,        2, 2 },
+    { "map.has",                b_map_has,           2, 2 },
+    { "map.merge",              b_map_merge,         2, 2 },
+    { "map.is_empty",           b_map_is_empty,      1, 1 },
+    { "map.map_values",         b_map_map_values,    2, 2 },
+    { "map.filter",             b_map_filter,        2, 2 },
+    { "map.to_list",            b_map_to_list,       1, 1 },
+    { "map.from_list",          b_map_from_list,     1, 1 },
+    /* Concept #42 — §11.4 tuple ops. */
+    { "tup.fst",                b_tup_fst,           1, 1 },
+    { "tup.snd",                b_tup_snd,           1, 1 },
+    { "tup.third",              b_tup_third,         1, 1 },
+    { "tup.swap",               b_tup_swap,          1, 1 },
+    { "tup.map_fst",            b_tup_map_fst,       2, 2 },
+    { "tup.map_snd",            b_tup_map_snd,       2, 2 },
 
     /* bytes */
     { "bytes.len",              b_bytes_len,         1, 1 },
