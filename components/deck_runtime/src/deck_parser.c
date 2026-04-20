@@ -333,6 +333,14 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             advance(p);
             ast_node_t *first = parse_expr_prec(p, 0);
             if (!first) return NULL;
+            /* Spec §5 — paren content may be a typed lambda param list
+             * `(a: Type, b: Type) -> body`. Eat an optional `: Type`
+             * after each element (type system is currently dynamic; the
+             * annotation is documentation). */
+            if (at(p, TOK_COLON)) {
+                advance(p);
+                if (!skip_type_annotation(p)) return NULL;
+            }
             ast_node_t *tup = NULL;
             if (at(p, TOK_COMMA)) {
                 tup = ast_new(p->arena, AST_LIT_TUPLE, ln, co); if (!tup) return NULL;
@@ -343,6 +351,10 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     if (at(p, TOK_RPAREN)) break;
                     ast_node_t *item = parse_expr_prec(p, 0);
                     if (!item) return NULL;
+                    if (at(p, TOK_COLON)) {
+                        advance(p);
+                        if (!skip_type_annotation(p)) return NULL;
+                    }
                     ast_list_push(p->arena, &tup->as.tuple_lit.items, item);
                 }
                 if (!expect(p, TOK_RPAREN, "expected ')' to close tuple")) return NULL;
