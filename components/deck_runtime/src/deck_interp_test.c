@@ -78,14 +78,26 @@ static bool t_text_contains(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("text.contains(\"hello\", \"ell\")", &e); CHECK(v && v->as.b, "true"); deck_release(v); (void)e; return true; }
 static bool t_conv_str_int(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("str(42)", &e); CHECK(v && v->as.s.len == 2 && memcmp(v->as.s.ptr, "42", 2) == 0, "42"); deck_release(v); (void)e; return true; }
+/* Spec 01-deck-lang §11.1 — `int/float/bool` take STRING, return Optional. */
 static bool t_conv_int_str(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("int(\"99\")", &e); CHECK(v && v->as.i == 99, "99"); deck_release(v); (void)e; return true; }
-static bool t_conv_float_int(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("float(5)", &e); CHECK(v && v->type == DECK_T_FLOAT && v->as.f == 5.0, "5.0"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("int(\"99\")", &e);
+  CHECK(v && v->type == DECK_T_OPTIONAL && v->as.opt.inner &&
+        v->as.opt.inner->type == DECK_T_INT && v->as.opt.inner->as.i == 99,
+        ":some 99"); deck_release(v); (void)e; return true; }
+static bool t_conv_float_str(const char *name)
+{ deck_err_t e; deck_value_t *v = run_expr("float(\"5.5\")", &e);
+  CHECK(v && v->type == DECK_T_OPTIONAL && v->as.opt.inner &&
+        v->as.opt.inner->type == DECK_T_FLOAT && v->as.opt.inner->as.f == 5.5,
+        ":some 5.5"); deck_release(v); (void)e; return true; }
 static bool t_conv_bool_str(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("bool(\"\")", &e); CHECK(v && !v->as.b, "false"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("bool(\"\")", &e);
+  CHECK(v && v->type == DECK_T_OPTIONAL && v->as.opt.inner == NULL,
+        ":none"); deck_release(v); (void)e; return true; }
 static bool t_conv_roundtrip(const char *name)
-{ deck_err_t e; deck_value_t *v = run_expr("int(str(123))", &e); CHECK(v && v->as.i == 123, "123"); deck_release(v); (void)e; return true; }
+{ deck_err_t e; deck_value_t *v = run_expr("int(str(123))", &e);
+  CHECK(v && v->type == DECK_T_OPTIONAL && v->as.opt.inner &&
+        v->as.opt.inner->type == DECK_T_INT && v->as.opt.inner->as.i == 123,
+        ":some 123"); deck_release(v); (void)e; return true; }
 static bool t_time_duration(const char *name)
 { deck_err_t e; deck_value_t *v = run_expr("time.duration(100, 20)", &e); CHECK(v && v->as.i == 80, "80"); deck_release(v); (void)e; return true; }
 
@@ -617,7 +629,7 @@ static const case_t CASES[] = {
     { "text_contains",    t_text_contains },
     { "conv_str_int",     t_conv_str_int },
     { "conv_int_str",     t_conv_int_str },
-    { "conv_float_int",   t_conv_float_int },
+    { "conv_float_str",   t_conv_float_str },
     { "conv_bool_str",    t_conv_bool_str },
     { "conv_roundtrip",   t_conv_roundtrip },
     { "time_duration",    t_time_duration },

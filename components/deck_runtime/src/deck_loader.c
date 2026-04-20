@@ -423,7 +423,22 @@ static bool match_has_wildcard(const ast_node_t *m)
             else if (strcmp(c, "ok") == 0) has_ok = true;
             else if (strcmp(c, "err") == 0) has_err = true;
             else if (strcmp(c, "::") == 0) has_cons = true;
-            else if (strcmp(c, "[]") == 0) has_nil = true;
+            else if (strcmp(c, "[]") == 0 && pat->as.pat_variant.n_subs == 0) has_nil = true;
+            /* Spec §8.2 tuple pattern `(p1, …, pN)` — when every sub-
+             * pattern is a binder (AST_PAT_IDENT) or wildcard, the arm
+             * matches every tuple of arity N, which is universal
+             * coverage for a scrutinee of that exact tuple shape. No
+             * wildcard arm needed. */
+            else if (strcmp(c, "(,)") == 0 && !guard) {
+                bool all_binders = true;
+                for (uint32_t k = 0; k < pat->as.pat_variant.n_subs; k++) {
+                    ast_kind_t sk = pat->as.pat_variant.subs[k]->kind;
+                    if (sk != AST_PAT_IDENT && sk != AST_PAT_WILD) {
+                        all_binders = false; break;
+                    }
+                }
+                if (all_binders) return true;
+            }
         }
         if (pat->kind == AST_PAT_LIT && pat->as.pat_lit) {
             const ast_node_t *lit = pat->as.pat_lit;

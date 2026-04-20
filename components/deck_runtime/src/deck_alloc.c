@@ -67,7 +67,13 @@ static void *alloc_bytes(size_t n)
         if (s_panic) s_panic(DECK_RT_NO_MEMORY, "deck heap hard limit exceeded");
         return NULL;
     }
+    /* Prefer internal for cache locality on hot values (ints, atoms,
+     * small tuples used every dispatch) and fall back to SPIRAM when
+     * internal is exhausted. This keeps the system running apps from
+     * SD card under sustained load — the reduction in internal-only
+     * pressure is worth the SPIRAM latency for overflow values. */
     void *p = heap_caps_malloc(n, MALLOC_CAP_INTERNAL);
+    if (!p) p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
     if (!p) {
         if (s_panic) s_panic(DECK_RT_NO_MEMORY, "heap_caps_malloc failed");
         return NULL;

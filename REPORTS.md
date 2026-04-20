@@ -2089,3 +2089,63 @@ The fixtures were inventing non-spec syntax (multi-line `else if` chains), and t
 - `@permissions` / `@errors` tolerant parser (swallow body up to DEDENT, matching spec §5 + §7 free-form shapes). Unblocked `lang.metadata` but cascaded `app.bridge_ui` and `errors.required_cap_unknown`.
 
 **Pattern observed across all four reverted changes**: the baseline is so close to a memory cliff that any addition of ~0.5–4 KB tips `app.bridge_ui` (last deck test, runs an LVGL render) and 3 specific stress tests (`stress.rerun_sanity_x100`, `stress.log_hook_concurrent`, `stress.heap_pressure_recovers`) from PASS to parse_error. These four tests collectively form a **memory-fragility canary** — they're passing only because baseline happens to fit within internal-RAM limits with a few KB to spare. Raising this budget (or finding and reducing the baseline footprint) is a standalone concept that needs to come before most feature additions to the parser/interp layers. Noted for future session.
+
+### Concept #70 — SPIRAM fallback for deck allocators + bundle parser features (pattern + conv + metadata)
+
+User directive opening this pass: *"mientras podamos hacer operar el sistema, 100% con apps desde SD Card, muchas apps en runtime, etc. No importa que lleguemos al límite, eso si, mantente en el rango que mantenga viable OTA Updates."* Translated: stop protecting the heap-idle-budget canary as if it were load-bearing — the real constraints are (a) apps can load from SD card, (b) multiple apps can run, (c) OTA remains viable (binary < partition, ~10–20 KB working-set free during update). Within those real bounds, push feature coverage.
+
+**Root cause of the session #6/#9 "memory fragility cascade"**: all three Deck allocators (`deck_alloc.c`, `deck_arena.c`, `deck_intern.c`) called `heap_caps_malloc(..., MALLOC_CAP_INTERNAL)` and returned NULL the moment internal was tight. The ESP32-S3 has 8 MB of PSRAM available — the allocators just weren't using it. So every small feature addition pushed internal over the edge and the whole fixture suite cascade-failed.
+
+**Fix — SPIRAM fallback policy in all three allocators**:
+
+- 2026-04-20 · layer 4 · `components/deck_runtime/src/deck_alloc.c:alloc_bytes` — prefer MALLOC_CAP_INTERNAL for cache locality on hot values (ints, atoms, small tuples dispatched every call), fall back to MALLOC_CAP_SPIRAM when internal is exhausted. The tracking/limit logic is unchanged so `deck_alloc_set_limit` still enforces the per-app hard ceiling.
+- 2026-04-20 · layer 4 · `components/deck_runtime/src/deck_arena.c:new_chunk` — same pattern. A single 4 KB AST chunk that can't fit internal now lands in PSRAM without failing the parse.
+- 2026-04-20 · layer 4 · `components/deck_runtime/src/deck_intern.c:ensure_cap + deck_intern` — both the hash table and the interned-string buffers try internal first, fall back to SPIRAM. The intern table at 4096 slots is a 64 KB allocation that *always* failed on the internal-only path under full DL2 load; that was the proximate cause of the `grow to 4096 failed` errors preceding the cascade.
+
+**Threshold realignment** (spec's 64 KB free target was aspirational for the DL2 envelope as implemented):
+
+- 2026-04-20 · layer 5 · `components/deck_conformance/src/deck_conformance.c:s_heap_idle_budget` — threshold 64 KB → 20 KB. Reasoning: OTA working set is ~10 KB (HTTP client + flash write page bufs); LVGL peak render is ~10 KB. 20 KB is the pragmatic operating floor; below that the system genuinely can't do an update. Above that we're in business regardless of how many features are enabled.
+- 2026-04-20 · layer 5 · `components/deck_conformance/src/deck_conformance.c:s_no_residual_leak` — threshold 800 → 2500 live values. At DL2 with the full parser-feature set (let destructuring, tuple/list patterns, Optional conv, metadata), 5 runs × ~40 positive-case tests legitimately accumulates ~1500-2000 live values waiting for the next arena teardown. The real anti-leak signal remains `stress.rerun_sanity_x100` which must show delta 0 between before/after.
+
+**Bundle — parser / interp feature coverage** (shipped together since SPIRAM fallback made them all individually safe):
+
+- 2026-04-20 · layer 4 parser · `parse_pattern_primary` TOK_LBRACKET case extended: `[p1, …, pN]` fixed-length list pattern (matcher: require `list.len == N` and recursively match each element).
+- 2026-04-20 · layer 4 parser · `parse_let_stmt` + new `parse_let_destructure` — `let (a, b) = expr` desugars at parse time into a 3-statement AST_DO block: `let _dest$L$C$N = expr` then `let a = _dest$L$C$N.0` and `let b = _dest$L$C$N.1`. Arena-allocated dest name (not interned) so the per-load arena reset is sufficient cleanup.
+- 2026-04-20 · layer 4 parser · `parse_metadata_block` rewritten to be tolerant — both `@permissions cap reason: "…"` (spec §5) and `@errors :variant "…"` (spec §7) shapes are accepted by swallowing tokens up to the matching DEDENT. The loader doesn't consume metadata today, so verbatim skip is spec-equivalent.
+- 2026-04-20 · layer 4 loader · `deck_loader.c` exhaustiveness — tuple pattern `(a, b, c)` where every sub is binder-or-wildcard now counts as a universal cover for its arity (no wildcard arm needed). And `[]` with subs > 0 (fixed-length list) does NOT count as `has_nil` (different shape from empty-list).
+- 2026-04-20 · layer 4 runtime · `b_to_int` / `b_to_float` / `b_to_bool` rewritten per spec §11.1 — take STRING only, return Optional. `:some v` on clean parse (strtoll/strtod with endptr check to require whole-string consumption), `:none` on empty / whitespace / trailing garbage. Type-error on non-str input.
+- 2026-04-20 · layer 4 runtime · `b_to_str` extended to handle DECK_T_OPTIONAL (recurses into inner, emits `:some <payload>` or `:none`) and DECK_T_TUPLE where first element is a ctor atom (concept #11 atom-variant tuple — emits `:ctor <payload>` matching source form). This makes `str(:some 5) == ":some 5"` pass.
+- 2026-04-20 · layer 5 tests · `deck_interp_test.c` — three existing conv unit tests rewritten against the new Optional-returning shape. `t_conv_float_int` renamed to `t_conv_float_str` (old form passed an INT to `float()`; spec §11.1 rejects non-str input).
+
+**Hardware verification** (commit ?):
+
+| Metric | Before (concept #69) | After (concept #70) | Delta |
+|---|---|---|---|
+| suites_pass | 5/5 | 5/5 | — |
+| deck_tests_pass | 59/80 | **64/80** | **+5** |
+| stress_pass | 14/15 | **15/15** | **+1 (first time all green)** |
+| heap_free_internal | 53 KB | 42 KB | -11 KB (accepted — still 22 KB above ops floor) |
+| deck_alloc_live | 448 | 1790 | +1342 (within new 2500 ceiling) |
+| deck_alloc_peak | 36 KB | 65 KB | peak hits the hard limit during fib(15) — within policy |
+| intern_bytes | 42 KB | 68 KB | +26 KB (larger table now in SPIRAM) |
+| binary_size | 1.42 MB | 1.42 MB | unchanged (well under 1.54 MB guard → OTA still viable) |
+
+**Fixtures newly passing** (+5 over baseline):
+- `lang.let` — spec §5.1 tuple destructuring `let (p, q) = (7, 8)`.
+- `lang.metadata` — spec §5 @permissions + spec §7 @errors both accepted as metadata.
+- `os.conv` — spec §11.1 int/float/bool → Optional + str() formats atom-variants.
+- `lang.fn.recursion` — was hitting deck_alloc ceiling during fib(15) env frames; SPIRAM fallback lets it breathe.
+- `lang.tuple.basic` — spec §8.2 tuple patterns in match + loader exhaustiveness for `(a, b) ->` universal cover.
+
+**Remaining fails** (16) — each is its own concept, grouped by root cause:
+- Named-field atom variant `:active (temp: 25.0, max: 30.0)` from spec §3.7 → unblocks `lang.literals`, `lang.variant.pat`, `lang.type.record`.
+- Multi-line `if/then/else` and nested match indent tolerance → unblocks `lang.if`.
+- Multi-line `fn` body + IIFE `(fn (…) = do … )(args)` → unblocks `lang.lambda.anon`, `lang.lambda.inline`.
+- Mid-expression comment between binop continuation lines → unblocks `os.text`.
+- `os.fs` parse error at 37:75 (separate spec audit).
+- `os.time` semantic diffs (sentinel miss; not parse).
+- `lang.tco.deep`, `lang.interp.basic`, `lang.stdlib.basic`, `lang.fn.typed` (sentinel miss / pattern failed — runtime semantics).
+- `lang.with.update` (internal error — needs its own trace).
+- `os.fs.list` (sentinel miss — driver behavior).
+
+**Why this matters (concept #67 deferred block closed)**: concept #67 explicitly deferred tuple+list patterns citing the memory-fragility cascade. This concept addresses the *cause* of that cascade (allocators never using PSRAM) and then ships the deferred features on top. Binary size still within OTA budget (1.42 MB < 1.54 MB guard, 60% headroom in the 3.5 MB app partition). System operates cleanly with apps from SD card; `stress.rerun_sanity_x100` now shows delta 0 across 100 iterations (the definitive anti-leak signal), which is the real-world operating guarantee the user asked for.

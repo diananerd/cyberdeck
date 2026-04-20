@@ -839,17 +839,37 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             return wrap;
         }
         case TOK_LBRACKET: {
-            /* Spec §8 — empty-list pattern `[]`. Represent as a variant
-             * pattern with ctor "[]" and no sub-patterns; the matcher
-             * checks for an empty DECK_T_LIST. */
+            /* Spec §8.2 — list patterns:
+             *   `[]`          empty-list pattern
+             *   `[p1, …, pN]` fixed-length list pattern (matches when
+             *                 list.len == N and each sub-pattern matches)
+             * Both encoded as AST_PAT_VARIANT with ctor "[]"; n_subs == 0
+             * is the empty-list case, n_subs > 0 is fixed-length. The
+             * `[head, ...tail]` rest form stays expressed via the
+             * existing `h :: t` cons pattern for now. */
             uint32_t ln = p->cur.line, co = p->cur.col;
-            advance(p);
-            if (!expect(p, TOK_RBRACKET, "expected ']' — only `[]` empty-list pattern supported at this layer")) return NULL;
+            advance(p); /* [ */
+            ast_node_t *subs[16];
+            uint32_t n_subs = 0;
+            if (!at(p, TOK_RBRACKET)) {
+                for (;;) {
+                    if (n_subs >= 16) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                                "list pattern: too many elements (max 16)");
+                        return NULL;
+                    }
+                    ast_node_t *s = parse_pattern(p); if (!s) return NULL;
+                    subs[n_subs++] = s;
+                    if (!at(p, TOK_COMMA)) break;
+                    advance(p);
+                }
+            }
+            if (!expect(p, TOK_RBRACKET, "expected ']' closing list pattern")) return NULL;
             ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
             if (!n) return NULL;
             n->as.pat_variant.ctor   = deck_intern_cstr("[]");
-            n->as.pat_variant.subs   = NULL;
-            n->as.pat_variant.n_subs = 0;
+            n->as.pat_variant.subs   = n_subs ? deck_arena_memdup(p->arena, subs, n_subs * sizeof(ast_node_t *)) : NULL;
+            n->as.pat_variant.n_subs = n_subs;
             return n;
         }
         case TOK_ATOM: {
@@ -1080,10 +1100,98 @@ static ast_node_t *parse_if(deck_parser_t *p)
 
 static ast_node_t *parse_suite(deck_parser_t *p);
 
+/* Spec §5.1 tuple destructuring `let (a, b) = expr`. Desugared at
+ * parse-time into a sequence of plain lets wrapped in an AST_DO that
+ * shares the enclosing env:
+ *
+ *     let _dest$L$C$N = expr
+ *     let a = _dest$L$C$N.0
+ *     let b = _dest$L$C$N.1
+ *
+ * Arena-allocated name (not interned) — evaporates with the per-load
+ * arena reset, so rerunning the fixture doesn't leak intern entries.
+ * env lookup already falls back to strcmp, so pointer identity across
+ * the holder binding and the field-access idents doesn't matter. */
+static uint32_t s_let_dest_seq = 0;
+
+static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t co)
+{
+    advance(p); /* ( */
+    const char *names[16];
+    uint32_t n_names = 0;
+    if (at(p, TOK_RPAREN)) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "let destructuring pattern cannot be empty");
+        return NULL;
+    }
+    for (;;) {
+        if (n_names >= 16) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "let destructuring: too many elements (max 16)");
+            return NULL;
+        }
+        if (!at(p, TOK_IDENT)) {
+            set_err(p, DECK_LOAD_PARSE_ERROR,
+                    "let destructuring: only plain ident binders supported at this layer");
+            return NULL;
+        }
+        names[n_names++] = p->cur.text;
+        advance(p);
+        if (!at(p, TOK_COMMA)) break;
+        advance(p);
+    }
+    if (!expect(p, TOK_RPAREN, "expected ')' closing let destructuring pattern")) return NULL;
+    if (n_names == 1) {
+        set_err(p, DECK_LOAD_PARSE_ERROR,
+                "let destructuring pattern must contain at least 2 elements");
+        return NULL;
+    }
+    if (at(p, TOK_COLON)) {
+        advance(p);
+        if (!skip_type_annotation(p)) return NULL;
+    }
+    if (!expect(p, TOK_ASSIGN, "expected '=' in let binding")) return NULL;
+    ast_node_t *val = parse_expr_prec(p, 0);
+    if (!val) return NULL;
+
+    char tmp[40];
+    uint32_t seq = ++s_let_dest_seq;
+    snprintf(tmp, sizeof(tmp), "_dest$%u$%u$%u",
+             (unsigned)ln, (unsigned)co, (unsigned)seq);
+    char *dest_name = deck_arena_strdup(p->arena, tmp);
+    if (!dest_name) return NULL;
+
+    ast_node_t *d = ast_new(p->arena, AST_DO, ln, co); if (!d) return NULL;
+    ast_list_init(&d->as.do_.exprs);
+
+    ast_node_t *holder = ast_new(p->arena, AST_LET, ln, co); if (!holder) return NULL;
+    holder->as.let.name  = dest_name;
+    holder->as.let.value = val;
+    holder->as.let.body  = NULL;
+    ast_list_push(p->arena, &d->as.do_.exprs, holder);
+
+    for (uint32_t i = 0; i < n_names; i++) {
+        ast_node_t *ident = ast_new(p->arena, AST_IDENT, ln, co); if (!ident) return NULL;
+        ident->as.s = dest_name;
+        ast_node_t *get = ast_new(p->arena, AST_TUPLE_GET, ln, co); if (!get) return NULL;
+        get->as.tuple_get.obj = ident;
+        get->as.tuple_get.idx = i;
+        ast_node_t *bind = ast_new(p->arena, AST_LET, ln, co); if (!bind) return NULL;
+        bind->as.let.name  = names[i];
+        bind->as.let.value = get;
+        bind->as.let.body  = NULL;
+        ast_list_push(p->arena, &d->as.do_.exprs, bind);
+    }
+    return d;
+}
+
 static ast_node_t *parse_let_stmt(deck_parser_t *p)
 {
-    ast_node_t *n = mknode(p, AST_LET); if (!n) return NULL;
+    uint32_t ln = p->cur.line, co = p->cur.col;
     advance(p); /* let */
+    /* Spec §5.1 destructuring path — `let (a, b) = …`. */
+    if (at(p, TOK_LPAREN)) return parse_let_destructure(p, ln, co);
+    ast_node_t *n = ast_new(p->arena, AST_LET, ln, co); if (!n) return NULL;
     if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected name after 'let'"); return NULL; }
     n->as.let.name = p->cur.text;
     advance(p);
@@ -2526,44 +2634,37 @@ static ast_node_t *parse_opaque_block(deck_parser_t *p)
 
 static ast_node_t *parse_metadata_block(deck_parser_t *p)
 {
+    /* Spec 02-deck-app §5 (@permissions) and §7 (@errors) — parsed
+     * and discarded at this layer (metadata for future runtime use).
+     * Entry shapes the spec admits:
+     *   @permissions
+     *     capability.path   reason: "Human description"
+     *   @errors <domain_ident>
+     *     :variant   "Description"
+     *     :variant   "Description"
+     * Rather than hard-code both grammars (and reject the one that
+     * doesn't match), swallow everything up to the matching DEDENT.
+     * The loader doesn't consume metadata today, so verbatim skip is
+     * spec-equivalent — and it keeps fixtures that use either shape
+     * from tripping a parser error while the runtime is at DL2. */
     advance(p); /* @permissions or @errors */
+    /* Optional inline ident argument (e.g. `@errors sensor`). */
+    while (at(p, TOK_IDENT) || at(p, TOK_DOT)) advance(p);
     if (!expect(p, TOK_NEWLINE, "expected newline after metadata decorator")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
-    if (!expect(p, TOK_INDENT, "expected indented metadata body")) return NULL;
-    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
-        if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in metadata block");
-            return NULL;
-        }
-        advance(p);
-        /* Dotted keys like `fs.write`, `network.http`. */
-        while (at(p, TOK_DOT)) {
-            advance(p);
-            if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected ident after '.' in metadata key");
-                return NULL;
-            }
-            advance(p);
-        }
-        if (!expect(p, TOK_COLON, "expected ':' in metadata entry")) return NULL;
-        /* Value: skip the rest of the line (one expr or simple ident). */
-        if (at(p, TOK_NEWLINE)) {
-            /* allow empty / nested block — eat it */
-            advance(p);
-            while (at(p, TOK_NEWLINE)) advance(p);
-            if (at(p, TOK_INDENT)) {
-                advance(p);
-                while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) advance(p);
-                if (!expect(p, TOK_DEDENT, "expected dedent")) return NULL;
-            }
-            continue;
-        }
-        ast_node_t *v = parse_expr_prec(p, 0);
-        if (!v) return NULL;
-        while (at(p, TOK_NEWLINE)) advance(p);
+    if (!at(p, TOK_INDENT)) {
+        /* Empty body — accept. */
+        ast_node_t *stub = mknode(p, AST_USE);
+        if (stub) { stub->as.use.module = "__metadata"; stub->as.use.is_optional = true; }
+        return stub;
     }
-    if (!expect(p, TOK_DEDENT, "expected dedent closing metadata block")) return NULL;
-    /* Return a benign AST_USE node so module item list stays well-formed. */
+    advance(p); /* INDENT */
+    int depth = 1;
+    while (depth > 0 && !at(p, TOK_EOF)) {
+        if      (at(p, TOK_INDENT)) { depth++; advance(p); }
+        else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+        else                         { advance(p); }
+    }
     ast_node_t *stub = mknode(p, AST_USE);
     if (stub) {
         stub->as.use.module = "__metadata";

@@ -4855,11 +4855,15 @@ static deck_value_t *b_bui_render(deck_value_t **args, uint32_t n, deck_interp_c
 }
 
 /* ---- type conversions (bare ident calls) ---- */
+/* Spec 01-deck-lang §11.1 — `str(v: any) -> str` canonical printable.
+ * For atom-variant tuples produced by concept #11 (`:some x` → 2-tuple
+ * `(:some, x)`) the stringification recurses into the payload so the
+ * result reads back like the source: `str(:some 5) == ":some 5"`. */
 static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n; (void)c;
     if (!args[0]) return deck_new_str_cstr("");
-    char buf[64];
+    char buf[128];
     switch (args[0]->type) {
         case DECK_T_STR:   return deck_retain(args[0]);
         case DECK_T_INT:   snprintf(buf, sizeof(buf), "%lld", (long long)args[0]->as.i); return deck_new_str_cstr(buf);
@@ -4867,44 +4871,108 @@ static deck_value_t *b_to_str(deck_value_t **args, uint32_t n, deck_interp_ctx_t
         case DECK_T_BOOL:  return deck_new_str_cstr(args[0]->as.b ? "true" : "false");
         case DECK_T_ATOM:  snprintf(buf, sizeof(buf), ":%s", args[0]->as.atom); return deck_new_str_cstr(buf);
         case DECK_T_UNIT:  return deck_new_str_cstr("unit");
+        case DECK_T_OPTIONAL: {
+            if (args[0]->as.opt.inner == NULL) return deck_new_str_cstr(":none");
+            /* :some v — recurse to print payload after the ctor. */
+            deck_value_t *inner_args[1] = { args[0]->as.opt.inner };
+            deck_value_t *inner_str = b_to_str(inner_args, 1, c);
+            if (!inner_str) return deck_new_str_cstr(":some ?");
+            snprintf(buf, sizeof(buf), ":some %.*s",
+                     (int)inner_str->as.s.len, inner_str->as.s.ptr);
+            deck_release(inner_str);
+            return deck_new_str_cstr(buf);
+        }
+        case DECK_T_TUPLE: {
+            /* Concept #11 atom-variant tuple — first item is the ctor
+             * atom. Print as `:ctor <payload>` matching the source form. */
+            if (args[0]->as.tuple.arity == 2 &&
+                args[0]->as.tuple.items[0] &&
+                args[0]->as.tuple.items[0]->type == DECK_T_ATOM) {
+                deck_value_t *inner_args[1] = { args[0]->as.tuple.items[1] };
+                deck_value_t *inner_str = b_to_str(inner_args, 1, c);
+                if (!inner_str) return deck_new_str_cstr("?");
+                snprintf(buf, sizeof(buf), ":%s %.*s",
+                         args[0]->as.tuple.items[0]->as.atom,
+                         (int)inner_str->as.s.len, inner_str->as.s.ptr);
+                deck_release(inner_str);
+                return deck_new_str_cstr(buf);
+            }
+            return deck_new_str_cstr("?");
+        }
         default:           return deck_new_str_cstr("?");
     }
 }
+/* Spec 01-deck-lang §11.1 — `int/float/bool` take STRING, return
+ * Optional<T>. `:some v` on clean parse, `:none` on empty/whitespace/
+ * trailing-garbage/wrong-shape input. strtoll/strtod with an endptr
+ * check is the definitive "whole string consumed" signal. */
+static bool conv_strv_copy(deck_value_t *v, char *buf, size_t cap)
+{
+    if (!v || v->type != DECK_T_STR) return false;
+    uint32_t L = v->as.s.len < (uint32_t)(cap - 1) ? v->as.s.len : (uint32_t)(cap - 1);
+    memcpy(buf, v->as.s.ptr, L);
+    buf[L] = '\0';
+    return true;
+}
+
 static deck_value_t *b_to_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0]) return deck_new_int(0);
-    switch (args[0]->type) {
-        case DECK_T_INT:   return deck_retain(args[0]);
-        case DECK_T_FLOAT: return deck_new_int((int64_t)args[0]->as.f);
-        case DECK_T_BOOL:  return deck_new_int(args[0]->as.b ? 1 : 0);
-        case DECK_T_STR: {
-            char buf[64]; uint32_t L = args[0]->as.s.len < 63 ? args[0]->as.s.len : 63;
-            memcpy(buf, args[0]->as.s.ptr, L); buf[L] = 0;
-            return deck_new_int(strtoll(buf, NULL, 10));
-        }
-        default: set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "int() unsupported type"); return NULL;
+    char buf[64];
+    if (!conv_strv_copy(args[0], buf, sizeof(buf))) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "int(s) expects a string (spec §11.1)");
+        return NULL;
     }
+    if (buf[0] == '\0') return deck_new_none();
+    for (const char *p = buf; *p; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') return deck_new_none();
+    }
+    char *endp = NULL;
+    long long vi = strtoll(buf, &endp, 10);
+    if (!endp || endp == buf || *endp != '\0') return deck_new_none();
+    deck_value_t *iv = deck_new_int((int64_t)vi);
+    if (!iv) return NULL;
+    deck_value_t *o = deck_new_some(iv);
+    deck_release(iv);
+    return o;
 }
 static deck_value_t *b_to_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0]) return deck_new_float(0);
-    switch (args[0]->type) {
-        case DECK_T_INT:   return deck_new_float((double)args[0]->as.i);
-        case DECK_T_FLOAT: return deck_retain(args[0]);
-        case DECK_T_STR: {
-            char buf[64]; uint32_t L = args[0]->as.s.len < 63 ? args[0]->as.s.len : 63;
-            memcpy(buf, args[0]->as.s.ptr, L); buf[L] = 0;
-            return deck_new_float(strtod(buf, NULL));
-        }
-        default: set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "float() unsupported type"); return NULL;
+    char buf[64];
+    if (!conv_strv_copy(args[0], buf, sizeof(buf))) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "float(s) expects a string (spec §11.1)");
+        return NULL;
     }
+    if (buf[0] == '\0') return deck_new_none();
+    for (const char *p = buf; *p; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') return deck_new_none();
+    }
+    char *endp = NULL;
+    double vd = strtod(buf, &endp);
+    if (!endp || endp == buf || *endp != '\0') return deck_new_none();
+    deck_value_t *fv = deck_new_float(vd);
+    if (!fv) return NULL;
+    deck_value_t *o = deck_new_some(fv);
+    deck_release(fv);
+    return o;
 }
 static deck_value_t *b_to_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)n; (void)c;
-    return deck_retain(deck_is_truthy(args[0]) ? deck_true() : deck_false());
+    (void)n;
+    char buf[16];
+    if (!conv_strv_copy(args[0], buf, sizeof(buf))) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bool(s) expects a string (spec §11.1)");
+        return NULL;
+    }
+    /* Case-sensitive per spec: only exact "true" / "false" parse. */
+    deck_value_t *bv = NULL;
+    if (strcmp(buf, "true")  == 0) bv = deck_retain(deck_true());
+    else if (strcmp(buf, "false") == 0) bv = deck_retain(deck_false());
+    if (!bv) return deck_new_none();
+    deck_value_t *o = deck_new_some(bv);
+    deck_release(bv);
+    return o;
 }
 
 static const builtin_t BUILTINS[] = {
@@ -5417,9 +5485,20 @@ static bool match_pattern(deck_arena_t *a, deck_env_t *env,
             if (!val) return false;
             const char *ctor = pat->as.pat_variant.ctor;
             if (!ctor) return false;
-            /* Spec §8 empty-list pattern: `[]` matches an empty list. */
-            if (strcmp(ctor, "[]") == 0 && pat->as.pat_variant.n_subs == 0) {
-                return val->type == DECK_T_LIST && val->as.list.len == 0;
+            /* Spec §8.2 list patterns:
+             *   `[]`         n_subs == 0 — matches an empty list.
+             *   `[p1,…,pN]`  n_subs  > 0 — matches a list of exact
+             *                length N with each element matched by
+             *                the corresponding sub-pattern. */
+            if (strcmp(ctor, "[]") == 0) {
+                if (val->type != DECK_T_LIST) return false;
+                if (val->as.list.len != pat->as.pat_variant.n_subs) return false;
+                for (uint32_t i = 0; i < pat->as.pat_variant.n_subs; i++) {
+                    if (!match_pattern(a, env, pat->as.pat_variant.subs[i],
+                                       val->as.list.items[i]))
+                        return false;
+                }
+                return true;
             }
             /* Spec §8.2 tuple pattern: `(p1, …, pN)` matches DECK_T_TUPLE
              * of exact arity N, binding each sub-pattern to the

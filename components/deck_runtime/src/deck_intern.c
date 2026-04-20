@@ -106,7 +106,16 @@ static bool ensure_cap(uint32_t target_cap)
 
     s_table = heap_caps_calloc(new_cap, sizeof(intern_slot_t), MALLOC_CAP_INTERNAL);
     if (!s_table) {
-        ESP_LOGE(TAG, "grow to %u failed", (unsigned)new_cap);
+        /* Internal RAM is tight; at DL2 levels the intern table can
+         * grow to 64+ KB (4096 slots × 16 B) which competes with LVGL
+         * and WiFi working sets. Retry from SPIRAM — the table is
+         * mostly hash-probed with pointer compares, so external RAM
+         * access is acceptable. */
+        s_table = heap_caps_calloc(new_cap, sizeof(intern_slot_t),
+                                   MALLOC_CAP_SPIRAM);
+    }
+    if (!s_table) {
+        ESP_LOGE(TAG, "grow to %u failed (internal+spiram)", (unsigned)new_cap);
         s_table = old_table;
         return false;
     }
@@ -142,8 +151,11 @@ const char *deck_intern(const char *s, uint32_t len)
     if (!slot) return NULL;
     if (found) return slot->data;
 
-    /* New entry. */
+    /* New entry. Prefer internal RAM for cache locality on hot
+     * identifiers; fall back to SPIRAM if internal is tight (same
+     * policy as the table grow above). */
     char *buf = heap_caps_malloc(len + 1, MALLOC_CAP_INTERNAL);
+    if (!buf) buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
     if (!buf) return NULL;
     memcpy(buf, s, len);
     buf[len] = '\0';

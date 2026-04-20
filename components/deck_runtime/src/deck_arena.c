@@ -32,8 +32,14 @@ static deck_arena_chunk_t *new_chunk(deck_arena_t *a, size_t min_bytes)
 {
     size_t cap = a->chunk_bytes;
     if (min_bytes > cap) cap = min_bytes;
+    /* Prefer internal RAM for the common small-AST case (cache hit
+     * rate matters), fall back to SPIRAM when internal is tight. At
+     * DL2 with the full stdlib + WiFi + LVGL loaded, internal stays
+     * in the 30-50 KB free band during app runs; any 4 KB chunk that
+     * can't fit internal goes external without failing the load. */
     deck_arena_chunk_t *c =
         heap_caps_malloc(sizeof(deck_arena_chunk_t) + cap, MALLOC_CAP_INTERNAL);
+    if (!c) c = heap_caps_malloc(sizeof(deck_arena_chunk_t) + cap, MALLOC_CAP_SPIRAM);
     if (!c) return NULL;
     c->next = a->head;
     c->cap  = cap;
