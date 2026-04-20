@@ -1871,3 +1871,24 @@ Additionally, `list.scan` (spec line 840) was declared but **never registered** 
 **No fixture migration needed for** `lang_lambda_inline.deck` and `lang_fn_typed.deck` — they were already spec-canonical and start passing automatically with the runtime fix.
 
 **Deferred**: `list.scan` has no fixture coverage yet; future deepening of `lang_list_basic.deck` should add a probe (e.g. `list.scan([1,2,3], 0, (a,n) -> a+n) == [1, 3, 6]`).
+
+### Concept #62 — chained tuple index `t.0.0` lexer fix
+
+**Drift**: `apps/conformance/lang_tuple_basic.deck` lines 51-54 use `nested.0.0` / `nested.0.1` / `nested.1.0` / `nested.1.1` to read elements of nested tuples. Spec is fine — `t.N` is tuple-index access (parser already supports it via `AST_TUPLE_GET` at `deck_parser.c:516-525`). But the **lexer** consumed `0.0` greedily as `TOK_FLOAT(0.0)` instead of `TOK_INT(0) DOT TOK_INT(0)`, so the parser saw `nested DOT FLOAT` and bailed with "tuple index must be non-negative" / type error.
+
+The bug: `scan_number` extends a number to a float when it sees `.` followed by a digit. That rule is correct for normal positions (`x + 0.5`) but wrong inside a tuple-index chain — a number that begins immediately after a `.` is unambiguously an integer index, never a fractional. Float literals in Deck always require a leading digit (no bare `.5`), so the lookback is unambiguous.
+
+A→B shape: `lang_tuple_basic.deck` listed in session #5 deferred as "various arity / pattern / let issues not yet triaged" — but the actual blocker was the **lexer**, two layers down from where the failure reported. Until the lexer correctly tokenises `0.0` as `INT DOT INT` after a preceding dot, parser and runtime never get a chance to handle the chain.
+
+**Fix applied**:
+
+- 2026-04-20 · layer 0 lexer · `components/deck_runtime/src/deck_lexer.c:scan_number` — added `after_dot` flag computed once at scan start (`start > 0 && lx->src[start - 1] == '.'`). When set, the loop refuses to consume a `.digit` extension or `e`-exponent extension. Number falls out as INT, lexer continues from the next `.`.
+- 2026-04-20 · layer 0 lexer test · `components/deck_runtime/src/deck_lexer_test.c` — two new cases:
+  * `tuple_chain` (`"t.0.0"`) — must lex as IDENT DOT INT DOT INT, not IDENT DOT FLOAT.
+  * `float_after_int` (`"x + 0.5"`) — must still lex as IDENT PLUS FLOAT (regression guard for the normal path).
+
+**Verification**: `idf.py build` succeeds. The two new lexer cases will run on hardware selftest.
+
+**What this unblocks**: every nested tuple access pattern across all fixtures + annexes. `lang_tuple_basic.deck` becomes parseable end-to-end; downstream `(a, b) := ...` destructuring + match patterns + structural equality were already implemented and just needed reachable input.
+
+**Why this matters (A→B)**: a pure lexer-level fix that masquerades as a "tuple feature gap" two layers up. The diagnostic noise — "tuple index must be non-negative" appearing for valid `nested.0.0` syntax — pointed at the parser, but the real bug was the byte stream the parser was reading. Sessions where bug reports get assigned by symptom text (the parser error message) systematically miss this kind of cross-layer drift.

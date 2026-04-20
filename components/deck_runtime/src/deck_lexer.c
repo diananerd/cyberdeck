@@ -237,12 +237,19 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
 
     bool seen_dot = false;
     bool seen_exp = false;
+    /* Concept #62 — when this number begins immediately after a `.`, we
+     * are inside a tuple-index chain like `nested.0.0`. The fractional
+     * extension would otherwise consume the next dot+digit as part of a
+     * float, breaking `t.0.0` (= INT(0) DOT INT(0), not FLOAT(0.0)).
+     * Float literals always need a leading digit (no bare `.5`), so a
+     * number-following-dot is never a fractional. */
+    bool after_dot = (start > 0 && lx->src[start - 1] == '.');
     while (lx->pos < lx->len) {
         int c = peek(lx);
         if (isdigit(c) || c == '_') { advance(lx); }
-        else if (c == '.' && !seen_dot && !seen_exp && isdigit(peek_at(lx, 1))) {
+        else if (c == '.' && !seen_dot && !seen_exp && !after_dot && isdigit(peek_at(lx, 1))) {
             seen_dot = true; advance(lx);
-        } else if ((c == 'e' || c == 'E') && !seen_exp) {
+        } else if ((c == 'e' || c == 'E') && !seen_exp && !after_dot) {
             seen_exp = true; seen_dot = true; /* becomes float */
             advance(lx);
             if (peek(lx) == '+' || peek(lx) == '-') advance(lx);

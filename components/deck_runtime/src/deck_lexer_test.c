@@ -111,6 +111,16 @@ static const lex_case_t CASES[] = {
     { "bar_vs_or",     "| || |>",
       { TOK_BAR, TOK_OR_OR, TOK_PIPE, TOK_EOF } },
 
+    /* 22c. Concept #62 — chained tuple index `t.0.0` must lex as
+     * IDENT DOT INT DOT INT, not IDENT DOT FLOAT(0.0). Float
+     * extension is suppressed when the number begins right after `.`. */
+    { "tuple_chain",   "t.0.0",
+      { TOK_IDENT, TOK_DOT, TOK_INT, TOK_DOT, TOK_INT, TOK_EOF } },
+
+    /* 22d. Real float still works in normal position. */
+    { "float_after_int", "x + 0.5",
+      { TOK_IDENT, TOK_PLUS, TOK_FLOAT, TOK_EOF } },
+
     /* 23. Concat */
     { "concat",        "a ++ b",
       { TOK_IDENT, TOK_CONCAT, TOK_IDENT, TOK_EOF } },
