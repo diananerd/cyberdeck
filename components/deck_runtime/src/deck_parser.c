@@ -334,10 +334,13 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             ast_node_t *first = parse_expr_prec(p, 0);
             if (!first) return NULL;
             /* Spec §5 — paren content may be a typed lambda param list
-             * `(a: Type, b: Type) -> body`. Eat an optional `: Type`
-             * after each element (type system is currently dynamic; the
-             * annotation is documentation). */
-            if (at(p, TOK_COLON)) {
+             * `(a: Type, b: Type) -> body`. Eat `:Type` only when the
+             * parsed element is a bare ident AND the type is also an
+             * ident / dotted path (safe — rules out variant-record
+             * payload `:active (temp: 25.0, max: 30.0)` where `25.0`
+             * is a numeric literal, not a type). */
+            if (at(p, TOK_COLON) && first && first->kind == AST_IDENT &&
+                (peek_next_tok(p) == TOK_IDENT)) {
                 advance(p);
                 if (!skip_type_annotation(p)) return NULL;
             }
@@ -351,7 +354,8 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     if (at(p, TOK_RPAREN)) break;
                     ast_node_t *item = parse_expr_prec(p, 0);
                     if (!item) return NULL;
-                    if (at(p, TOK_COLON)) {
+                    if (at(p, TOK_COLON) && item->kind == AST_IDENT &&
+                        (peek_next_tok(p) == TOK_IDENT)) {
                         advance(p);
                         if (!skip_type_annotation(p)) return NULL;
                     }
