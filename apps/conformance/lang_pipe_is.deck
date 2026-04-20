@@ -26,24 +26,23 @@ fn shout  (s) = "{s}!"
 
   let ok_pipe = r1 == 42 and r2 == "hello!" and r3 == 20
 
-  -- Error-propagating pipe `|>?`:
-  --   :err e  -> short-circuit
-  --   :ok v   -> unwrap, pipe
-  --   :none   -> short-circuit
-  --   :some v -> unwrap, pipe
+  -- Error-propagating pipe `|>?` per spec §7.9:
+  --   :err e  -> short-circuit, return :err e unchanged (no call)
+  --   :ok v   -> unwrap to v, result is f(v) PLAIN (not re-wrapped)
+  --   :none   -> short-circuit, return :none unchanged
+  --   :some v -> unwrap to v, result is f(v) PLAIN (not re-wrapped)
   --   plain v -> runtime error (we don't probe that here)
+  -- Concept #65 aligned runtime + fixture to spec semantics. A chain
+  -- like `input |>? parse |>? validate` works because each stage's fn
+  -- returns a NEW Result; successive |>? sees that result and unwraps.
   let r4 = :none |>? double
   let r5 = :some 7 |>? double
   let r6 = :ok 100 |>? double
   let r7 = :err :oops |>? double
 
   let ok_none = r4 == :none
-  let ok_some = match r5
-                  | :some v -> v == 14
-                  | _        -> false
-  let ok_ok   = match r6
-                  | :ok v   -> v == 200
-                  | _        -> false
+  let ok_some = r5 == 14     -- unwrapped, plain int
+  let ok_ok   = r6 == 200    -- unwrapped, plain int
   let ok_err  = match r7
                   | :err :oops -> true
                   | _           -> false

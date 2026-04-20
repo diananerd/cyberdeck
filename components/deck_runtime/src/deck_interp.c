@@ -5930,16 +5930,50 @@ static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_
      * invoke. When `|>?` and L is a none Optional, short-circuit. */
     if (op == BINOP_PIPE || op == BINOP_PIPE_OPT) {
         deck_value_t *L = deck_interp_run(c, env, n->as.binop.lhs); if (!L) return NULL;
-        if (op == BINOP_PIPE_OPT &&
-            L->type == DECK_T_OPTIONAL && L->as.opt.inner == NULL) {
-            deck_release(L);
-            return deck_new_none();
-        }
-        if (op == BINOP_PIPE_OPT &&
-            L->type == DECK_T_OPTIONAL && L->as.opt.inner != NULL) {
-            deck_value_t *inner = deck_retain(L->as.opt.inner);
-            deck_release(L);
-            L = inner;
+        /* Spec §7.9 — `|>?` error-propagating pipe:
+         *   :err e   → return :err e without calling f
+         *   :ok v    → unwrap to v, then call f(v)
+         *   :none    → return :none
+         *   :some v  → unwrap to v, then call f(v)
+         *   plain v  → runtime error (caller misuses the operator)
+         * Both Optional-repr (legacy DECK_T_OPTIONAL from some()/none()/
+         * map.get) AND atom-variant-tuple repr (concept #11: `:some x`
+         * literal parses to (:some, x); `:ok v` / `:err e` always). */
+        if (op == BINOP_PIPE_OPT) {
+            /* Legacy Optional repr. */
+            if (L->type == DECK_T_OPTIONAL && L->as.opt.inner == NULL) {
+                deck_release(L);
+                return deck_new_none();
+            }
+            if (L->type == DECK_T_OPTIONAL && L->as.opt.inner != NULL) {
+                deck_value_t *inner = deck_retain(L->as.opt.inner);
+                deck_release(L);
+                L = inner;
+            }
+            /* Atom-variant tuple repr `(:ctor, payload)`. */
+            else if (L->type == DECK_T_TUPLE && L->as.tuple.arity == 2 &&
+                     L->as.tuple.items[0] &&
+                     L->as.tuple.items[0]->type == DECK_T_ATOM) {
+                const char *ctor = L->as.tuple.items[0]->as.atom;
+                if (ctor && strcmp(ctor, "err") == 0) {
+                    /* Short-circuit: return :err e unchanged. */
+                    return L;
+                }
+                if (ctor && (strcmp(ctor, "ok") == 0 ||
+                             strcmp(ctor, "some") == 0)) {
+                    deck_value_t *inner = deck_retain(L->as.tuple.items[1]);
+                    deck_release(L);
+                    L = inner;
+                }
+                /* Other ctors (:active, :idle, …) fall through and get
+                 * piped as-is; the callee will decide what to do. */
+            }
+            /* Bare atom `:none` literal — short-circuit. */
+            else if (L->type == DECK_T_ATOM && L->as.atom &&
+                     strcmp(L->as.atom, "none") == 0) {
+                /* Return :none atom unchanged. */
+                return L;
+            }
         }
         deck_value_t *R = deck_interp_run(c, env, n->as.binop.rhs);
         if (!R) { deck_release(L); return NULL; }

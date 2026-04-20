@@ -1948,3 +1948,32 @@ The fixture's intent (`length_acc` walking a 1000-element list to test TCO) is s
 - `list.scan` (concept #61) and `list.tabulate` (this concept) both still lack fixture coverage — `lang_list_basic.deck` should be deepened in a future session.
 
 **Why this matters (A→B)**: this is the inverse of the usual pattern — instead of "fixture asserts spec-canonical, runtime missing", here the fixture *invented* a non-spec semantic and the runtime didn't support it (correctly). The fix is to teach the fixture that the spec is authoritative, not extend the runtime to humor an off-spec test. Same combinatorial-audit rule, applied in the opposite direction.
+
+### Concept #65 — `|>?` Result tuple variant handling + fixture spec alignment
+
+**Two-layer drift**:
+
+1. **Runtime `|>?` only knew about Optional**. `do_binop` handled `DECK_T_OPTIONAL` (short-circuit on `inner == NULL`, unwrap on `inner != NULL`). But spec §7.9 specifies four input shapes: `:err e` / `:ok v` / `:none` / `:some v`. The Result variants (`:ok v`, `:err e`) are atom-variant tuples per concept #11. Today a tuple-shaped Result goes into `|>?` unchanged — the RHS fn gets called with the tuple (not the unwrapped inner), typically blowing up with a type mismatch.
+
+2. **`lang_pipe_is.deck` fixture expected wrapper-preserving semantics** (`r6 = :ok 200` not `r6 = 200`) — not what spec §7.9 says. Spec says "unwrap to v, pipe into function" — the result is `f(v)` plain. If the chain author wants to preserve the wrapper, `f` itself must return a fresh `:ok v'` (common pattern: each stage is a Result-returning fn, and `|>?` threads).
+
+**Resolution per standing rules**: spec wins on both sides.
+
+**Fix applied**:
+
+- 2026-04-20 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c do_binop BINOP_PIPE_OPT` branch extended:
+  * Legacy `DECK_T_OPTIONAL` branch unchanged (some=unwrap, none=short-circuit).
+  * New branch for `DECK_T_TUPLE` with arity 2 and atom-ctor first element: `:err` short-circuits (returns the tuple unchanged, preserving `e`); `:ok` and `:some` unwrap to `items[1]` and continue to the RHS call. Other ctors (`:active`, `:idle`, …) fall through unmodified — apps can pipe arbitrary atom-variant tuples and the callee decides what to do.
+  * New branch for bare atom `:none` literal — returns the atom unchanged (short-circuit).
+- 2026-04-20 · layer 6 fixture · `apps/conformance/lang_pipe_is.deck` lines 35-49 — `ok_some = r5 == 14` (plain int, not wrapped `:some 14`); `ok_ok = r6 == 200` (plain int, not wrapped `:ok 200`); `ok_err` and `ok_none` assertions already matched spec. Comment block rewritten to reflect spec §7.9 semantics and call out the concept.
+- 2026-04-20 · layer 5 interp test · `t_pipe_opt_variants` exercises all four input shapes via `run_expr` — `:ok 100 |>? (x -> x * 2)` returns 200; `:err :oops |>? …` returns unchanged tuple; `:some 7 |>? (x -> x + 1)` returns 8; `:none |>? …` returns `:none` atom. Registered in `CASES[]`.
+
+**Verification**: `idf.py build` succeeds. Unit test will run at next hardware selftest and must pass all 4 wrapper-shape assertions.
+
+**What this unblocks**:
+
+- `lang_pipe_is.deck` becomes decidable; the error-pipe section now exercises real spec semantics.
+- Any annex that uses `input |>? parse |>? validate |>? transform` chains — each stage produces a new Result, threaded through the operator.
+- Consistent with concept #63's Optional↔tuple bridge on equality: `:some v` is now interchangeable across pipe, equality, and pattern-match, regardless of which path constructed it.
+
+**Why this matters (fixture-as-spec drift)**: the fixture was silently teaching wrapper-preserving semantics to every reader. If it had stayed green under a wrapper-preserving runtime, every Deck author reading the fixture would copy the wrong mental model, and every `|>?` chain authored downstream would expect the wrong output shape. Catching this via the combinatorial audit prevents that divergence from propagating.

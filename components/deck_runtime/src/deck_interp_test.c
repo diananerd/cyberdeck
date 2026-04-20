@@ -474,6 +474,36 @@ static bool t_intent_event_values(const char *name)
     return true;
 }
 
+/* Concept #65 — `|>?` error-propagating pipe honors spec §7.9 for all
+ * four wrapper shapes: :err / :ok / :none / :some, across both the
+ * legacy Optional repr and the atom-variant tuple repr. */
+static bool t_pipe_opt_variants(const char *name)
+{
+    deck_err_t e;
+    deck_value_t *v;
+
+    /* Spec §7.9: `:ok 100 |>? f` unwraps to 100 and returns f(100) plain. */
+    v = run_expr(":ok 100 |>? (x -> x * 2)", &e);
+    CHECK(v && v->type == DECK_T_INT && v->as.i == 200, ":ok unwraps");
+    deck_release(v);
+    /* :err short-circuits, returns tuple (:err, :oops) unchanged. */
+    v = run_expr(":err :oops |>? (x -> x * 2)", &e);
+    CHECK(v && v->type == DECK_T_TUPLE && v->as.tuple.arity == 2, ":err tuple");
+    CHECK(v->as.tuple.items[0]->type == DECK_T_ATOM &&
+          strcmp(v->as.tuple.items[0]->as.atom, "err") == 0, ":err ctor");
+    deck_release(v);
+    /* :some 7 |>? (x -> x + 1) — unwrap, call, return plain 8. */
+    v = run_expr(":some 7 |>? (x -> x + 1)", &e);
+    CHECK(v && v->type == DECK_T_INT && v->as.i == 8, ":some unwraps");
+    deck_release(v);
+    /* :none |>? f — return :none atom. */
+    v = run_expr(":none |>? (x -> x + 1)", &e);
+    CHECK(v && v->type == DECK_T_ATOM &&
+          strcmp(v->as.atom, "none") == 0, ":none short-circuit");
+    deck_release(v);
+    return true;
+}
+
 /* Concept #63 — structural equality for tuples / lists / maps via the
  * `==` operator (do_compare delegates to values_equal for EQ/NE) AND
  * Optional ↔ atom-variant tuple bridging so map.get returns equal to
@@ -590,6 +620,7 @@ static const case_t CASES[] = {
     { "intent_event_value",     t_intent_event_value },
     { "intent_event_values",    t_intent_event_values },
     { "eq_structural",          t_eq_structural },
+    { "pipe_opt_variants",      t_pipe_opt_variants },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 
