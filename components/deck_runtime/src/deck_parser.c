@@ -99,6 +99,7 @@ static ast_node_t *parse_if(deck_parser_t *p);
 static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head);
 static ast_node_t *parse_fn_decl(deck_parser_t *p);
 static ast_node_t *parse_suite(deck_parser_t *p);
+static ast_node_t *parse_stmt(deck_parser_t *p);
 static bool        skip_type_annotation(deck_parser_t *p);
 
 static ast_node_t *mknode(deck_parser_t *p, ast_kind_t k)
@@ -811,13 +812,14 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             atom_lit->as.s = atom_name;
             /* `:ctor <sub>` — variant pattern. Accept any pattern-start
              * token as the sub: ident binder / wildcard (TOK_IDENT),
-             * literal (INT/FLOAT/STRING/TRUE/FALSE/UNIT/NONE), and
-             * nested atom patterns `:err :oops` (spec §8 — Result
-             * :err :atom idiom). */
+             * literal (INT/FLOAT/STRING/TRUE/FALSE/UNIT/NONE), nested
+             * atom patterns `:err :oops`, and the empty-list pattern
+             * `:ok []` (common Result shape for nvs.keys et al). */
             if (at(p, TOK_IDENT) || at(p, TOK_ATOM) ||
                 at(p, TOK_INT) || at(p, TOK_FLOAT) || at(p, TOK_STRING) ||
                 at(p, TOK_KW_TRUE) || at(p, TOK_KW_FALSE) ||
-                at(p, TOK_KW_UNIT) || at(p, TOK_KW_NONE)) {
+                at(p, TOK_KW_UNIT) || at(p, TOK_KW_NONE) ||
+                at(p, TOK_LBRACKET)) {
                 ast_node_t *sub = parse_pattern(p);
                 if (!sub) return NULL;
                 ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
@@ -921,8 +923,40 @@ static ast_node_t *parse_match(deck_parser_t *p)
             return NULL;
         }
         advance(p); /* -> */
-        ast_node_t *body = parse_expr_prec(p, 0); if (!body) return NULL;
+        /* Spec §8 — arm body can be a single inline expression, a single
+         * expression wrapped to the next line, or a multi-statement
+         * suite if the continuation opens an INDENT block:
+         *     | :err e ->
+         *         log.error("fail")
+         *         log.info("DECK_CONF_FAIL:x")
+         * The indented form is parsed as a DO block so side-effects
+         * execute in order and the final expression becomes the arm's
+         * value. */
+        ast_node_t *body = NULL;
+        bool consumed_indent = false;
+        if (at(p, TOK_NEWLINE)) {
+            advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            if (at(p, TOK_INDENT)) { advance(p); consumed_indent = true; }
+        }
+        if (consumed_indent) {
+            ast_node_t *d = mknode(p, AST_DO); if (!d) return NULL;
+            ast_list_init(&d->as.do_.exprs);
+            while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                if (at(p, TOK_NEWLINE)) { advance(p); continue; }
+                ast_node_t *s = parse_stmt(p); if (!s) return NULL;
+                ast_list_push(p->arena, &d->as.do_.exprs, s);
+                while (at(p, TOK_NEWLINE)) advance(p);
+            }
+            body = d;
+        } else {
+            body = parse_expr_prec(p, 0);
+            if (!body) return NULL;
+        }
         while (at(p, TOK_NEWLINE)) advance(p);
+        if (consumed_indent) {
+            if (at(p, TOK_DEDENT)) advance(p);
+        }
         arms[n_arms].pattern = pat;
         arms[n_arms].guard   = guard;
         arms[n_arms].body    = body;
