@@ -1681,3 +1681,43 @@ Of the deferred items flagged at concept #51 close-out:
 | lazy payload eval | — | deferred — edge case, render-time eval fine for most |
 
 Annex apps can now exercise the full content primitive catalog at coarse level: render every spec §12 primitive, iterate over lists with per-item templates + payload-bearing triggers, emit form shells with submit intents, and declare @stream / @task without errors. What's left is depth (bidirectional binding, field aggregation, reactive streams, task scheduling) rather than breadth.
+
+### Concept #57 — per-widget options reach DVC attrs (spec §12)
+
+**Drift**: concept #55 mapped every §12.4 input intent to its DVC type, but the walker dropped every trailing `key: value` token. So `toggle :lights state: on`, `range :volume min: 0 max: 100 value: v`, `choice :theme options: [:dark, :light]`, `text :query placeholder: "..."`, `trigger "Open" badge: 3`, `list xs has_more: true` — in every case the widget rendered as a blank shell with no bounds, no initial value, no options list, no placeholder, no badge count. The bridge had nothing to configure from.
+
+The annex-a multi-line trigger form surfaced a second gap: `trigger app.name \n  badge: ... \n  -> apps.launch(app.id)`. The parser's non-list nested-block branch was pure `absorb + skip`, so the options AND the trailing `-> action` were silently eaten. Per-item triggers could render a label but never bind an action for apps that used the canonical multi-line form.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 AST · `include/deck_ast.h`:
+  * New `ast_content_option_t { key, value }` struct.
+  * `content_item` payload gained `options: ast_content_option_t*` + `n_options: uint32_t`. Empty when the item carried none.
+- 2026-04-19 · layer 4 parser · `src/deck_parser.c`:
+  * New helper `parse_content_options(p, ci)` — loops while `cur IDENT` + `peek TOK_COLON`, intern-copying the key, consuming the colon, parsing the value as a full expression (`parse_expr_prec`), appending into the item's option array with power-of-two arena-backed growth.
+  * Inline-form: in both top-level content items and per-item template sub-items, the existing data_expr branch now guards on `!(IDENT && peek == COLON)` so it doesn't greedily eat the option's key. Called right before the legacy absorb loop so both `trigger "X" badge: 3` and `list xs has_more: true` capture their options.
+  * Multi-line form: the non-list non-template nested-indent branch previously did a blind depth-tracked absorb. Rewrote to walk each line of the indent: `IDENT COLON …` lines become options; `-> action` lines bind the content item's action (preserving a pre-existing action_expr as the label via `data_expr` so the walker can surface it). Unrecognized shapes fall through to a local absorb so round-trip continues to work.
+- 2026-04-19 · layer 4 walker · `src/deck_interp.c`:
+  * `content_apply_value_as_attr(node, attr, v)` — dispatch-by-runtime-type helper mapping Deck values onto DVC attrs (bool → set_bool, int → set_i64, float → set_f64, str → set_str, atom → set_atom, list-of-{str|atom} → set_list_str). Unknown types are silently dropped.
+  * `content_apply_options(c, env, node, ci)` — evaluates each option's expression in the render env, copies onto the node using the option's key as the attribute name (1:1 — `badge` → `:badge`, `options` → `:options`, `placeholder` → `:placeholder`, `min`, `max`, `value`, `state`, `mask`, `length`, `prompt`, `alt`, `role`, `has_more`, …). Option names live in the DVC attr namespace directly; the bridge decides per widget type which ones it honours.
+  * Hooked at the end of every top-level item dispatch (after the kind-specific node construction) and at the end of every per-item template sub-node construction, with the correct env (top-level env vs. per-item env so binder-relative references like `badge: unread_for(x.id)` bind).
+  * Top-level `trigger` / `navigate` gained a data_expr-as-label fallback: when no string literal label is present but data_expr is (the concept-#57 tail-arrow shift parks the label expression there), it's evaluated and written as the `label` attr. Per-item `trigger` / `navigate` got the same fallback routed through its existing label-expr/action-expr disambiguation.
+
+**What this unblocks**: all 12+ input intents now configure. Concrete wins:
+
+- `range :volume min: 0 max: 100 value: v` → DVC_SLIDER with `min=0`, `max=100`, `value=v`.
+- `toggle :lights state: x` → DVC_TOGGLE with `state=x`.
+- `choice :theme options: [:dark, :light]` → DVC_CHOICE with `options=["dark","light"]` (list_str).
+- `text :q placeholder: "search..."` → DVC_TEXT with `placeholder="search..."`.
+- `trigger "Open" badge: 3 -> Machine.send(:open)` → DVC_TRIGGER with `label="Open"`, `badge=3`, intent bound.
+- `list posts has_more: more? -> Machine.send(:load_more)` → DVC_LIST with `has_more=bool`, form-level intent bound for pagination.
+- `media img alt: "..." role: :avatar` → DVC_MEDIA with `alt="..."`, `role=:avatar`.
+- `confirm "Delete?" prompt: "Are you sure?"` → DVC_CONFIRM with both strings.
+- annex-a multi-line form: `trigger app.name \n  badge: unread_badge(app.id) \n  -> apps.launch(app.id)` — label expression captured, badge bound to runtime value per element, action arrow bound (currently for the Machine.send subset; `apps.launch` is noted in the existing deferred list of "non-Machine.send actions").
+
+**Deferred**:
+- **Captured-action dispatch** (non-Machine.send): `apps.launch(app.id)` and other arbitrary action expressions. Intent binding still only kicks in for `Machine.send(:evt)` shapes — the tail-arrow parser captures the action AST but the bridge round-trip infrastructure can't yet evaluate arbitrary expressions at tap time. Separate concept; needs snapshot + deferred-eval plumbing.
+- **Bidirectional binding** for `value:` / `state:` on stateful widgets. The value travels app → bridge at render time; bridge → app reflection on change still needs stream-driven re-render.
+- **Per-field aggregation inside `form`**. Individual field intents work; form submit doesn't yet receive a `{field: value}` map — each field carries its own event.
+
+**A→B note**: this closes the "declared, rendered, but inert" gap for every input widget. Before: `toggle :x state: on` rendered as an uninitialised switch. After: the initial state reaches the bridge, the author's intent survives the parser, and the widget starts in the correct position. Same story for every slider, choice list, text placeholder, media role — twelve widget categories lit up in one concept.

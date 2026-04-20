@@ -146,6 +146,15 @@ typedef struct {
     bool        is_optional;
 } ast_use_entry_t;
 
+/* Concept #57 — one `key: expr` option on a content item. Per-widget
+ * configuration (`badge: 3`, `options: [:a, :b]`, `min: 0`, etc.) is
+ * stashed as these pairs. The walker evaluates `value` in the current
+ * env at render time and maps the key to the widget's DVC attr. */
+typedef struct {
+    const char *key;         /* interned option name (no trailing colon) */
+    ast_node_t *value;
+} ast_content_option_t;
+
 struct ast_node {
     ast_kind_t  kind;
     uint32_t    line;
@@ -277,6 +286,14 @@ struct ast_node {
             ast_list_t  empty_body;
             /* Concept #53 — form on submit handler (AST for the action expr). */
             ast_node_t *on_submit;
+            /* Concept #57 — per-widget option bag. Pairs of
+             * `key: expr` (`badge: 3`, `options: [:a, :b]`, `min: 0`,
+             * `value: v`, `placeholder: "…"`, etc.) captured after the
+             * header line; each is evaluated in the render env to
+             * produce a DVC attribute on the emitted node. Empty
+             * when the item carried no options. */
+            ast_content_option_t *options;
+            uint32_t              n_options;
         } content_item;
 
         struct { ast_list_t items; }                 module;

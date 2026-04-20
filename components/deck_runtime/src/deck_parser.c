@@ -1504,6 +1504,40 @@ static ast_node_t *parse_migration_decl(deck_parser_t *p)
     return n;
 }
 
+/* Concept #57 — parse inline `key: expr` option pairs after a content
+ * item's header. Stops at NEWLINE / DEDENT / EOF, or when the next two
+ * tokens are not `IDENT COLON`. Values are parsed as full expressions
+ * so `options: [:dark, :light]`, `badge: unread_count`, `min: 0` all
+ * work. Options are stashed in the parser arena; the walker evaluates
+ * each value at render time. */
+static void parse_content_options(deck_parser_t *p, ast_node_t *ci)
+{
+    uint32_t cap = 0;
+    while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (!at(p, TOK_IDENT)) break;
+        if (peek_next_tok(p) != TOK_COLON) break;
+        const char *key = p->cur.text;
+        advance(p); /* IDENT */
+        advance(p); /* COLON */
+        ast_node_t *val = parse_expr_prec(p, 0);
+        if (!val) break;
+        if (ci->as.content_item.n_options == cap) {
+            uint32_t new_cap = cap ? cap * 2 : 4;
+            ast_content_option_t *arr = deck_arena_alloc(
+                p->arena, sizeof(ast_content_option_t) * new_cap);
+            if (!arr) return;
+            if (ci->as.content_item.options)
+                memcpy(arr, ci->as.content_item.options,
+                       sizeof(ast_content_option_t) * ci->as.content_item.n_options);
+            ci->as.content_item.options = arr;
+            cap = new_cap;
+        }
+        ci->as.content_item.options[ci->as.content_item.n_options].key = key;
+        ci->as.content_item.options[ci->as.content_item.n_options].value = val;
+        ci->as.content_item.n_options++;
+    }
+}
+
 static ast_node_t *parse_state_decl(deck_parser_t *p)
 {
     ast_node_t *st = mknode(p, AST_STATE); if (!st) return NULL;
@@ -1623,6 +1657,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         ast_list_init(&ci->as.content_item.item_body);
                         ast_list_init(&ci->as.content_item.empty_body);
                         ci->as.content_item.on_submit = NULL;
+                        ci->as.content_item.options = NULL;
+                        ci->as.content_item.n_options = 0;
                         /* Kind — first token on the line, if it's an ident/atom. */
                         if (at(p, TOK_IDENT)) {
                             ci->as.content_item.kind = p->cur.text;
@@ -1646,8 +1682,11 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         }
                         /* Trailing content on the header line is the data_expr
                          * for primitives like `list xs` / `media expr` / bare value.
-                         * Parse as an expression if anything is left. */
-                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                         * Parse as an expression if anything is left. Skip when
+                         * the next two tokens are `IDENT COLON` — that's a
+                         * concept-#57 option (badge:, placeholder:, etc.). */
+                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF) &&
+                            !(at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON)) {
                             ast_node_t *data = parse_expr_prec(p, 0);
                             if (data) {
                                 if (!ci->as.content_item.action_expr)
@@ -1656,9 +1695,10 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                     ci->as.content_item.data_expr = data;
                             }
                         }
-                        /* Consume any still-unread tokens on this line (options
-                         * like `badge:` / `label:` / `items:` etc — deferred to
-                         * concept #46's richer parser pass). */
+                        /* Concept #57 — inline per-widget options. */
+                        parse_content_options(p, ci);
+                        /* Consume any still-unread tokens on this line (unknown
+                         * shapes fall through to here). */
                         while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
                             advance(p);
                         while (at(p, TOK_NEWLINE)) advance(p);
@@ -1688,6 +1728,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         ast_list_init(&sub->as.content_item.item_body);
                                         ast_list_init(&sub->as.content_item.empty_body);
                                         sub->as.content_item.on_submit = NULL;
+                                        sub->as.content_item.options = NULL;
+                                        sub->as.content_item.n_options = 0;
                                         sub->as.content_item.action_expr = parse_expr_prec(p, 0);
                                         ast_list_push(p->arena, &ci->as.content_item.empty_body, sub);
                                     }
@@ -1724,6 +1766,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         ast_list_init(&sub->as.content_item.item_body);
                                         ast_list_init(&sub->as.content_item.empty_body);
                                         sub->as.content_item.on_submit = NULL;
+                                        sub->as.content_item.options = NULL;
+                                        sub->as.content_item.n_options = 0;
                                         if (at(p, TOK_IDENT)) {
                                             sub->as.content_item.kind = p->cur.text;
                                             advance(p);
@@ -1742,7 +1786,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                             ast_node_t *action = parse_expr_prec(p, 0);
                                             if (action) sub->as.content_item.action_expr = action;
                                         }
-                                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF) &&
+                                            !(at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON)) {
                                             ast_node_t *d = parse_expr_prec(p, 0);
                                             if (d) {
                                                 if (!sub->as.content_item.action_expr)
@@ -1751,6 +1796,9 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                                     sub->as.content_item.data_expr = d;
                                             }
                                         }
+                                        /* Concept #57 — per-item options (e.g.
+                                         * `trigger x.name badge: x.count`). */
+                                        parse_content_options(p, sub);
                                         while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
                                             advance(p);
                                         while (at(p, TOK_NEWLINE)) advance(p);
@@ -1772,13 +1820,63 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                     else                        { advance(p); }
                                 }
                             } else {
-                                /* Non-list / non-template: absorb + skip. */
-                                uint32_t depth = 1;
-                                while (depth > 0 && !at(p, TOK_EOF)) {
-                                    if (at(p, TOK_INDENT))      { depth++; advance(p); }
-                                    else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
-                                    else                        { advance(p); }
+                                /* Concept #57 — non-list indented block.
+                                 * Parse continuation-line options
+                                 * (`badge: expr`, `value: expr`, etc.)
+                                 * and a trailing `-> action` line as
+                                 * part of the current item. Unknown
+                                 * lines and deeper nested indents are
+                                 * absorbed to preserve the legacy
+                                 * round-trip behaviour. */
+                                while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                                    while (at(p, TOK_NEWLINE)) advance(p);
+                                    if (at(p, TOK_DEDENT) || at(p, TOK_EOF)) break;
+                                    if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                                        parse_content_options(p, ci);
+                                        while (at(p, TOK_NEWLINE)) advance(p);
+                                        continue;
+                                    }
+                                    if (at(p, TOK_ARROW)) {
+                                        advance(p);
+                                        ast_node_t *action = parse_expr_prec(p, 0);
+                                        if (action) {
+                                            /* If action_expr already
+                                             * held a label expression
+                                             * (e.g. `trigger app.name`
+                                             * captured it as data),
+                                             * preserve the old one in
+                                             * data_expr so the walker
+                                             * can use it as the label
+                                             * while the new one is the
+                                             * real tap action. */
+                                            if (ci->as.content_item.action_expr &&
+                                                !ci->as.content_item.data_expr)
+                                                ci->as.content_item.data_expr =
+                                                    ci->as.content_item.action_expr;
+                                            ci->as.content_item.action_expr = action;
+                                        }
+                                        while (at(p, TOK_NEWLINE)) advance(p);
+                                        continue;
+                                    }
+                                    /* Fallback — absorb unrecognised
+                                     * shapes. Deeper indents (blocks
+                                     * inside blocks) counted with a
+                                     * local depth so we resync on the
+                                     * matching dedent. */
+                                    uint32_t depth = 0;
+                                    while (!at(p, TOK_EOF)) {
+                                        if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                                        else if (at(p, TOK_DEDENT)) {
+                                            if (depth == 0) break;
+                                            depth--; advance(p);
+                                        } else if (at(p, TOK_NEWLINE) && depth == 0) {
+                                            advance(p); break;
+                                        } else {
+                                            advance(p);
+                                        }
+                                    }
                                 }
+                                if (at(p, TOK_DEDENT)) advance(p);
                             }
                         }
                         ast_list_push(p->arena, &cb->as.content_block.items, ci);
@@ -1796,6 +1894,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                 ast_list_init(&ci->as.content_item.item_body);
                 ast_list_init(&ci->as.content_item.empty_body);
                 ci->as.content_item.on_submit = NULL;
+                ci->as.content_item.options = NULL;
+                ci->as.content_item.n_options = 0;
                 ast_node_t *expr = parse_expr_prec(p, 0);
                 ci->as.content_item.action_expr = expr;
                 ast_list_push(p->arena, &cb->as.content_block.items, ci);

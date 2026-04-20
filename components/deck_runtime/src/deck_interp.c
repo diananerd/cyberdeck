@@ -4151,6 +4151,96 @@ static ast_node_t *content_extract_payload_expr(const ast_node_t *action)
     return action->as.call.args.items[1];
 }
 
+/* Concept #57 — set a DVC attribute on `node` from a Deck runtime value,
+ * dispatching by value type. Keeps the walker's per-kind code terse: each
+ * option's atom name maps 1:1 to the attr key, and the value's runtime
+ * type picks the setter. Unknown types are dropped (no attr set). */
+static void content_apply_value_as_attr(deck_dvc_node_t *node,
+                                         const char *attr,
+                                         deck_value_t *v)
+{
+    if (!node || !attr || !v) return;
+    switch (v->type) {
+        case DECK_T_BOOL:
+            deck_dvc_set_bool(&s_bui_arena, node, attr, v->as.b);
+            break;
+        case DECK_T_INT:
+            deck_dvc_set_i64(&s_bui_arena, node, attr, v->as.i);
+            break;
+        case DECK_T_FLOAT:
+            deck_dvc_set_f64(&s_bui_arena, node, attr, v->as.f);
+            break;
+        case DECK_T_STR: {
+            /* set_str expects a NUL-terminated string; copy into a small
+             * local buffer (dvc setter re-duplicates into the arena). */
+            char buf[256];
+            uint32_t L = v->as.s.len < (uint32_t)(sizeof(buf) - 1)
+                         ? v->as.s.len : (uint32_t)(sizeof(buf) - 1);
+            memcpy(buf, v->as.s.ptr, L);
+            buf[L] = 0;
+            deck_dvc_set_str(&s_bui_arena, node, attr, buf);
+            break;
+        }
+        case DECK_T_ATOM:
+            if (v->as.atom)
+                deck_dvc_set_atom(&s_bui_arena, node, attr, v->as.atom);
+            break;
+        case DECK_T_LIST: {
+            /* LIST_STR — accepts lists of strings and/or atoms.
+             * Non-string/atom elements are skipped silently. */
+            uint32_t n = v->as.list.len;
+            if (n == 0) {
+                deck_dvc_set_list_str(&s_bui_arena, node, attr, NULL, 0);
+                break;
+            }
+            const char **items = deck_arena_alloc(
+                &s_bui_arena, sizeof(const char *) * n);
+            if (!items) break;
+            uint16_t count = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                deck_value_t *e = v->as.list.items[i];
+                if (!e) continue;
+                if (e->type == DECK_T_STR) {
+                    char *buf = deck_arena_alloc(&s_bui_arena, e->as.s.len + 1);
+                    if (!buf) continue;
+                    memcpy(buf, e->as.s.ptr, e->as.s.len);
+                    buf[e->as.s.len] = 0;
+                    items[count++] = buf;
+                } else if (e->type == DECK_T_ATOM && e->as.atom) {
+                    items[count++] = e->as.atom;
+                }
+            }
+            deck_dvc_set_list_str(&s_bui_arena, node, attr, items, count);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+/* Concept #57 — evaluate every option on a content item in `env` and
+ * copy each onto `node` as a DVC attribute using the option's key as
+ * the attribute name. Called once per rendered node; option names
+ * therefore live in the DVC attr namespace 1:1 (`badge`, `min`, `max`,
+ * `options`, `placeholder`, `value`, `state`, `mask`, `length`,
+ * `prompt`, `alt`, `role`, `has_more`, etc.). Options supplied on a
+ * kind that doesn't consume them still ride through — the bridge
+ * decides what to do with unknown attrs on each node type. */
+static void content_apply_options(deck_interp_ctx_t *c, deck_env_t *env,
+                                   deck_dvc_node_t *node,
+                                   const ast_node_t *ci)
+{
+    if (!node || !ci || ci->kind != AST_CONTENT_ITEM) return;
+    for (uint32_t i = 0; i < ci->as.content_item.n_options; i++) {
+        const ast_content_option_t *opt = &ci->as.content_item.options[i];
+        if (!opt->key || !opt->value) continue;
+        deck_value_t *v = content_eval_expr(c, env, opt->value);
+        if (!v) continue;
+        content_apply_value_as_attr(node, opt->key, v);
+        deck_release(v);
+    }
+}
+
 static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *block)
 {
     if (!block || block->kind != AST_CONTENT_BLOCK) return;
@@ -4181,6 +4271,18 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
         if (kind && strcmp(kind, "trigger") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_TRIGGER);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            /* Concept #57 — when the parser captured a label expression in
+             * data_expr (multi-line `trigger expr \n -> action` form), evaluate
+             * it and surface as the "label" attr. */
+            if (node && !label && data) {
+                deck_value_t *lv = content_eval_expr(c, env, data);
+                if (lv) {
+                    char buf[128];
+                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                    if (s && *s) deck_dvc_set_str(&s_bui_arena, node, "label", s);
+                    deck_release(lv);
+                }
+            }
             /* Concept #47 — bind the action's :event atom to a fresh
              * intent_id so bridge-side taps round-trip back through
              * deck_runtime_app_intent(app, id) → Machine.send(:event).
@@ -4204,6 +4306,16 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
         } else if (kind && strcmp(kind, "navigate") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_NAVIGATE);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            /* Concept #57 — data_expr-as-label for multi-line form. */
+            if (node && !label && data) {
+                deck_value_t *lv = content_eval_expr(c, env, data);
+                if (lv) {
+                    char buf[128];
+                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                    if (s && *s) deck_dvc_set_str(&s_bui_arena, node, "label", s);
+                    deck_release(lv);
+                }
+            }
             if (node && app) {
                 const char *ev = content_extract_event(action);
                 if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
@@ -4288,16 +4400,19 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                                         strcmp(sk, "trigger") == 0 ? DVC_TRIGGER : DVC_NAVIGATE);
                                     /* Per-item labels typically reference the
                                      * binder (`trigger x.name`). The parser
-                                     * stashed that as action_expr when no
-                                     * explicit `->` arrow follows — we need
-                                     * to distinguish "label expression" from
-                                     * "tap action". Today both live in
-                                     * action_expr; the heuristic: if
-                                     * action_expr is a Machine.send call, it's
-                                     * the action. Otherwise it's the label. */
+                                     * may store that expression in either
+                                     * action_expr (no tail arrow) or data_expr
+                                     * (concept #57 tail-arrow form:
+                                     * `trigger app.name\n  -> action`).
+                                     * Priority: if data_expr is set it is
+                                     * always the label; otherwise fall back
+                                     * to the legacy Machine.send heuristic. */
                                     ast_node_t *label_expr = NULL;
                                     ast_node_t *action_expr2 = NULL;
-                                    if (sact) {
+                                    if (sub->as.content_item.data_expr) {
+                                        label_expr = sub->as.content_item.data_expr;
+                                        action_expr2 = sact;
+                                    } else if (sact) {
                                         const char *ev_try = content_extract_event(sact);
                                         if (ev_try) {
                                             action_expr2 = sact;
@@ -4362,6 +4477,10 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                                         deck_release(lv);
                                     }
                                 }
+                                /* Concept #57 — per-item sub-node options
+                                 * evaluated in the per-element env so
+                                 * references like `badge: x.count` bind. */
+                                if (sn) content_apply_options(c, item_env, sn, sub);
                                 if (sn) deck_dvc_add_child(&s_bui_arena, item_row, sn);
                             }
                             deck_dvc_add_child(&s_bui_arena, node, item_row);
@@ -4554,6 +4673,12 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
             }
         }
         /* Other kinds (list/group/form/media/markdown…) skipped in pass 1. */
+
+        /* Concept #57 — apply per-widget options (`badge: 3`,
+         * `placeholder: "…"`, `min: 0`, `options: [:a, :b]`, …) onto the
+         * DVC node. Done once per top-level item; per-item template
+         * sub-nodes get their own call inside the list branch. */
+        if (node) content_apply_options(c, env, node, ci);
 
         if (node) deck_dvc_add_child(&s_bui_arena, root, node);
     }
