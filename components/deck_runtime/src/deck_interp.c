@@ -4237,27 +4237,50 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                                 if (sk && (strcmp(sk, "trigger") == 0 || strcmp(sk, "navigate") == 0)) {
                                     sn = deck_dvc_node_new(&s_bui_arena,
                                         strcmp(sk, "trigger") == 0 ? DVC_TRIGGER : DVC_NAVIGATE);
-                                    /* Label: if not a string literal, evaluate
-                                     * the first positional expression as label
-                                     * source. (Parser stashes `trigger x.name`
-                                     * as action_expr — not ideal; use data_expr
-                                     * for real label resolution in a follow-up.) */
+                                    /* Per-item labels typically reference the
+                                     * binder (`trigger x.name`). The parser
+                                     * stashed that as action_expr when no
+                                     * explicit `->` arrow follows — we need
+                                     * to distinguish "label expression" from
+                                     * "tap action". Today both live in
+                                     * action_expr; the heuristic: if
+                                     * action_expr is a Machine.send call, it's
+                                     * the action. Otherwise it's the label. */
+                                    ast_node_t *label_expr = NULL;
+                                    ast_node_t *action_expr2 = NULL;
+                                    if (sact) {
+                                        const char *ev_try = content_extract_event(sact);
+                                        if (ev_try) {
+                                            action_expr2 = sact;
+                                        } else {
+                                            label_expr = sact;
+                                        }
+                                    }
                                     if (sn) {
                                         if (slabel) {
                                             deck_dvc_set_str(&s_bui_arena, sn, "label", slabel);
-                                        } else if (sact) {
-                                            deck_value_t *lv = content_eval_expr(c, item_env, sact);
+                                        } else if (label_expr) {
+                                            deck_value_t *lv = content_eval_expr(c, item_env, label_expr);
                                             if (lv) {
                                                 lstr = content_value_as_str(lv, lbuf, sizeof(lbuf));
                                                 if (lstr) deck_dvc_set_str(&s_bui_arena, sn, "label", lstr);
                                                 deck_release(lv);
                                             }
                                         }
-                                        /* Intent binding per-element — concept #47
-                                         * only picked up Machine.send calls; bodies
-                                         * that include arrow actions would need that
-                                         * evaluated in item_env to carry payload.
-                                         * Deferred. */
+                                        /* Concept #50 — per-item intent binding
+                                         * for Machine.send(:event) actions.
+                                         * Payload from the per-item data is
+                                         * deferred to a future concept; this
+                                         * wires up zero-arg event dispatch. */
+                                        if (action_expr2 && cur_app) {
+                                            const char *ev = content_extract_event(action_expr2);
+                                            if (ev && cur_app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
+                                                uint32_t id = cur_app->next_intent_id++;
+                                                cur_app->intents[id].id = id;
+                                                cur_app->intents[id].event = ev;
+                                                sn->intent_id = id;
+                                            }
+                                        }
                                     }
                                 } else if (sk && strcmp(sk, "label") == 0) {
                                     sn = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);

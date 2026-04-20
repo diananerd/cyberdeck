@@ -1551,3 +1551,23 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 - **`has_more: expr`** — cursor-based pagination intent. Deferred.
 
 **A→B note**: this is the final architectural piece to show demonstrable annex UI on device. Concept #50+ will focus on the intent round-trip for per-item triggers (so tapping an app in the launcher list actually fires its `apps.launch` event) and the richer kinds (form/field, markdown, media).
+
+### Concept #50 — per-item intent binding (trigger inside list template)
+
+**Drift**: concept #49 rendered per-item triggers as `DVC_TRIGGER` but without an intent_id. Tapping them on hardware was a no-op — the bridge had no event name to round-trip back. Also, concept #49's label handling conflated "label expression" with "tap action" since the parser stashed both in `action_expr`.
+
+**Fix applied (walker only)**:
+
+- 2026-04-19 · layer 4 walker · `src/deck_interp.c` — per-item trigger / navigate branch split `action_expr` into two roles via `content_extract_event`:
+  * If the expression is a `Machine.send(:event)` call → it's the **action**. Reuses concept #47's extractor for the atom; assigns a fresh `intent_id` and records `{id, event}` in the app's intent table.
+  * Otherwise → it's the **label** (e.g. `trigger x.name` has `x.name` as its label-source expression). Evaluated in the per-item env and stringified.
+- Previously the parser and walker collapsed these cases; the heuristic now distinguishes by AST shape. Annexes that follow the canonical form `trigger <label_expr> -> Machine.send(:event)` work as expected.
+
+**Deferred**:
+- **Per-element payload**: `Machine.send(:open, item.id)` should pass `item.id` on tap — currently only zero-arg events propagate. Requires storing a snapshot of the action AST + per-item env in the intent table so the payload evaluates at tap time, not render time.
+- **Non-Machine.send actions**: `apps.launch(app.id)` on tap would require a generalised intent dispatcher that can evaluate an arbitrary captured expression. Future concept.
+- **Label + action with both expressions**: the current heuristic uses `-> Machine.send` for action, else as label. Spec allows both explicitly; richer parser would split them by arrow presence.
+
+**What this unblocks**: `list installed_apps \n item app -> trigger app.name -> Machine.send(:open_app)` now renders one intent-bound trigger per app. On hardware tap, the bridge emits the intent_id, shell calls `deck_runtime_app_intent(app, id)`, `Machine.send(:open_app)` fires a machine transition, and the destination state's content re-renders. Zero-arg event form is spec-compliant for the subset of annexes that use it.
+
+**A→B note**: this closes the per-item tap round-trip for the common-case zero-arg event pattern. The next concept will tackle payload propagation so `Machine.send(:open_app, app.id)` passes the id along — at which point most annex interactions work end-to-end.
