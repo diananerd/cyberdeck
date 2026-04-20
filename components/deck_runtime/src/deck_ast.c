@@ -322,6 +322,38 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
                 sp_putc(p, ')');
             }
             break;
+        case AST_CONTENT_BLOCK:
+            print_list(p, &n->as.content_block.items);
+            break;
+        case AST_CONTENT_ITEM:
+            if (n->as.content_item.kind)
+                sp_printf(p, " :%s", n->as.content_item.kind);
+            if (n->as.content_item.label)
+                sp_printf(p, " \"%s\"", n->as.content_item.label);
+            if (n->as.content_item.action_expr) {
+                sp_putc(p, ' ');
+                print_node(p, n->as.content_item.action_expr);
+            }
+            if (n->as.content_item.data_expr) {
+                sp_puts(p, " (data ");
+                print_node(p, n->as.content_item.data_expr);
+                sp_putc(p, ')');
+            }
+            for (uint32_t i = 0; i < n->as.content_item.n_options; i++) {
+                const ast_content_option_t *o = &n->as.content_item.options[i];
+                sp_printf(p, " (%s ", o->key ? o->key : "?");
+                print_node(p, o->value);
+                sp_putc(p, ')');
+            }
+            if (n->as.content_item.item_binder) {
+                sp_printf(p, " (item %s", n->as.content_item.item_binder);
+                for (uint32_t i = 0; i < n->as.content_item.item_body.len; i++) {
+                    sp_putc(p, ' ');
+                    print_node(p, n->as.content_item.item_body.items[i]);
+                }
+                sp_putc(p, ')');
+            }
+            break;
         default: break;
     }
     sp_putc(p, ')');

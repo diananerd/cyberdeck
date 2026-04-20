@@ -963,7 +963,12 @@ static bool parse_scalar_fields(deck_parser_t    *p,
         }
         const char *name = p->cur.text;
         advance(p);
-        if (!expect(p, TOK_COLON, "expected ':' after field name")) return false;
+        /* Keep the error message owner-specific so tests can pin the
+         * exact wording ("app field name" vs generic "field name"). */
+        const char *emsg = (owner && strcmp(owner, "@app") == 0)
+            ? "expected ':' after app field name"
+            : "expected ':' after field name";
+        if (!expect(p, TOK_COLON, emsg)) return false;
         if (at(p, TOK_NEWLINE)) {
             /* Reject nested blocks — spec §3 @app is identity-only.
              * The common mistake is writing `requires:` nested inside

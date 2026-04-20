@@ -188,6 +188,41 @@ static const parser_case_t CASES[] = {
       "  font: \"mono.ttf\"\n",
       "(module (assets (icon \"icon.png\") (font \"mono.ttf\")))" },
 
+    /* --- concept #57 option bag + concept #58 `on [atom]? -> action` --- */
+    /* Inline option after label: `trigger "go" badge: 3`. */
+    { "content_opt_inline", TEST_MODULE,
+      "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
+      "@requires\n  deck_level: 1\n"
+      "@machine m\n"
+      "  state main:\n"
+      "    content =\n"
+      "      trigger \"go\" badge: 3\n",
+      "(module (app (name (str \"X\")) (id (str \"y\")) (version (str \"1.0.0\")) (edition (int 2026))) (requires (deck_level (int 1))) "
+      "(machine m (state main (content_block (content_item :trigger \"go\" (badge (int 3)))))))" },
+    /* Trailing `-> action` promotes earlier action_expr to data_expr
+     * (label). Use a call-shaped option value so the TOK_IDENT `->`
+     * lambda rule (§7.1) doesn't consume the arrow. */
+    { "content_tail_arrow", TEST_MODULE,
+      "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
+      "@requires\n  deck_level: 1\n"
+      "@machine m\n"
+      "  state main:\n"
+      "    content =\n"
+      "      trigger app.name badge: unread_badge(app.id) -> apps.launch(app.id)\n",
+      "(module (app (name (str \"X\")) (id (str \"y\")) (version (str \"1.0.0\")) (edition (int 2026))) (requires (deck_level (int 1))) "
+      "(machine m (state main (content_block (content_item :trigger (call (dot (ident apps) launch) (dot (ident app) id)) "
+      "(data (dot (ident app) name)) (badge (call (ident unread_badge) (dot (ident app) id))))))))" },
+    /* `on [atom]? -> action` form used by form submit + input intents. */
+    { "content_on_arrow", TEST_MODULE,
+      "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
+      "@requires\n  deck_level: 1\n"
+      "@machine m\n"
+      "  state main:\n"
+      "    content =\n"
+      "      form on submit -> log.info(\"ok\")\n",
+      "(module (app (name (str \"X\")) (id (str \"y\")) (version (str \"1.0.0\")) (edition (int 2026))) (requires (deck_level (int 1))) "
+      "(machine m (state main (content_block (content_item :form (call (dot (ident log) info) (str \"ok\")))))))" },
+
     /* --- errors --- */
     { "err_no_decorator", TEST_ERROR, "foo",        "expected @app" },
     { "err_unknown_dec",  TEST_ERROR, "@wtf",       "unknown top-level decorator" },
@@ -243,7 +278,7 @@ static bool run_case(const parser_case_t *c)
                      (unsigned)deck_parser_err_col(&p));
             ok = false;
         } else {
-            char buf[512];
+            char buf[1024];
             ast_print(root, buf, sizeof(buf));
             /* Tolerate trailing spaces from do-block printers. */
             size_t blen = strlen(buf);
