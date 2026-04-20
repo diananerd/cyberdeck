@@ -98,6 +98,7 @@ static ast_node_t *parse_match(deck_parser_t *p);
 static ast_node_t *parse_if(deck_parser_t *p);
 static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head);
 static ast_node_t *parse_fn_decl(deck_parser_t *p);
+static ast_node_t *parse_suite(deck_parser_t *p);
 static bool        skip_type_annotation(deck_parser_t *p);
 
 static ast_node_t *mknode(deck_parser_t *p, ast_kind_t k)
@@ -290,8 +291,9 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         case TOK_IDENT:
             /* DL2 F21.2: single-ident lambda `x -> body`. We commit
              * before consuming the ident, then take the lambda branch
-             * if the next token is `->`. */
-            if (peek_next_tok(p) == TOK_ARROW) {
+             * if the next token is `->`. Suppressed in guard-expression
+             * contexts (match-when) so the arrow delimits the arm. */
+            if (!p->no_lambda && peek_next_tok(p) == TOK_ARROW) {
                 uint32_t ln = p->cur.line, co = p->cur.col;
                 const char *param = p->cur.text;
                 advance(p);  /* ident */
@@ -439,6 +441,28 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         }
         case TOK_KW_MATCH: return parse_match(p);
         case TOK_KW_IF:    return parse_if(p);
+        case TOK_KW_DO: {
+            /* Spec §7 — explicit `do` block as an expression. Desugars
+             * to the suite form: `do NEWLINE INDENT stmt+ DEDENT` yields
+             * a DO node whose value is the final statement's value. The
+             * body may be an indented suite (canonical) or a single
+             * inline statement `do stmt`. */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            advance(p);   /* do */
+            ast_node_t *body = parse_suite(p);
+            if (!body) return NULL;
+            /* parse_suite returns either AST_DO (indented form) or the
+             * bare statement (single-line form). Wrap bare statements
+             * so the shape is uniform for downstream consumers. */
+            if (body->kind != AST_DO) {
+                ast_node_t *d = ast_new(p->arena, AST_DO, ln, co);
+                if (!d) return NULL;
+                ast_list_init(&d->as.do_.exprs);
+                ast_list_push(p->arena, &d->as.do_.exprs, body);
+                body = d;
+            }
+            return parse_postfix(p, body);
+        }
         case TOK_KW_FN: {
             /* DL2 F21.2: anonymous fn in expression position. */
             ast_node_t *fnn = parse_fn_decl(p);
@@ -779,7 +803,14 @@ static ast_node_t *parse_match(deck_parser_t *p)
         if (at(p, TOK_BAR)) advance(p);
         ast_node_t *pat = parse_pattern(p); if (!pat) return NULL;
         ast_node_t *guard = NULL;
-        if (at(p, TOK_KW_WHEN)) { advance(p); guard = parse_expr_prec(p, 0); if (!guard) return NULL; }
+        if (at(p, TOK_KW_WHEN)) {
+            advance(p);
+            bool prev = p->no_lambda;
+            p->no_lambda = true;
+            guard = parse_expr_prec(p, 0);
+            p->no_lambda = prev;
+            if (!guard) return NULL;
+        }
         if (!at(p, TOK_ARROW)) {
             set_err(p, DECK_LOAD_PARSE_ERROR,
                     "expected '->' in match arm (spec 01-deck-lang §8); "

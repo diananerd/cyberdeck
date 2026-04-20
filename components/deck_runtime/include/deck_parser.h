@@ -44,6 +44,12 @@ typedef struct {
     deck_token_t  cur;
     deck_token_t  peek;
     bool          have_peek;
+    /* Grammar flag: when true the parser's primary doesn't promote a
+     * `IDENT ->` lookahead into a single-arg lambda. Used inside match
+     * arm guards so `match x | y when y > 0 -> body` terminates the
+     * guard expression at `->` instead of consuming it as the lambda
+     * body. */
+    bool          no_lambda;
 
     deck_err_t    err;
     const char   *err_msg;
