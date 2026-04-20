@@ -72,6 +72,8 @@ typedef enum {
     AST_STATE,
     AST_STATE_HOOK,   /* on enter / on leave */
     AST_MACHINE_TRANSITION,   /* Spec §8.4 — top-level `transition :event from:/to:/when:` */
+    AST_CONTENT_BLOCK,        /* Spec §8.2 / §12 — `content = <nodes>` body */
+    AST_CONTENT_ITEM,         /* one semantic content primitive (trigger/label/...) */
 
     AST_MODULE,
     AST_TYPE_DEF,    /* DL2 F22.2 — @type X { fields } */
@@ -247,6 +249,24 @@ struct ast_node {
             ast_node_t *before_body;
             ast_node_t *after_body;
         } machine_transition;
+        /* Concept #45 — spec §8.2 / §12 content body.
+         * `items` is the ordered list of AST_CONTENT_ITEM nodes. Runtime
+         * evaluator walks the list at state entry and builds a DVC tree. */
+        struct {
+            ast_list_t items;
+        } content_block;
+        /* One semantic content primitive. `kind` is an interned atom name
+         * (e.g. "trigger", "navigate", "list", "label"). `label` is the
+         * user-visible string (for trigger/navigate), NULL otherwise.
+         * `action_expr` is the fn call bound to interaction (NULL for
+         * passive nodes like label). `data_expr` is the iterable / value
+         * for list/media/markdown etc. */
+        struct {
+            const char *kind;
+            const char *label;
+            ast_node_t *action_expr;
+            ast_node_t *data_expr;
+        } content_item;
 
         struct { ast_list_t items; }                 module;
         struct {

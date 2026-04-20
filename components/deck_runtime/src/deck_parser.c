@@ -1591,34 +1591,110 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
              * form, trigger, navigate, media, status, markdown, …); the
              * bridge infers presentation (§10-deck-bridge-ui).
              *
-             * Parse-and-discard today: the runtime doesn't yet evaluate
-             * declarative content into DVC trees (the legacy `bridge.ui.*`
-             * imperative builtins are still what hello.deck / ping.deck
-             * use). Consuming the block here lets annex-a/b/c/d state
-             * machines parse so the rest of the loader runs; the DVC
-             * content-evaluator is a separate concept. */
+             * Concept #45 — parser now stores the body as an
+             * AST_CONTENT_BLOCK with AST_CONTENT_ITEM children, so the
+             * runtime content-evaluator (concept #46+) can walk it and
+             * emit a DVC tree. Today each item captures its kind name
+             * (first token, e.g. `trigger`/`navigate`/`label`) + an
+             * optional string literal label + an optional arrow body.
+             * Unknown shapes are stored as kind="raw" so they're at least
+             * round-trippable. */
             advance(p); /* content */
             if (!expect(p, TOK_ASSIGN, "expected '=' after `content` in state body")) return NULL;
-            /* Body is either an indented block (usual case) or a single
-             * inline expression on the same line. Discard either shape. */
+            ast_node_t *cb = mknode(p, AST_CONTENT_BLOCK); if (!cb) return NULL;
+            ast_list_init(&cb->as.content_block.items);
             if (at(p, TOK_NEWLINE)) {
                 advance(p);
                 while (at(p, TOK_NEWLINE)) advance(p);
                 if (at(p, TOK_INDENT)) {
                     advance(p);
-                    uint32_t depth = 1;
-                    while (depth > 0 && !at(p, TOK_EOF)) {
-                        if (at(p, TOK_INDENT))      { depth++; advance(p); }
-                        else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
-                        else                        { advance(p); }
+                    /* Parse each line at this indent level as one content item.
+                     * Nested indents (e.g. list body with `item x ->` lines) are
+                     * collected into the parent item's action_expr as a raw opaque
+                     * span for concept-#46 to unpack. */
+                    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                        if (at(p, TOK_NEWLINE)) { advance(p); continue; }
+                        ast_node_t *ci = mknode(p, AST_CONTENT_ITEM); if (!ci) return NULL;
+                        ci->as.content_item.kind = NULL;
+                        ci->as.content_item.label = NULL;
+                        ci->as.content_item.action_expr = NULL;
+                        ci->as.content_item.data_expr = NULL;
+                        /* Kind — first token on the line, if it's an ident/atom. */
+                        if (at(p, TOK_IDENT)) {
+                            ci->as.content_item.kind = p->cur.text;
+                            advance(p);
+                        } else if (at(p, TOK_ATOM)) {
+                            ci->as.content_item.kind = p->cur.text;
+                            advance(p);
+                        } else {
+                            ci->as.content_item.kind = "raw";
+                        }
+                        /* Optional string literal label (e.g. trigger "Search"). */
+                        if (at(p, TOK_STRING)) {
+                            ci->as.content_item.label = p->cur.text;
+                            advance(p);
+                        }
+                        /* Optional arrow + action expression (trigger / navigate). */
+                        if (at(p, TOK_ARROW)) {
+                            advance(p);
+                            ast_node_t *action = parse_expr_prec(p, 0);
+                            if (action) ci->as.content_item.action_expr = action;
+                        }
+                        /* Trailing content on the header line is the data_expr
+                         * for primitives like `list xs` / `media expr` / bare value.
+                         * Parse as an expression if anything is left. */
+                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                            ast_node_t *data = parse_expr_prec(p, 0);
+                            if (data) {
+                                if (!ci->as.content_item.action_expr)
+                                    ci->as.content_item.action_expr = data;
+                                else
+                                    ci->as.content_item.data_expr = data;
+                            }
+                        }
+                        /* Consume any still-unread tokens on this line (options
+                         * like `badge:` / `label:` / `items:` etc — deferred to
+                         * concept #46's richer parser pass). */
+                        while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
+                            advance(p);
+                        while (at(p, TOK_NEWLINE)) advance(p);
+                        /* If this item has a nested indent block (list body,
+                         * form body, etc.) absorb the whole span into data_expr
+                         * by keeping the inner tokens around — simplest: skip
+                         * the inner block without capturing (concept #46 will
+                         * revisit). */
+                        if (at(p, TOK_INDENT)) {
+                            advance(p);
+                            uint32_t depth = 1;
+                            while (depth > 0 && !at(p, TOK_EOF)) {
+                                if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                                else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+                                else                        { advance(p); }
+                            }
+                        }
+                        ast_list_push(p->arena, &cb->as.content_block.items, ci);
                     }
+                    if (at(p, TOK_DEDENT)) advance(p);
                 }
             } else {
-                /* Inline RHS — consume to end of line. */
+                /* Inline RHS — a single expression. Capture as a single item
+                 * with kind="raw" and action_expr = the expression. */
+                ast_node_t *ci = mknode(p, AST_CONTENT_ITEM); if (!ci) return NULL;
+                ci->as.content_item.kind = "raw";
+                ci->as.content_item.label = NULL;
+                ci->as.content_item.data_expr = NULL;
+                ast_node_t *expr = parse_expr_prec(p, 0);
+                ci->as.content_item.action_expr = expr;
+                ast_list_push(p->arena, &cb->as.content_block.items, ci);
                 while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
                     advance(p);
                 while (at(p, TOK_NEWLINE)) advance(p);
             }
+            /* Attach the content block to the state so the runtime can
+             * retrieve it at state entry. Stored in `state.hooks` alongside
+             * the existing on-enter / on-leave / transition nodes; the
+             * evaluator distinguishes by AST kind. */
+            ast_list_push(p->arena, &st->as.state.hooks, cb);
         } else {
             set_err(p, DECK_LOAD_PARSE_ERROR,
                     "expected `on`, `transition`, or `content =` in state body");

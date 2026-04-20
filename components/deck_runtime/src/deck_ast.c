@@ -73,6 +73,8 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_STATE:       return "state";
         case AST_STATE_HOOK:  return "state_hook";
         case AST_MACHINE_TRANSITION: return "machine_transition";
+        case AST_CONTENT_BLOCK: return "content_block";
+        case AST_CONTENT_ITEM:  return "content_item";
         case AST_MODULE:      return "module";
         case AST_TYPE_DEF:    return "type_def";
         case AST_ASSETS:      return "assets";

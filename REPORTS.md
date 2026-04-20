@@ -1425,3 +1425,31 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 **A→B note**: this is the third-largest architectural lever behind declarative content eval and @stream execution. With #38 (`@on` payload binding) + #44 (machine dispatch), an annex app can now be genuinely interactive — `@on os.event (field: binder) → Machine.send(:event_name, payload)` becomes a wire that runs end-to-end. The bridge UI layer still needs DVC re-rendering on state change (which is concept-content-eval territory), so apps using the declarative `content = …` form won't visibly re-draw, but the underlying transitions run correctly and `machine.state()` reports the new state.
 
 **Running tally**: §3 DL1 capabilities: `text / time / nvs / fs / math / system.info / bytes / log` — all 100%. §11 stdlib: `list 33/35 / map 13/13 / tup 6/6`. Runtime dispatch: `@on` events with payload binding (#38), machine transitions with when/before/after (#44), map dual-key access (#33). Duration literals (#32). The project transitioned from "parser accepts, runtime ignores" to "end-to-end wired" across the stdlib + dispatch axes.
+
+### Concept #45 — `content =` block parsing (spec §8.2 / §12)
+
+**Drift**: concept #24 taught the parser to recognise `content = …` but threw the body away entirely. Annex state machines with rich declarative content parsed but nothing survived for a future interpreter pass to work with. This concept closes the parse-and-discard gap by storing content as structured AST — the prerequisite for the runtime content interpreter (next concept).
+
+**Fix applied (parser + AST only — runtime interpretation is deferred to concept #46)**:
+
+- 2026-04-19 · layer 4 AST · `include/deck_ast.h`:
+  * Added `AST_CONTENT_BLOCK` — container holding an ordered list of `AST_CONTENT_ITEM`s.
+  * Added `AST_CONTENT_ITEM` — one semantic content primitive with fields `{kind, label, action_expr, data_expr}`.
+    - `kind` is the interned name of the first token on the line (`"trigger"`, `"navigate"`, `"list"`, `"label"`, `"media"`, …). Unknown opens parse as `kind="raw"`.
+    - `label` is the string literal that typically follows (e.g. `trigger "Search"`).
+    - `action_expr` captures the `-> fn_call` tail for interaction intents.
+    - `data_expr` captures trailing data (e.g. `list posts` → data_expr is the `posts` iterable).
+- 2026-04-19 · layer 4 parser · `src/deck_parser.c` — rewrote the content branch from indent-depth-discard to structured parsing. Each line emits an `AST_CONTENT_ITEM`; nested indented blocks (list items, form fields) are absorbed into the parent's span but not yet unpacked (concept #46 revisits). Inline `content = expr` captures the expression as a single-item block.
+- 2026-04-19 · layer 4 AST printer · `src/deck_ast.c` — `ast_kind_name` knows `content_block` and `content_item`.
+
+**What still works**: every existing annex loads without regression — the parser captures the content body in a shape the interpreter can walk, but the interpreter is still the legacy `bridge.ui.*` imperative builders. `hello.deck` / `ping.deck` continue to render via the old path.
+
+**What concept #46 will add**:
+- A walker that traverses the content block, constructs DVC nodes per item kind, encodes and pushes to the bridge at state entry.
+- Hook into machine transitions so the bridge re-renders after `Machine.send`.
+- Mapping of content intents → DVC node types (trigger → `DVC_TRIGGER`, list → `DVC_LIST`, label → `DVC_LABEL`, …).
+- Intent_id → event_name table so bridge-side triggers fire `Machine.send`.
+
+**Scope note**: the parser is now rich-ish but still simplified — options like `badge:` / `message:` / the typed body of `list items \n item x -> …` are captured at token level but not separated into structured fields. Concept #46 will iteratively add those as each matters for a real annex. Keeping the AST shape flexible now (kind-as-string, raw action_expr) means #46 can evolve without schema churn.
+
+**A→B note**: the A→B bug here was "annex state machines parse successfully → their content renders". The first half was true (concept #24). The second half quietly was not — every `content =` block silently went to the void. This concept converts "parsed successfully" into "parsed into runnable AST," which is the prerequisite for the render half to become true in concept #46.
