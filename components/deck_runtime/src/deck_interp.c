@@ -157,8 +157,9 @@ static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_inter
 #define DECK_RUNTIME_MAX_INTENTS 64
 
 typedef struct {
-    uint32_t    id;              /* 0 = slot empty */
-    const char *event;           /* arena-owned atom text */
+    uint32_t      id;              /* 0 = slot empty */
+    const char   *event;           /* arena-owned atom text */
+    deck_value_t *payload;         /* retained; NULL for zero-arg events (#51) */
 } deck_intent_binding_t;
 
 struct deck_runtime_app {
@@ -4140,13 +4141,28 @@ static const char *content_extract_event(const ast_node_t *action)
     return arg0->as.s;
 }
 
+/* Concept #51 — return the optional payload expression AST (second arg to
+ * Machine.send), or NULL when the call has only the event atom. Requires
+ * content_extract_event to have validated the shape. */
+static ast_node_t *content_extract_payload_expr(const ast_node_t *action)
+{
+    if (!action || action->kind != AST_CALL) return NULL;
+    if (action->as.call.args.len < 2) return NULL;
+    return action->as.call.args.items[1];
+}
+
 static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *block)
 {
     if (!block || block->kind != AST_CONTENT_BLOCK) return;
     bui_ensure_init();
-    /* Reset intent table — stale ids from previous state must not persist. */
+    /* Reset intent table — stale ids from previous state must not persist.
+     * Concept #51 — release any retained payloads from the prior render
+     * before zeroing the table. */
     struct deck_runtime_app *app = app_from_ctx(c);
     if (app) {
+        for (uint32_t j = 0; j < DECK_RUNTIME_MAX_INTENTS; j++) {
+            if (app->intents[j].payload) deck_release(app->intents[j].payload);
+        }
         memset(app->intents, 0, sizeof(app->intents));
         app->next_intent_id = 1;   /* 0 reserved for "no intent" */
     }
@@ -4167,13 +4183,21 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
             /* Concept #47 — bind the action's :event atom to a fresh
              * intent_id so bridge-side taps round-trip back through
-             * deck_runtime_app_intent(app, id) → Machine.send(:event). */
+             * deck_runtime_app_intent(app, id) → Machine.send(:event).
+             * Concept #51 — capture the optional payload expression
+             * evaluated in the current env so tap-time dispatch passes it
+             * to Machine.send. */
             if (node && app) {
                 const char *ev = content_extract_event(action);
                 if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
                     uint32_t id = app->next_intent_id++;
                     app->intents[id].id = id;
                     app->intents[id].event = ev;
+                    ast_node_t *pe = content_extract_payload_expr(action);
+                    if (pe) {
+                        deck_value_t *pv = content_eval_expr(c, env, pe);
+                        if (pv) app->intents[id].payload = pv;
+                    }
                     node->intent_id = id;
                 }
             }
@@ -4186,6 +4210,11 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                     uint32_t id = app->next_intent_id++;
                     app->intents[id].id = id;
                     app->intents[id].event = ev;
+                    ast_node_t *pe = content_extract_payload_expr(action);
+                    if (pe) {
+                        deck_value_t *pv = content_eval_expr(c, env, pe);
+                        if (pv) app->intents[id].payload = pv;
+                    }
                     node->intent_id = id;
                 }
             }
@@ -4269,15 +4298,21 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                                         }
                                         /* Concept #50 — per-item intent binding
                                          * for Machine.send(:event) actions.
-                                         * Payload from the per-item data is
-                                         * deferred to a future concept; this
-                                         * wires up zero-arg event dispatch. */
+                                         * Concept #51 — evaluate optional
+                                         * payload expression in the per-item
+                                         * env so `Machine.send(:open, app.id)`
+                                         * captures the binder-scoped value. */
                                         if (action_expr2 && cur_app) {
                                             const char *ev = content_extract_event(action_expr2);
                                             if (ev && cur_app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
                                                 uint32_t id = cur_app->next_intent_id++;
                                                 cur_app->intents[id].id = id;
                                                 cur_app->intents[id].event = ev;
+                                                ast_node_t *pe = content_extract_payload_expr(action_expr2);
+                                                if (pe) {
+                                                    deck_value_t *pv = content_eval_expr(c, item_env, pe);
+                                                    if (pv) cur_app->intents[id].payload = pv;
+                                                }
                                                 sn->intent_id = id;
                                             }
                                         }
@@ -6151,16 +6186,17 @@ deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id)
     const deck_intent_binding_t *b = &app->intents[intent_id];
     if (b->id != intent_id || !b->event) return DECK_RT_OK;   /* unknown / cleared */
 
-    /* Build args for b_machine_send: atom event, no payload. */
+    /* Build args for b_machine_send: atom event + optional payload (#51). */
     deck_value_t *ev = deck_new_atom(b->event);
     if (!ev) return DECK_RT_NO_MEMORY;
-    deck_value_t *argv[1] = { ev };
+    deck_value_t *argv[2] = { ev, b->payload };
+    uint32_t argc = b->payload ? 2 : 1;
     app->ctx.err = DECK_RT_OK;
     app->ctx.err_line = 0;
     app->ctx.err_col = 0;
     app->ctx.err_msg[0] = '\0';
     app->ctx.depth = 0;
-    deck_value_t *r = b_machine_send(argv, 1, &app->ctx);
+    deck_value_t *r = b_machine_send(argv, argc, &app->ctx);
     deck_release(ev);
     if (r) deck_release(r);
     if (app->ctx.err != DECK_RT_OK) {
@@ -6470,6 +6506,14 @@ void deck_runtime_app_unload(deck_runtime_app_t *app)
         }
     }
 
+    /* Concept #51 — release any retained intent payloads before the arena
+     * dies under us. */
+    for (uint32_t j = 0; j < DECK_RUNTIME_MAX_INTENTS; j++) {
+        if (app->intents[j].payload) {
+            deck_release(app->intents[j].payload);
+            app->intents[j].payload = NULL;
+        }
+    }
     deck_env_release(app->ctx.global);
     deck_arena_reset(&app->arena);
     app_slot_free(app);

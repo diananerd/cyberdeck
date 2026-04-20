@@ -1571,3 +1571,37 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 **What this unblocks**: `list installed_apps \n item app -> trigger app.name -> Machine.send(:open_app)` now renders one intent-bound trigger per app. On hardware tap, the bridge emits the intent_id, shell calls `deck_runtime_app_intent(app, id)`, `Machine.send(:open_app)` fires a machine transition, and the destination state's content re-renders. Zero-arg event form is spec-compliant for the subset of annexes that use it.
 
 **A→B note**: this closes the per-item tap round-trip for the common-case zero-arg event pattern. The next concept will tackle payload propagation so `Machine.send(:open_app, app.id)` passes the id along — at which point most annex interactions work end-to-end.
+
+### Concept #51 — intent payload propagation (`Machine.send(:event, payload)`)
+
+**Drift**: concepts #47 + #50 wired intent_ids but ignored the second positional argument of `Machine.send`. On tap, only the bare event atom fired — any `Machine.send(:open_app, app.id)` lost `app.id`. Apps using payload-carrying events had no way to deliver per-element data to the machine transition.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * `deck_intent_binding_t` gained `payload: deck_value_t*` (retained snapshot).
+  * New helper `content_extract_payload_expr(action)` returns the 2nd-arg AST of the Machine.send call, or NULL for zero-arg events.
+  * Top-level trigger / navigate and per-item trigger / navigate branches all evaluate the payload expression in the current env at render time via `content_eval_expr`. The resulting value is retained and stored in `app->intents[id].payload`.
+  * `content_render`'s intent-table reset walks the 64 slots and releases any prior payloads before zeroing — keeps the refcount honest across renders.
+  * `deck_runtime_app_unload` also releases any lingering payloads before the arena dies.
+  * `deck_runtime_app_intent` passes the payload as the 2nd arg to `b_machine_send` when present (`argc = 2`), falls back to zero-arg (`argc = 1`) when it isn't.
+
+**What this unblocks**: `list installed_apps \n item app -> trigger app.name -> Machine.send(:open_app, app.id)` now fires `Machine.send(:open_app, "com.deck.launcher")` on tap. The machine's `@on :open_app (id: s)` handler (concept #38 payload binder) receives `id` bound to the element's id. Full per-element round-trip works for any event with scalar or record payloads.
+
+**Deferred**:
+- Non-`Machine.send` actions — `apps.launch(app.id)` on tap still doesn't dispatch anything. That requires a general captured-action intent path (evaluate the AST at tap time with a saved env) — heavier concept.
+- Payload evaluation happens **at render time**, not tap time. For dynamic payloads that depend on state mutated between render and tap, this is a subtle divergence from spec semantics. For most cases (per-element static refs) it's identical. Lazy-eval payload is a future concept.
+
+**Session-wide annex-interactive milestone**: with #38 + #44 + #45 + #46 + #47 + #49 + #50 + #51, the annex-to-UI interactive loop is end-to-end:
+
+```
+render: list template → per-item trigger with intent_id + captured payload
+user: tap trigger
+bridge: emit intent_id
+shell: deck_runtime_app_intent(app, id)
+runtime: Machine.send(:event, payload)
+machine: when → on_leave → before → state change → on_enter → after
+render: dest state content walked + pushed to bridge
+```
+
+The launcher annex example — tap app → open the app — is now expressible and runnable.
