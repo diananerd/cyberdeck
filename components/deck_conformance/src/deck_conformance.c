@@ -621,15 +621,16 @@ static bool s_fuzz_random_inputs(char *d, size_t dz)
     s_fuzz_state = 0xDECAFBADu;
 
     static char fuzz_buf[FUZZ_BUF_MAX];
-    uint32_t ok_cnt = 0, load_err_cnt = 0, rt_err_cnt = 0, other_cnt = 0;
+    uint32_t phase1_ok = 0, phase2_ok = 0;
+    uint32_t load_err_cnt = 0, rt_err_cnt = 0, other_cnt = 0;
     size_t   heap_start = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
 
-    /* Phase 1: pure random bytes. */
+    /* Phase 1: pure random bytes. MUST all be rejected. */
     for (uint32_t i = 0; i < FUZZ_ITERS / 2; i++) {
         uint32_t len = 16 + (fuzz_rand() % (FUZZ_BUF_MAX - 16));
         for (uint32_t j = 0; j < len; j++) fuzz_buf[j] = (char)(fuzz_rand() & 0xFF);
         deck_err_t rc = deck_runtime_run_on_launch(fuzz_buf, len);
-        if (rc == DECK_RT_OK || rc == DECK_LOAD_OK) ok_cnt++;
+        if (rc == DECK_RT_OK || rc == DECK_LOAD_OK) phase1_ok++;
         else if (rc >= DECK_LOAD_OK)                load_err_cnt++;
         else if (rc != 0 && rc < DECK_LOAD_OK)      rt_err_cnt++;
         else                                        other_cnt++;
@@ -658,7 +659,7 @@ static bool s_fuzz_random_inputs(char *d, size_t dz)
             fuzz_buf[pos] ^= (char)(fuzz_rand() & 0xFF);
         }
         deck_err_t rc = deck_runtime_run_on_launch(fuzz_buf, (uint32_t)n);
-        if (rc == DECK_RT_OK || rc == DECK_LOAD_OK) ok_cnt++;
+        if (rc == DECK_RT_OK || rc == DECK_LOAD_OK) phase2_ok++;
         else if (rc >= DECK_LOAD_OK)                load_err_cnt++;
         else if (rc != 0 && rc < DECK_LOAD_OK)      rt_err_cnt++;
         else                                        other_cnt++;
@@ -674,31 +675,28 @@ static bool s_fuzz_random_inputs(char *d, size_t dz)
     esp_log_level_set("deck_runtime", prev_rtm);
 
     snprintf(d, dz,
-             "%u iters: ok=%u (some sanity muts pass) load_err=%u rt_err=%u other=%u heap%+ld",
-             (unsigned)FUZZ_ITERS, (unsigned)ok_cnt,
+             "%u iters: p1_ok=%u (MUST be 0) p2_ok=%u load_err=%u rt_err=%u other=%u heap%+ld",
+             (unsigned)FUZZ_ITERS, (unsigned)phase1_ok, (unsigned)phase2_ok,
              (unsigned)load_err_cnt, (unsigned)rt_err_cnt,
              (unsigned)other_cnt, (long)heap_delta);
 
-    /* Pass criteria:
-     *  - No "other" codes (implies an unexpected return path)
-     *  - Heap didn't leak more than a few KB (runtime allocs per run are
-     *    transient; some drift is OK because interns accumulate)
-     *  - A few bit-flip mutations of a valid source CAN still parse &
-     *    execute OK (that's fine, they're valid programs). But random
-     *    bytes in phase 1 should never yield OK.
-     *  - No crash (we got here at all).
-     * We don't enforce "all rejected" because phase 2 may produce
-     * valid-looking outputs. */
-    /* Heap budget: bit-flip fuzz can produce sources that intern strings;
-     * interns accumulate across the 200 iters and are NOT a leak (they're
-     * one-time cost). DL2 string interpolation widens the surface for
-     * intern growth, so allow up to 16 KB drift. */
-    return other_cnt == 0 && heap_delta <= 16384;
+    /* Pass criteria (tightened to close a false-pass path the REPORTS.md
+     * audit flagged):
+     *  - phase1_ok == 0 — pure random bytes MUST NEVER be accepted. A
+     *    non-zero count means the lexer/parser admits ambiguous garbage
+     *    as a valid program.
+     *  - other_cnt == 0 — no unexpected return code path.
+     *  - heap didn't leak more than 16 KB (intern growth accumulates).
+     *  - no crash (we got here at all).
+     *  Phase-2 (bit-flip of a valid source) CAN still produce ok — those
+     *  are valid programs; not a failure. */
+    return phase1_ok == 0 && other_cnt == 0 && heap_delta <= 16384;
 }
 
 /* Heap-pressure stress: shrink the deck_alloc hard limit below what the
  * test actually needs, run a moderately-sized program, and assert the
- * runtime returns an error (not panics) then restores cleanly. */
+ * runtime returns DECK_RT_NO_MEMORY specifically (not panics, not some
+ * other code that happens to block the sentinel). Then restores cleanly. */
 static bool s_heap_pressure_recovers(char *d, size_t dz)
 {
     size_t orig_limit = deck_alloc_limit();
@@ -708,12 +706,23 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
     size_t squeeze = current + 64;
     deck_alloc_set_limit(squeeze);
 
-    static deck_test_t probe = { "probe-under-pressure",
-                                 "/conformance/lang_strings.deck",
-                                 "DECK_CONF_OK:lang.strings",
-                                 DECK_RT_OK, false, 0, 0, 0, 0, {0}, 0 };
-    /* We expect FAIL — the test's sentinel should NOT appear. */
-    bool sentinel_hit = run_deck_test(&probe);
+    /* Run the probe inline so we can inspect the actual rc (run_deck_test
+     * collapses it to bool). */
+    size_t probe_n = DECK_TEST_SRC_CAP - 1;
+    deck_sdi_err_t rr = deck_sdi_fs_read("/conformance/lang_strings.deck",
+                                          s_deck_src, &probe_n);
+    if (rr != DECK_SDI_OK) {
+        deck_alloc_set_limit(orig_limit);
+        snprintf(d, dz, "probe fs.read FAIL: %s", deck_sdi_strerror(rr));
+        return false;
+    }
+    s_deck_src[probe_n] = '\0';
+    capture_begin();
+    deck_err_t rc = deck_runtime_run_on_launch(s_deck_src, (uint32_t)probe_n);
+    capture_end();
+    bool got_oom = (rc == DECK_RT_NO_MEMORY);
+    bool sentinel_hit = strstr(s_log_cap,
+                                "DECK_CONF_OK:lang.strings") != NULL;
 
     /* Restore and sanity-check the runtime still works. */
     deck_alloc_set_limit(orig_limit);
@@ -725,12 +734,14 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
     bool ok_after = run_deck_test(&after);
 
     snprintf(d, dz,
-             "under squeeze=%u B: sentinel=%s; after restore=%s",
+             "squeeze=%uB: rc=%s sentinel=%s; after=%s",
              (unsigned)squeeze,
+             deck_err_name(rc),
              sentinel_hit ? "hit(!)" : "miss(ok)",
              ok_after ? "PASS" : "FAIL");
-    /* Success = pressure stopped the test AND runtime recovered. */
-    return !sentinel_hit && ok_after;
+    /* Success = runtime rejected with NO_MEMORY specifically AND
+     * recovery sanity passes AND sentinel did not fire. */
+    return got_oom && !sentinel_hit && ok_after;
 }
 
 /* Corrupt-input stress: drive deck_runtime_run_on_launch with adversarial

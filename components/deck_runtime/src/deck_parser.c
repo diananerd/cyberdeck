@@ -475,7 +475,17 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
                 head = n;
                 continue;
             }
-            if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name or index after '.'"); return NULL; }
+            /* `send` is a reserved keyword for the statement form `send :evt`
+             * (spec 02-deck-app §8 legacy). When it appears as a field name
+             * after `.` it is unambiguously the map-member access that
+             * `Machine.send(:evt)` / `machine.send(:evt)` rely on (concepts
+             * #44/#47/#58). Accept it plus any other keyword that has a
+             * meaningful use as a capability method name. */
+            if (!at(p, TOK_IDENT) && !at(p, TOK_KW_SEND)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "expected field name or index after '.'");
+                return NULL;
+            }
             ast_node_t *n = mknode(p, AST_DOT); if (!n) return NULL;
             n->as.dot.obj   = head;
             n->as.dot.field = p->cur.text;

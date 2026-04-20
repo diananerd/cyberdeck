@@ -465,8 +465,14 @@ static bool handle_line_start(deck_lexer_t *lx, deck_token_t *out)
         return true;
     }
 
-    /* Blank or comment-only line — don't emit indent changes. */
+    /* Blank or comment-only line — don't emit indent changes. Spec §2.2
+     * defines `--` (single-line) and `---` (multi-line) as canonical
+     * comment syntax; `#` is kept as a legacy alternative that predates
+     * spec alignment. */
     if (peek(lx) == '\n' || peek(lx) == '#' || peek(lx) < 0) {
+        return false;
+    }
+    if (peek(lx) == '-' && lx->pos + 1 < lx->len && lx->src[lx->pos + 1] == '-') {
         return false;
     }
 
@@ -528,11 +534,40 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
         if (handle_line_start(lx, out)) return true;
     }
 
-    /* Skip intra-line spaces and comments. */
+    /* Skip intra-line spaces and comments. Spec §2.2:
+     *   --  single-line, to end of line
+     *   --- multi-line, until the closing `---` (anywhere in source)
+     * `#` is the legacy single-line form kept for backward compat. */
     while (lx->pos < lx->len) {
         int c = peek(lx);
         if (c == ' ' || c == '\r') { advance(lx); continue; }
         if (c == '#') {
+            while (lx->pos < lx->len && peek(lx) != '\n') advance(lx);
+            continue;
+        }
+        if (c == '-' && lx->pos + 1 < lx->len && lx->src[lx->pos + 1] == '-') {
+            /* Distinguish `---` (block) from `--` (line). Block form
+             * swallows everything up to the next `---` (also on its own). */
+            if (lx->pos + 2 < lx->len && lx->src[lx->pos + 2] == '-') {
+                advance(lx); advance(lx); advance(lx); /* opening --- */
+                while (lx->pos < lx->len) {
+                    if (peek(lx) == '\n') {
+                        /* Count the newline for line tracking. */
+                        lx->line++; lx->col = 1;
+                        lx->pos++;
+                        continue;
+                    }
+                    if (peek(lx) == '-' && lx->pos + 2 < lx->len &&
+                        lx->src[lx->pos + 1] == '-' &&
+                        lx->src[lx->pos + 2] == '-') {
+                        advance(lx); advance(lx); advance(lx);
+                        break;
+                    }
+                    advance(lx);
+                }
+                continue;
+            }
+            /* Single-line `--` comment. */
             while (lx->pos < lx->len && peek(lx) != '\n') advance(lx);
             continue;
         }

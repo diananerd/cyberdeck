@@ -6199,6 +6199,12 @@ static deck_err_t run_machine(const ast_node_t *machine,
         const char *next = NULL;
         run_state_hooks(c, state, "enter", &next);
         if (c->err != DECK_RT_OK) return c->err;
+        /* Concept #46 parity — sequential machine must also render declarative
+         * content on each state entry so `content =` blocks in @flow / non-
+         * event-driven @machine states aren't silently dropped. Matches the
+         * event-driven branch above. */
+        content_render_state(c, c->global, state);
+        if (c->err != DECK_RT_OK) return c->err;
         if (!next) {
             /* No transition → terminate in this state. */
             run_state_hooks(c, state, "leave", NULL);

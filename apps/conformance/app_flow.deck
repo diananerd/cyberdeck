@@ -7,10 +7,17 @@
 @requires
   deck_level: 1
 
+-- REAL GATE: sentinel in the LAST step only (run_machine aborts on any
+-- step body error, so done cannot run if welcome / collect crashed). Each
+-- step logs its own line so a human reading the log can verify the three
+-- ran in order. An error inside a step aborts run_machine; a missing step
+-- in the desugar would either break the auto-transition chain or end in
+-- the wrong state.
 @flow signup
   step welcome:
     log.info("app.flow: welcome")
   step collect:
     log.info("app.flow: collect")
   step done:
+    log.info("app.flow: done")
     log.info("DECK_CONF_OK:app.flow")

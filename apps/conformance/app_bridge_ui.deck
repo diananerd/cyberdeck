@@ -7,11 +7,33 @@
 @requires
   deck_level: 1
 
+-- REAL GATE (was: legacy imperative `bridge.ui.*` builders + unconditional
+-- sentinel; the fixture passed even when DVC emission silently dropped).
+-- This version exercises the declarative content-body path (concepts
+-- #45/#46/#48/#54/#57). The sequential machine runs init → render → done.
+-- content_render fires on each state entry (also in sequential machines,
+-- per the concept #46 parity extension). The sentinel emits from the
+-- LAST state's on_enter, which run_machine only reaches after
+-- init.on_enter, init.content_render, the auto-transition, and
+-- done.on_enter all succeed. If content_render errors (e.g. walker
+-- encounters an unknown primitive) c->err aborts the machine and the
+-- sentinel never emits. Items are kept flat (no `group ... \n  child`
+-- nesting) — nested `content` items are a future concept.
 @on launch:
-  let title = bridge.ui.label("CONF")
-  let row   = bridge.ui.data_row("STATUS:", "ok")
-  let div   = bridge.ui.divider()
-  let body  = bridge.ui.column([title, div, row])
-  let root  = bridge.ui.group("CONF.APP.BRIDGE_UI", [body])
-  bridge.ui.render(root)
-  log.info("DECK_CONF_OK:app.bridge_ui")
+  log.info("app.bridge_ui: launch")
+
+@machine ui
+  state init:
+    on enter:
+      log.info("app.bridge_ui: init")
+    content =
+      label "phase 1"
+      divider
+      status "RUN" label: "phase"
+    transition :done
+  state done:
+    on enter:
+      log.info("app.bridge_ui: done")
+      log.info("DECK_CONF_OK:app.bridge_ui")
+    content =
+      label "phase 2"

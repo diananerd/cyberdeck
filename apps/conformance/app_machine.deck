@@ -7,8 +7,15 @@
 @requires
   deck_level: 1
 
+-- REAL GATE (was: sentinel in @on launch before machine runs, always passed).
+-- This version relies on run_machine semantics: an error in any state hook
+-- aborts the chain, and ready.on_enter only runs when the transition from
+-- boot actually fires. Per run_state_hooks + run_machine in deck_interp.c,
+-- if boot.on_enter errors OR the `transition :ready` statement is missing
+-- OR state change is broken, ready.on_enter never runs and the sentinel
+-- never emits.
 @on launch:
-  log.info("DECK_CONF_OK:app.machine")
+  log.info("app.machine: launch")
 
 @machine lifecycle
   state boot:
@@ -18,3 +25,4 @@
   state ready:
     on enter:
       log.info("app.machine: ready")
+      log.info("DECK_CONF_OK:app.machine")
