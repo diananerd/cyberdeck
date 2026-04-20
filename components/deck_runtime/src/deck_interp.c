@@ -786,12 +786,189 @@ static deck_value_t *b_map_values(deck_value_t **args, uint32_t n, deck_interp_c
     return out;
 }
 
-/* ---- bytes.* ---- */
+/* ---- bytes.* (concept #40 — spec §3 @builtin bytes) ----
+ * Accepts DECK_T_BYTES (the dedicated buffer value) or DECK_T_LIST of ints
+ * (the byte-literal shape `[0xDE, 0xAD]`). Outputs are emitted as DECK_T_LIST
+ * for interop with text.hex_* / fs.read_bytes — unifies the byte
+ * representation at this layer. */
+
+/* Materialize a [byte]-shaped value into a heap buffer. Returns false with
+ * a set error on type mismatch. Caller frees `*out_buf`. */
+static bool bytes_materialize(deck_value_t *v, uint8_t **out_buf, uint32_t *out_len,
+                              deck_interp_ctx_t *c, const char *who)
+{
+    if (!v) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s expects [byte] or bytes", who); return false; }
+    if (v->type == DECK_T_BYTES) {
+        uint32_t L = v->as.bytes.len;
+        uint8_t *b = L > 0 ? (uint8_t *)malloc(L) : NULL;
+        if (L > 0 && !b) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "%s alloc", who); return false; }
+        if (L > 0) memcpy(b, v->as.bytes.buf, L);
+        *out_buf = b; *out_len = L;
+        return true;
+    }
+    if (v->type == DECK_T_LIST) {
+        uint32_t L = v->as.list.len;
+        uint8_t *b = L > 0 ? (uint8_t *)malloc(L) : NULL;
+        if (L > 0 && !b) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "%s alloc", who); return false; }
+        for (uint32_t i = 0; i < L; i++) {
+            deck_value_t *e = v->as.list.items[i];
+            if (!e || e->type != DECK_T_INT) { free(b); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s: list[%u] not int", who, (unsigned)i); return false; }
+            int64_t x = e->as.i;
+            if (x < 0 || x > 255) { free(b); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "%s: byte out of range", who); return false; }
+            b[i] = (uint8_t)x;
+        }
+        *out_buf = b; *out_len = L;
+        return true;
+    }
+    set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s expects [byte] or bytes", who);
+    return false;
+}
+
+/* Wrap a heap buffer into a DECK_T_LIST of ints. Takes ownership of `buf`
+ * via copying — caller still frees on the way out. */
+static deck_value_t *bytes_to_list(const uint8_t *buf, uint32_t L, deck_interp_ctx_t *c)
+{
+    deck_value_t *out = deck_new_list(L);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bytes output alloc"); return NULL; }
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *b = deck_new_int(buf[i]);
+        deck_list_push(out, b); deck_release(b);
+    }
+    return out;
+}
+
 static deck_value_t *b_bytes_len(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_BYTES) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.len expects bytes"); return NULL; }
-    return deck_new_int((int64_t)args[0]->as.bytes.len);
+    if (!args[0]) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.len expects [byte] or bytes"); return NULL; }
+    if (args[0]->type == DECK_T_BYTES) return deck_new_int((int64_t)args[0]->as.bytes.len);
+    if (args[0]->type == DECK_T_LIST)  return deck_new_int((int64_t)args[0]->as.list.len);
+    set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.len expects [byte] or bytes"); return NULL;
+}
+
+static deck_value_t *b_bytes_concat(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    uint8_t *a = NULL, *b = NULL; uint32_t aL = 0, bL = 0;
+    if (!bytes_materialize(args[0], &a, &aL, c, "bytes.concat")) return NULL;
+    if (!bytes_materialize(args[1], &b, &bL, c, "bytes.concat")) { free(a); return NULL; }
+    uint64_t total = (uint64_t)aL + bL;
+    if (total > (1U << 15)) { free(a); free(b); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.concat: > 32KB"); return NULL; }
+    uint8_t *merged = total > 0 ? (uint8_t *)malloc((size_t)total) : NULL;
+    if (total > 0 && !merged) { free(a); free(b); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bytes.concat alloc"); return NULL; }
+    if (aL > 0) memcpy(merged, a, aL);
+    if (bL > 0) memcpy(merged + aL, b, bL);
+    deck_value_t *out = bytes_to_list(merged, (uint32_t)total, c);
+    free(a); free(b); free(merged);
+    return out;
+}
+
+static deck_value_t *b_bytes_slice(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[1] || args[1]->type != DECK_T_INT || !args[2] || args[2]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.slice(b, int, int)"); return NULL;
+    }
+    uint8_t *b = NULL; uint32_t L = 0;
+    if (!bytes_materialize(args[0], &b, &L, c, "bytes.slice")) return NULL;
+    int64_t s = args[1]->as.i, e = args[2]->as.i;
+    if (s < 0) s += L;
+    if (e < 0) e += L;
+    if (s < 0) s = 0;
+    if (e > (int64_t)L) e = L;
+    if (s >= e) { free(b); return deck_new_list(0); }
+    deck_value_t *out = bytes_to_list(b + s, (uint32_t)(e - s), c);
+    free(b);
+    return out;
+}
+
+static deck_value_t *b_bytes_to_int_be(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    uint8_t *b = NULL; uint32_t L = 0;
+    if (!bytes_materialize(args[0], &b, &L, c, "bytes.to_int_be")) return NULL;
+    if (L > 8) { free(b); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.to_int_be: > 8 bytes"); return NULL; }
+    int64_t acc = 0;
+    for (uint32_t i = 0; i < L; i++) acc = (acc << 8) | b[i];
+    free(b);
+    return deck_new_int(acc);
+}
+
+static deck_value_t *b_bytes_to_int_le(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    uint8_t *b = NULL; uint32_t L = 0;
+    if (!bytes_materialize(args[0], &b, &L, c, "bytes.to_int_le")) return NULL;
+    if (L > 8) { free(b); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.to_int_le: > 8 bytes"); return NULL; }
+    int64_t acc = 0;
+    for (int32_t i = (int32_t)L - 1; i >= 0; i--) acc = (acc << 8) | b[i];
+    free(b);
+    return deck_new_int(acc);
+}
+
+/* bytes.from_int(n, size, endian:atom). endian = :be | :le. */
+static deck_value_t *b_bytes_from_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT ||
+        !args[1] || args[1]->type != DECK_T_INT ||
+        !args[2] || args[2]->type != DECK_T_ATOM) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.from_int(int, size:int, :be|:le)"); return NULL;
+    }
+    int64_t v = args[0]->as.i;
+    int64_t size = args[1]->as.i;
+    if (size < 1 || size > 8) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.from_int: size 1..8"); return NULL; }
+    bool be;
+    if (strcmp(args[2]->as.atom, "be") == 0) be = true;
+    else if (strcmp(args[2]->as.atom, "le") == 0) be = false;
+    else { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.from_int: endian must be :be or :le"); return NULL; }
+    uint8_t buf[8];
+    uint64_t u = (uint64_t)v;
+    if (be) {
+        for (int64_t i = size - 1; i >= 0; i--) { buf[i] = (uint8_t)(u & 0xFF); u >>= 8; }
+    } else {
+        for (int64_t i = 0; i < size; i++) { buf[i] = (uint8_t)(u & 0xFF); u >>= 8; }
+    }
+    return bytes_to_list(buf, (uint32_t)size, c);
+}
+
+/* XOR: paired-byte XOR of equal-length inputs; shorter input cycles.
+ * Spec §3 implies equal length — return empty when shapes mismatch badly,
+ * caller's responsibility to align. */
+static deck_value_t *b_bytes_xor(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    uint8_t *a = NULL, *b = NULL; uint32_t aL = 0, bL = 0;
+    if (!bytes_materialize(args[0], &a, &aL, c, "bytes.xor")) return NULL;
+    if (!bytes_materialize(args[1], &b, &bL, c, "bytes.xor")) { free(a); return NULL; }
+    if (bL == 0) { free(a); free(b); return deck_new_list(0); }
+    uint8_t *out = aL > 0 ? (uint8_t *)malloc(aL) : NULL;
+    if (aL > 0 && !out) { free(a); free(b); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bytes.xor alloc"); return NULL; }
+    for (uint32_t i = 0; i < aL; i++) out[i] = a[i] ^ b[i % bL];
+    deck_value_t *r = bytes_to_list(out, aL, c);
+    free(a); free(b); free(out);
+    return r;
+}
+
+static deck_value_t *b_bytes_fill(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bytes.fill(byte:int, count:int)"); return NULL;
+    }
+    int64_t val = args[0]->as.i;
+    int64_t count = args[1]->as.i;
+    if (val < 0 || val > 255) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.fill: byte 0..255"); return NULL; }
+    if (count < 0) count = 0;
+    if (count > (1 << 15)) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "bytes.fill: count > 32KB"); return NULL; }
+    deck_value_t *out = deck_new_list((uint32_t)count);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bytes.fill alloc"); return NULL; }
+    for (int64_t i = 0; i < count; i++) {
+        deck_value_t *b = deck_new_int(val);
+        deck_list_push(out, b); deck_release(b);
+    }
+    return out;
 }
 
 /* ---- time.* ---- */
@@ -3372,6 +3549,14 @@ static const builtin_t BUILTINS[] = {
 
     /* bytes */
     { "bytes.len",              b_bytes_len,         1, 1 },
+    /* Concept #40 — §3 @builtin bytes. Accepts [int] or bytes; emits [int]. */
+    { "bytes.concat",           b_bytes_concat,      2, 2 },
+    { "bytes.slice",            b_bytes_slice,       3, 3 },
+    { "bytes.to_int_be",        b_bytes_to_int_be,   1, 1 },
+    { "bytes.to_int_le",        b_bytes_to_int_le,   1, 1 },
+    { "bytes.from_int",         b_bytes_from_int,    3, 3 },
+    { "bytes.xor",              b_bytes_xor,         2, 2 },
+    { "bytes.fill",             b_bytes_fill,        2, 2 },
 
     /* math */
     { "math.abs",               b_math_abs,          1, 1 },

@@ -1297,3 +1297,25 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why no SDI extension for device_model/os_name**: kept the concept focused. A future platform port (alternative ESP32 board, emulator) would need these as SDI vtable entries — flagged for that concept, not this one.
 
 **Running tally**: `system.info.*` now at 11/11 (minus `versions().drivers/extensions` rich sub-lists, which need Driver registry iteration — separate concept). Six capabilities complete: text, time, nvs, fs, math, system.info.
+
+### Concept #40 — bytes.* completeness (spec §3 @builtin bytes)
+
+**Drift**: runtime had `bytes.len` only; spec declares 7 more methods. Any Deck crypto / binary-protocol code would hit "unknown function" immediately.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` — seven new builtins plus shared helpers:
+  * `bytes_materialize` — accepts either `DECK_T_BYTES` or `DECK_T_LIST` of ints (the `[0xDE, 0xAD]` literal shape), copies into a malloc'd uint8_t buffer. Validates each list element is int 0–255.
+  * `bytes_to_list` — wraps a uint8_t buffer as `DECK_T_LIST` of ints for output consistency.
+  * Unified representation: **all byte ops accept [int] or bytes, emit [int]**. Matches concept #28's `hex_encode/decode` and concept #36's `fs.read_bytes/write_bytes` output shape.
+  * `bytes.concat(a, b)` — merged output list, 32 KB cap.
+  * `bytes.slice(b, start, end)` — with negative indexing (`-1` = last) matching `text.slice` semantics.
+  * `bytes.to_int_be / to_int_le(b)` — up to 8-byte big/little-endian integer decode.
+  * `bytes.from_int(n, size, :be | :le)` — `size` must be 1..8; atom argument dispatches endian.
+  * `bytes.xor(a, b)` — element-wise XOR; shorter `b` cycles (standard repeating-key pattern, useful for trivial encoding / masking).
+  * `bytes.fill(byte, count)` — construct `[byte; count]`. 32 KB cap.
+  * `bytes.len` extended to accept both `DECK_T_BYTES` and `DECK_T_LIST`.
+
+**Why unify on [int] output even when input was `DECK_T_BYTES`**: the two representations coexist for historical reasons (the dedicated `DECK_T_BYTES` type pre-dates the list-literal byte shape). `os_text.deck` compares with `==` against `[0x48, 0x69]` — expects list shape. Having every byte-producer return `DECK_T_LIST` of ints means literal equality works without `bytes_to_list` conversion at the call site. A future concept could add a `bytes.to_buffer([int]) -> DECK_T_BYTES` if a caller genuinely needs the packed form.
+
+**Running tally**: `bytes.*` now at 8/8. Seven §3 capabilities complete: `text` (36/36), `time` (18/18), `nvs` (13/13), `fs` (10/10), `math` (33/33), `system.info` (11/11), `bytes` (8/8). Every DL1-mandatory `@builtin` surface from §3 is at 100% builtin coverage.
