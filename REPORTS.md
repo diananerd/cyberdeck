@@ -2037,3 +2037,29 @@ Baseline evidence (HEAD before this concept, flashed and captured): `lang.fn.bas
 **Why this matters (A→B)**: the classic "test harness crashes mid-suite, all downstream tests silently count as fail" pattern. Pre-fix, our conformance JSON reported 47/80 PASS, but that number was meaningless — it was "47 passed before we crashed, and 33 listed as fail simply because the board never got to them". With the stack bump, 57/80 is a true count: 57 actually pass, 23 actually have concept-level bugs (each deserving its own future concept in the cascade). This is the user's recurring rule at work: "los tests muchas veces asumen que A implica B, dando A por PASS asumen que B también" — here the harness treated *reaching* a test as equivalent to *running* it, while in reality the board was rebooting mid-way and counting every downstream test as a trivial fail.
 
 **Deferred**: the real fix for deep interpreter recursion is tail-call optimization in the evaluator (TCO is already implemented for tail positions — `fact_tail` works — but non-tail recursion like `fib` / `fact` fundamentally needs C stack). Future concepts could convert `deck_interp_run` to an iterative CPS evaluator or add a work-queue-based evaluator; either way, a much bigger project than a stack bump. Not in scope for this concept.
+
+### Concept #67 — fixture rewrites: spec §7.10 multi-line `if/else if` → `match`
+
+**Discovery**: after concept #68 unblocked `lang.fn.recursion`, hardware run showed 3 more fixtures failing with `expected 'else' in if expression` parse errors. Specifically:
+- `lang_fn_mutual.deck` — `mod3_0/1/2` used a 4-branch `if ... else if ... else if ... else` chain split across 4 lines.
+- `lang_fn_block.deck` — `mid3` used 2-level nested `if (if ... else ...) else (if ... else ...)` split across 2 lines.
+- `lang_if.deck` — `ni = if n >= 100 then "high" else if n >= 10 then "mid" else "low"` split across 3 lines.
+
+**Root cause**: spec §1 line 14 + §7.10 are explicit — "`if cond then a else b`" is sugar that desugars at parse time to `match cond | true -> a | false -> b`. §7.10 also says: *"There is no multi-arm `else if` grammar ... For three-or-more branches, prefer `match` directly."*
+
+The fixtures were inventing non-spec syntax (multi-line `else if` chains), and the parser correctly rejected them. The fixtures are layer 6 (per the authority cascade), not authoritative — so the correct fix is to align the fixtures with spec, not to extend the parser to accept non-spec grammar.
+
+**Resolution**:
+- `lang_fn_mutual.deck`: 3-way `mod3_N` rewritten as `match n | 0 -> ... | 1 -> ... | 2 -> ... | _ -> recurse`.
+- `lang_fn_block.deck`: `mid3` computed as `a + b + c − max(a,b,c) − min(a,b,c)` using DL1 `math.max`/`math.min`. Also fixed `surface_area` assertion: formula `2πrh + 2(πr²)` at r=1, h=2 is `6π ≈ 18.85`, not `4π ≈ 12.57` as the comment wrongly claimed.
+- `lang_if.deck`: 3-branch `ni` dropped (redundant with the adjacent `match`-based `nm` — same semantics, same assertion). Kept single-line `if/then/else` tests to still exercise the sugar.
+
+**Verification on hardware**:
+- suites_pass: **5/5** ✓
+- deck_tests_pass: **59/80** (up from 57 at concept #68 baseline; +2 fixtures: `lang.fn.mutual` and `lang.fn.block` now green)
+- stress_pass: **14/15** (unchanged, same known heap_idle_budget canary)
+- No alloc_live regression (448 vs baseline 364 — +84 from the 2 newly-passing fixtures running 5× each; proportional, not a leak).
+
+**Why this matters (authority cascade)**: this is exactly the cascade rule — fixture (layer 6) violates spec (layer 1), fixture is wrong. Previous sessions would have been tempted to extend the parser to accept multi-line `else if` chains, treating the fixture as ground truth. That would have ratified non-spec syntax into the language. Catching it as a fixture bug keeps `if/then/else` a clean single-line 2-way sugar as spec §7.10 defines, with `match` as the authoritative multi-arm construct.
+
+**Deferred**: tuple and fixed-list patterns (`match tup | (p, q) -> ...`, `match lst | [x, y] -> ...`) are legitimate spec §8 patterns used by `lang.let`, `lang.match`, and others. Adding them to the parser + interp would unlock another 2-3 fixtures but an early draft showed a heap leak (alloc_live +100 values per full run, tripping `stress.rerun_sanity_x100` / `stress.heap_pressure_recovers` / `stress.log_hook_concurrent`). Root-cause debugging of that leak is its own concept; the pattern addition reverts cleanly so this rewrite ships in isolation.

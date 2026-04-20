@@ -38,12 +38,13 @@ fn classify (n: int) -> str =
     | k when k < 100       -> "medium"
     | _                    -> "large"
 
--- Block body using let for cached sub-expression.
+-- Block body using let for cached sub-expression. Spec §7.10: if/else
+-- is sugar for single-line 2-way match; multi-line `if ... else ...`
+-- split is not grammar. Compute mid via a + b + c − max − min using
+-- DL1 math builtins.
 fn mid3 (a: int, b: int, c: int) -> int =
-  let biggest  = if a > b then (if a > c then a else c)
-                 else (if b > c then b else c)
-  let smallest = if a < b then (if a < c then a else c)
-                 else (if b < c then b else c)
+  let biggest  = math.max(math.max(a, b), c)
+  let smallest = math.min(math.min(a, b), c)
   a + b + c - biggest - smallest
 
 @on launch:
@@ -55,8 +56,8 @@ fn mid3 (a: int, b: int, c: int) -> int =
   let ok_bmi = bm > 19.99 and bm < 20.01
 
   let sa     = surface_area(1.0, 2.0)
-  -- 2πr·h + 2·πr² = 2π + 2π = 4π ≈ 12.566
-  let ok_sa  = sa > 12.56 and sa < 12.58
+  -- cylinder lateral + two caps: 2π·r·h + 2·(π·r²) = 4π + 2π = 6π ≈ 18.8496
+  let ok_sa  = sa > 18.84 and sa < 18.86
 
   let ok_cls = classify(0) == "zero"
            and classify(5) == "small"

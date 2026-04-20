@@ -19,24 +19,29 @@ fn is_even (n) =
 fn is_odd (n) =
   if n == 0 then false else is_even(n - 1)
 
--- Three-way mutual recursion.
+-- Three-way mutual recursion. Spec §7.10 explicitly says "For
+-- three-or-more branches, prefer `match` directly" — `else if` chains
+-- are not grammar, they're nested sugar.
 fn mod3_0 (n) =
-  if n == 0 then true
-  else if n == 1 then false
-  else if n == 2 then false
-  else mod3_0(n - 3)
+  match n
+    | 0 -> true
+    | 1 -> false
+    | 2 -> false
+    | _ -> mod3_0(n - 3)
 
 fn mod3_1 (n) =
-  if n == 1 then true
-  else if n == 0 then false
-  else if n == 2 then false
-  else mod3_1(n - 3)
+  match n
+    | 1 -> true
+    | 0 -> false
+    | 2 -> false
+    | _ -> mod3_1(n - 3)
 
 fn mod3_2 (n) =
-  if n == 2 then true
-  else if n == 0 then false
-  else if n == 1 then false
-  else mod3_2(n - 3)
+  match n
+    | 2 -> true
+    | 0 -> false
+    | 1 -> false
+    | _ -> mod3_2(n - 3)
 
 -- Forward references: `use_b` is declared before `helper_b`.
 fn use_b (x) = helper_b(x) * 2

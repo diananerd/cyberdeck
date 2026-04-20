@@ -7,17 +7,10 @@
 @requires
   deck_level: 1
 
--- NOTE: `01-deck-lang §1` states explicitly: "`match` is the only
--- branching construct — exhaustive, multi-arm, with guards.
--- No `if/then/else`, no switch, no ternary." Yet every
--- conformance fixture (including this one in its original form) uses
--- `if cond then a else b`. Empirically the runtime accepts it,
--- suggesting it's implemented as sugar for a two-arm bool match.
---
--- This test asserts both paths: the canonical `match | true -> …
--- | false -> …` form MUST work (it's authoritative), AND — if the
--- `if/then/else` sugar is available — it MUST produce identical
--- results. Divergence between the two is a runtime bug.
+-- Spec §1 line 14 + §7.10: `if cond then a else b` is sugar for
+-- `match cond | true -> a | false -> b`, desugared at parse time.
+-- §7.10 also says "For three-or-more branches, prefer `match`
+-- directly" — there is no multi-arm `else if` grammar.
 @on launch:
   -- Canonical: match over a bool.
   let m1 = match 1 < 2 | true -> 100 | false -> 200
@@ -25,27 +18,23 @@
   let m3 = match true | true -> "ja" | false -> "nein"
   let ok_match = m1 == 100 and m2 == 200 and m3 == "ja"
 
-  -- `if/then/else` sugar (currently accepted by the runtime; not in
-  -- §01 §1 — flagged in REPORTS for spec reconciliation).
+  -- Single-line `if/then/else` sugar (spec §7.10 canonical form).
   let i1 = if 1 < 2 then 100 else 200
   let i2 = if 5 == 6 then 100 else 200
   let i3 = if true then "ja" else "nein"
   let ok_if = i1 == 100 and i2 == 200 and i3 == "ja"
 
-  -- If sugar exists, both must agree.
+  -- Sugar and match must produce identical results.
   let ok_agree = m1 == i1 and m2 == i2 and m3 == i3
 
-  -- Nested conditionals (both forms).
+  -- 3-way branching uses match (spec §7.10: prefer match for 3+).
   let n  = 42
   let nm = match n >= 100
              | true  -> "high"
              | false -> match n >= 10
                           | true  -> "mid"
                           | false -> "low"
-  let ni = if n >= 100 then "high"
-           else if n >= 10 then "mid"
-           else "low"
-  let ok_nested = nm == "mid" and ni == "mid" and nm == ni
+  let ok_nested = nm == "mid"
 
   -- Branches can produce complex values (lists, records).
   let lst = match true | true -> [1, 2, 3] | false -> []
