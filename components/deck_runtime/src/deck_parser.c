@@ -1694,9 +1694,12 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                          * for primitives like `list xs` / `media expr` / bare value.
                          * Parse as an expression if anything is left. Skip when
                          * the next two tokens are `IDENT COLON` — that's a
-                         * concept-#57 option (badge:, placeholder:, etc.). */
+                         * concept-#57 option (badge:, placeholder:, etc.) —
+                         * or when the next token is `on` (concept #58 trailing
+                         * `on [atom]? -> action` handler, handled below). */
                         if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF) &&
-                            !(at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON)) {
+                            !(at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) &&
+                            !at(p, TOK_KW_ON)) {
                             ast_node_t *data = parse_expr_prec(p, 0);
                             if (data) {
                                 if (!ci->as.content_item.action_expr)
@@ -1711,7 +1714,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                          * after options, per spec §12.4
                          * (`toggle :x state: s on -> action` form) and
                          * annex-a `trigger L badge: B -> action`. */
-                        if (at(p, TOK_KW_ON)) advance(p);
+                        if (at(p, TOK_KW_ON)) { advance(p); if (at(p, TOK_IDENT) || at(p, TOK_ATOM)) advance(p); }
                         if (at(p, TOK_ARROW)) {
                             advance(p);
                             ast_node_t *tail = parse_expr_prec(p, 0);
@@ -1828,7 +1831,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         /* Concept #58 — inline trailing
                                          * `[on] -> action` for per-item shapes
                                          * like `trigger x.name badge: N -> act`. */
-                                        if (at(p, TOK_KW_ON)) advance(p);
+                                        if (at(p, TOK_KW_ON)) { advance(p); if (at(p, TOK_IDENT) || at(p, TOK_ATOM)) advance(p); }
                                         if (at(p, TOK_ARROW)) {
                                             advance(p);
                                             ast_node_t *tail = parse_expr_prec(p, 0);
@@ -1877,7 +1880,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         while (at(p, TOK_NEWLINE)) advance(p);
                                         continue;
                                     }
-                                    if (at(p, TOK_KW_ON)) advance(p);
+                                    if (at(p, TOK_KW_ON)) { advance(p); if (at(p, TOK_IDENT) || at(p, TOK_ATOM)) advance(p); }
                                     if (at(p, TOK_ARROW)) {
                                         advance(p);
                                         ast_node_t *action = parse_expr_prec(p, 0);

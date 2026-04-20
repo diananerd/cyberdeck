@@ -371,6 +371,109 @@ static bool t_migration(const char *name)
     return true;
 }
 
+/* Concept #58 — captured-action dispatch: a declarative `trigger` whose
+ * action is an arbitrary call (not Machine.send) must fire on tap via
+ * deck_runtime_app_intent_v. We use nvs.set as the side-effecting action
+ * because its effect is observable from C through deck_sdi_nvs_get_str
+ * (NVS namespace = app `id`, per nvs_app_ns). */
+#define APP_HDR_CPT_INT \
+    "@app\n" \
+    "  name: \"CAP\"\n" \
+    "  id: \"conf.cpi\"\n" \
+    "  version: \"1.0.0\"\n" \
+    "  edition: 2026\n" \
+    "\n@requires\n" \
+    "  deck_level: 1\n"
+
+static bool t_intent_captured_action(const char *name)
+{
+    (void)deck_sdi_nvs_del("conf.cpi", "fired");
+    const char *src = APP_HDR_CPT_INT
+        "\n@on launch:\n"
+        "  log.info(\"t_cpi: launch\")\n"
+        "\n@machine m\n"
+        "  state main:\n"
+        "    content =\n"
+        "      trigger \"go\" -> nvs.set(\"fired\", \"yes\")\n";
+    deck_runtime_app_t *app = NULL;
+    deck_err_t rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK && app, "load");
+
+    rc = deck_runtime_app_intent(app, 1);
+    CHECK(rc == DECK_RT_OK, "intent dispatch");
+
+    char val[8] = {0};
+    deck_sdi_err_t gr = deck_sdi_nvs_get_str("conf.cpi", "fired", val, sizeof(val));
+    CHECK(gr == DECK_SDI_OK && strcmp(val, "yes") == 0, "action side-effect missing");
+
+    deck_runtime_app_unload(app);
+    return true;
+}
+
+/* Concept #59 — scalar payload `event.value`: toggle-style intent fires
+ * with a bool payload that the action sees via `event.value`. We write
+ * the delivered bool to NVS as "1"/"0" string so C can read it back. */
+static bool t_intent_event_value(const char *name)
+{
+    (void)deck_sdi_nvs_del("conf.cpi", "val");
+    const char *src = APP_HDR_CPT_INT
+        "\n@on launch:\n"
+        "  log.info(\"t_ev: launch\")\n"
+        "\n@machine m\n"
+        "  state main:\n"
+        "    content =\n"
+        "      toggle :lights on -> nvs.set(\"val\", if event.value then \"yes\" else \"no\")\n";
+    deck_runtime_app_t *app = NULL;
+    deck_err_t rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK && app, "load");
+
+    deck_intent_val_t vals[1] = { { .key = NULL, .kind = DECK_INTENT_VAL_BOOL, .b = true } };
+    rc = deck_runtime_app_intent_v(app, 1, vals, 1);
+    CHECK(rc == DECK_RT_OK, "intent_v");
+
+    char val[8] = {0};
+    deck_sdi_err_t gr = deck_sdi_nvs_get_str("conf.cpi", "val", val, sizeof(val));
+    CHECK(gr == DECK_SDI_OK, "nvs readback");
+    CHECK(strcmp(val, "yes") == 0, "payload did not reach event.value");
+
+    deck_runtime_app_unload(app);
+    return true;
+}
+
+/* Concept #60 — form aggregation `event.values`: map-payload intent
+ * exposes a keyed map the action can index via `.` access. We pick one
+ * field (username) and write its string into NVS, so C sees the exact
+ * value the hook received. */
+static bool t_intent_event_values(const char *name)
+{
+    (void)deck_sdi_nvs_del("conf.cpi", "user");
+    const char *src = APP_HDR_CPT_INT
+        "\n@on launch:\n"
+        "  log.info(\"t_evs: launch\")\n"
+        "\n@machine m\n"
+        "  state main:\n"
+        "    content =\n"
+        "      form on submit -> nvs.set(\"user\", event.values.username)\n";
+    deck_runtime_app_t *app = NULL;
+    deck_err_t rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
+    CHECK(rc == DECK_RT_OK && app, "load");
+
+    deck_intent_val_t vals[2] = {
+        { .key = "username", .kind = DECK_INTENT_VAL_STR, .s = "alice" },
+        { .key = "password", .kind = DECK_INTENT_VAL_STR, .s = "secret" },
+    };
+    rc = deck_runtime_app_intent_v(app, 1, vals, 2);
+    CHECK(rc == DECK_RT_OK, "intent_v form");
+
+    char val[16] = {0};
+    deck_sdi_err_t gr = deck_sdi_nvs_get_str("conf.cpi", "user", val, sizeof(val));
+    CHECK(gr == DECK_SDI_OK, "nvs readback form");
+    CHECK(strcmp(val, "alice") == 0, "event.values.username wrong");
+
+    deck_runtime_app_unload(app);
+    return true;
+}
+
 /* DL2 F28.1 — @machine.before / .after run around each transition. The
  * test machine does boot → ready, and @machine.after sets a log marker
  * that we cannot verify here (no log capture in the interp test harness),
@@ -446,9 +549,12 @@ static const case_t CASES[] = {
     { "tco_self_deep",       t_tco_self_deep },
     { "tco_self_acc",        t_tco_self_acc },
     { "tco_mutual",          t_tco_mutual },
-    { "app_dispatch",        t_app_dispatch },
-    { "machine_hooks",       t_machine_hooks },
-    { "migration",           t_migration },
+    { "app_dispatch",           t_app_dispatch },
+    { "machine_hooks",          t_machine_hooks },
+    { "migration",              t_migration },
+    { "intent_captured_action", t_intent_captured_action },
+    { "intent_event_value",     t_intent_event_value },
+    { "intent_event_values",    t_intent_event_values },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 
