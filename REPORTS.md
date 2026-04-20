@@ -1359,3 +1359,25 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why `map.merge` is right-biased**: given `merge(a, b)`, the intuitive reading is "update `a` with `b`'s values". JavaScript `Object.assign(target, source)`, Python `dict | dict`, Elixir `Map.merge` — all agree on right-bias. Spec is silent; runtime picks the common-sense convention and notes it explicitly in REPORTS so future authors don't invent a different one.
 
 **Running tally**: `map.*` now at 13/13. `tup.*` now at 6/6. Spec §11.3 + §11.4 complete. Combined with concept #41, the entire §11.2–§11.4 standard-collection surface is 43/47 methods registered (missing only the `list.*` pass-2 sort/zip/group family).
+
+### Concept #43 — list.* pass 2 (spec §11.2 remaining commons)
+
+**Drift**: concept #41 left `sort`, `zip`, `enumerate`, `flat_map`, `partition`, `unique`, `min_by/max_by`, etc. as deferred. Common enough that any realistic Deck app will hit at least one of them.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` — nine new list builtins:
+  * `list.enumerate(xs) -> [(int, T)]` — pairs `(index, value)` for each element.
+  * `list.zip(a, b) -> [(T, U)]` — truncates at the shorter list.
+  * `list.zip_with(a, b, fn) -> [V]` — combined via fn; truncates at shorter.
+  * `list.flat_map(xs, fn) -> [U]` — maps T → [U], then flattens one level. Errors if fn returns non-list.
+  * `list.partition(xs, fn) -> ([T], [T])` — returns a 2-tuple of (keep, drop).
+  * `list.unique(xs) -> [T]` — O(n²) via `values_equal` (concept #41's helper). First occurrence wins.
+  * `list.sort(xs)` — natural ordering on `[int]` / `[float]` / `[str]`. Errors on mixed types. Uses libc `qsort` with a file-scope `sort_type` to dispatch comparator by element type (cheap alternative to passing a typed comparator through qsort's untyped `void *`).
+  * `list.min_by / max_by(xs, fn) -> T?` — fold keeping the element whose fn-value is minimum / maximum. Returns `:none` on empty lists.
+
+**Why no custom-comparator `list.sort(xs, fn)`**: spec §11.2 has both `list.sort` (natural) and `list.sort_by` (with `T -> float` key-fn). This concept implements only the natural form; `list.sort_by` is one-liner on top of it with a precomputed `list.map` of keys, and can land as a future mini-concept.
+
+**Running tally**: `list.*` now at 33/~35. Missing: `list.sort_by`, `list.sort_desc`, `list.sort_by_desc`, `list.sort_by_str`, `list.group_by`, `list.chunk`, `list.window`, `list.scan`, `list.tabulate`, `list.interleave`, `list.unique_by`. Most are 10-line variants; a future concept can bundle them.
+
+**Session #4 cumulative**: `text` 36/36, `time` 18/18, `nvs` 13/13, `fs` 10/10, `math` 33/33, `system.info` 11/11, `bytes` 8/8, `log` 4/4, `map` 13/13, `tup` 6/6, `list` 33/~35, plus Result / Option helpers. Every §3 DL1-mandatory capability + most of the §11 standard vocabulary is runtime-complete. The combinatorial gap between "fixture calls builtin X" and "runtime provides X" is closed for the overwhelming majority of Deck's stdlib.

@@ -991,6 +991,220 @@ static deck_value_t *b_list_avg(deck_value_t **args, uint32_t n, deck_interp_ctx
     return deck_new_some(deck_new_float(s / L));
 }
 
+/* ---- list.* pass 2 (concept #43) ---- */
+
+/* list.enumerate — returns [(index, value)]. */
+static deck_value_t *b_list_enumerate(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.enumerate(xs)"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *idx = deck_new_int((int64_t)i);
+        deck_value_t *items[2] = { idx, args[0]->as.list.items[i] };
+        deck_value_t *t = deck_new_tuple(items, 2);
+        deck_release(idx);
+        if (!t) { deck_release(out); return NULL; }
+        deck_list_push(out, t); deck_release(t);
+    }
+    return out;
+}
+
+/* list.zip(a, b) — pairs up elements; truncates to min length. */
+static deck_value_t *b_list_zip(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.zip(a, b)"); return NULL;
+    }
+    uint32_t L = args[0]->as.list.len < args[1]->as.list.len ? args[0]->as.list.len : args[1]->as.list.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *items[2] = { args[0]->as.list.items[i], args[1]->as.list.items[i] };
+        deck_value_t *t = deck_new_tuple(items, 2);
+        if (!t) { deck_release(out); return NULL; }
+        deck_list_push(out, t); deck_release(t);
+    }
+    return out;
+}
+
+/* list.zip_with(a, b, fn) — combine pairs via user fn. */
+static deck_value_t *b_list_zip_with(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST ||
+        !args[1] || args[1]->type != DECK_T_LIST ||
+        !args[2] || args[2]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.zip_with(a, b, fn)"); return NULL;
+    }
+    uint32_t L = args[0]->as.list.len < args[1]->as.list.len ? args[0]->as.list.len : args[1]->as.list.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *ca[2] = { args[0]->as.list.items[i], args[1]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[2], ca, 2);
+        if (!r) { deck_release(out); return NULL; }
+        deck_list_push(out, r); deck_release(r);
+    }
+    return out;
+}
+
+/* list.flat_map(xs, fn) — map then flatten one level. */
+static deck_value_t *b_list_flat_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.flat_map(xs, fn)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.list.len * 2);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(out); return NULL; }
+        if (r->type != DECK_T_LIST) {
+            deck_release(r); deck_release(out);
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.flat_map: fn must return list");
+            return NULL;
+        }
+        for (uint32_t j = 0; j < r->as.list.len; j++) deck_list_push(out, r->as.list.items[j]);
+        deck_release(r);
+    }
+    return out;
+}
+
+/* list.partition(xs, fn) — returns ([keep], [drop]) as a 2-tuple. */
+static deck_value_t *b_list_partition(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.partition(xs, fn)"); return NULL;
+    }
+    deck_value_t *yes = deck_new_list(4);
+    deck_value_t *no  = deck_new_list(4);
+    if (!yes || !no) { if (yes) deck_release(yes); if (no) deck_release(no); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(yes); deck_release(no); return NULL; }
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        deck_list_push(keep ? yes : no, args[0]->as.list.items[i]);
+    }
+    deck_value_t *items[2] = { yes, no };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(yes); deck_release(no);
+    return t;
+}
+
+/* list.unique — returns [T] with duplicates removed (first occurrence wins).
+ * O(n²) via values_equal; fine for small lists. */
+static deck_value_t *b_list_unique(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.unique(xs)"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *v = args[0]->as.list.items[i];
+        bool dup = false;
+        for (uint32_t j = 0; j < out->as.list.len; j++) {
+            if (values_equal(out->as.list.items[j], v)) { dup = true; break; }
+        }
+        if (!dup) deck_list_push(out, v);
+    }
+    return out;
+}
+
+/* list.sort — natural ordering on int/float/str. Errors on mixed types.
+ * Uses qsort. Since elements are deck_value_t *, sort key extraction is
+ * done inside cmp via the first element of the list's type. */
+static deck_type_t sort_type;
+static int sort_cmp(const void *a, const void *b)
+{
+    deck_value_t *x = *(deck_value_t * const *)a;
+    deck_value_t *y = *(deck_value_t * const *)b;
+    switch (sort_type) {
+        case DECK_T_INT: return x->as.i < y->as.i ? -1 : x->as.i > y->as.i ? 1 : 0;
+        case DECK_T_FLOAT: return x->as.f < y->as.f ? -1 : x->as.f > y->as.f ? 1 : 0;
+        case DECK_T_STR: {
+            uint32_t m = x->as.s.len < y->as.s.len ? x->as.s.len : y->as.s.len;
+            int r = memcmp(x->as.s.ptr, y->as.s.ptr, m);
+            if (r != 0) return r;
+            return x->as.s.len < y->as.s.len ? -1 : x->as.s.len > y->as.s.len ? 1 : 0;
+        }
+        default: return 0;
+    }
+}
+
+static deck_value_t *b_list_sort(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sort(xs)"); return NULL; }
+    uint32_t L = args[0]->as.list.len;
+    if (L <= 1) {
+        /* Copy to keep immutability semantics. */
+        deck_value_t *out = deck_new_list(L);
+        if (!out) return NULL;
+        for (uint32_t i = 0; i < L; i++) deck_list_push(out, args[0]->as.list.items[i]);
+        return out;
+    }
+    sort_type = args[0]->as.list.items[0]->type;
+    if (sort_type != DECK_T_INT && sort_type != DECK_T_FLOAT && sort_type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sort: only [int] / [float] / [str] supported");
+        return NULL;
+    }
+    for (uint32_t i = 1; i < L; i++) {
+        if (args[0]->as.list.items[i]->type != sort_type) {
+            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.sort: mixed element types at index %u", (unsigned)i);
+            return NULL;
+        }
+    }
+    deck_value_t *out = deck_new_list(L);
+    if (!out) return NULL;
+    deck_value_t **buf = malloc(sizeof(deck_value_t *) * L);
+    if (!buf) { deck_release(out); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "list.sort alloc"); return NULL; }
+    for (uint32_t i = 0; i < L; i++) buf[i] = args[0]->as.list.items[i];
+    qsort(buf, L, sizeof(deck_value_t *), sort_cmp);
+    for (uint32_t i = 0; i < L; i++) deck_list_push(out, buf[i]);
+    free(buf);
+    return out;
+}
+
+/* list.min_by / list.max_by — fold returning the element with min/max fn(elem). */
+static deck_value_t *list_extrema_by(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c, bool want_max)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST || !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.min_by/max_by(xs, fn)"); return NULL;
+    }
+    if (args[0]->as.list.len == 0) return deck_new_none();
+    double best_k = 0;
+    deck_value_t *best_v = NULL;
+    for (uint32_t i = 0; i < args[0]->as.list.len; i++) {
+        deck_value_t *ca[1] = { args[0]->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        double k;
+        if (r->type == DECK_T_INT) k = (double)r->as.i;
+        else if (r->type == DECK_T_FLOAT) k = r->as.f;
+        else { deck_release(r); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.min_by/max_by: fn must return number"); return NULL; }
+        deck_release(r);
+        if (!best_v || (want_max ? k > best_k : k < best_k)) {
+            best_k = k;
+            best_v = args[0]->as.list.items[i];
+        }
+    }
+    return deck_new_some(best_v);
+}
+static deck_value_t *b_list_min_by(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { return list_extrema_by(a, n, c, false); }
+static deck_value_t *b_list_max_by(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { return list_extrema_by(a, n, c, true); }
+
 static deck_value_t *b_list_flatten(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -4051,6 +4265,16 @@ static const builtin_t BUILTINS[] = {
     { "list.sum_f",             b_list_sum_f,        1, 1 },
     { "list.avg",               b_list_avg,          1, 1 },
     { "list.flatten",           b_list_flatten,      1, 1 },
+    /* Concept #43 — list.* pass 2. */
+    { "list.enumerate",         b_list_enumerate,    1, 1 },
+    { "list.zip",               b_list_zip,          2, 2 },
+    { "list.zip_with",          b_list_zip_with,     3, 3 },
+    { "list.flat_map",          b_list_flat_map,     2, 2 },
+    { "list.partition",         b_list_partition,    2, 2 },
+    { "list.unique",            b_list_unique,       1, 1 },
+    { "list.sort",              b_list_sort,         1, 1 },
+    { "list.min_by",            b_list_min_by,       2, 2 },
+    { "list.max_by",            b_list_max_by,       2, 2 },
 
     /* map (DL2 F21.6) */
     { "map.len",                b_map_len,           1, 1 },
