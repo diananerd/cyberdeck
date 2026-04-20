@@ -1513,3 +1513,18 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 - Bridge-side wiring (shell layer) — the runtime is ready; the shell's tap handler still needs the `deck_runtime_app_intent` call. Flagged as shell work.
 
 **Combined with #38 / #44 / #45 / #46**: annex apps are now runnable end-to-end at the interactive layer. Press trigger → intent → `Machine.send` → transition runs → new state renders → UI redraws. The only thing missing for *real* annex demos is the list / group / form / media item kinds (concepts #48+).
+
+### Concept #48 — list / group iteration in content (spec §12.1)
+
+**Drift**: concept #46 skipped `list` and `group` primitives silently. Every annex's "show me the items" pattern rendered as an empty surface.
+
+**Fix applied (runtime only)**:
+
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c` — content walker extended:
+  * `kind="list"` → `DVC_LIST` root. Evaluates the data expression (`list posts` where `posts` evaluates to a `DECK_T_LIST`), iterates items, emits a `DVC_LABEL` child per element using `content_value_as_str` for scalar rendering.
+  * `kind="group"` → `DVC_GROUP` with `:label` attr from the string literal.
+  * Nested `item x -> body` blocks are still absorbed by the parser (concept #45) but not unpacked into structured sub-items. Pass 1 renders each list element as a single LABEL; `item` bindings + per-element triggers are a future pass.
+
+**Why scalar-only rendering in pass 1**: the parser absorbs `item x -> trigger x.title` as raw tokens within the list's indented block, but doesn't split it into a per-item template. Doing that split cleanly requires re-entering the parser state machine for content (a richer grammar). Scalar rendering covers the common "list of strings / ids / status values" case immediately; structured per-item rendering is a concept #49 target.
+
+**Combined with #38 / #44 / #45 / #46 / #47**: the Launcher annex (slot 0 example: `list installed_apps \n app -> trigger app.name -> apps.launch(app.id)`) would not fully render the per-app triggers, but `list ["A", "B", "C"]` now visibly lists three items. The gap between "pass-1 list" and "real annex list" is the per-item sub-template.

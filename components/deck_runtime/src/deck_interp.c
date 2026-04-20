@@ -4189,6 +4189,37 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                     node->intent_id = id;
                 }
             }
+        } else if (kind && strcmp(kind, "list") == 0) {
+            /* Concept #48 — evaluate data_expr. If it's a list of
+             * scalars, emit DVC_LIST with DVC_LABEL children. Nested
+             * `item x -> ...` bodies aren't unpacked in this pass (parser
+             * absorbs them but doesn't break them into sub-items). */
+            node = deck_dvc_node_new(&s_bui_arena, DVC_LIST);
+            if (node && (data || action)) {
+                /* Parser may have stashed the iterable as action_expr when
+                 * there's no arrow (e.g. `list posts` with no `->`). */
+                ast_node_t *expr = data ? data : action;
+                deck_value_t *v = content_eval_expr(c, env, expr);
+                if (v && v->type == DECK_T_LIST) {
+                    for (uint32_t j = 0; j < v->as.list.len; j++) {
+                        deck_value_t *elem = v->as.list.items[j];
+                        if (!elem) continue;
+                        deck_dvc_node_t *row = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                        if (!row) break;
+                        char buf[128];
+                        const char *s = content_value_as_str(elem, buf, sizeof(buf));
+                        if (s) deck_dvc_set_str(&s_bui_arena, row, "value", s);
+                        deck_dvc_add_child(&s_bui_arena, node, row);
+                    }
+                }
+                if (v) deck_release(v);
+            }
+        } else if (kind && strcmp(kind, "group") == 0) {
+            /* Concept #48 — group with label. Nested items not yet
+             * unpacked from the absorbed indent block; pass-1 renders an
+             * empty group header. */
+            node = deck_dvc_node_new(&s_bui_arena, DVC_GROUP);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
         } else if (kind && strcmp(kind, "loading") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
         } else if (kind && strcmp(kind, "label") == 0) {
