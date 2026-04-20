@@ -720,7 +720,12 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
     capture_begin();
     deck_err_t rc = deck_runtime_run_on_launch(s_deck_src, (uint32_t)probe_n);
     capture_end();
-    bool got_oom = (rc == DECK_RT_NO_MEMORY);
+    /* Under alloc pressure the arena / interner can fail mid-parse and
+     * surface as DECK_LOAD_PARSE_ERROR, or mid-eval as DECK_RT_NO_MEMORY.
+     * Both are valid pressure-rejection paths. What MUST NOT happen:
+     * rc == DECK_RT_OK (the runtime ignored pressure) or a crash. */
+    bool got_pressure_err = (rc == DECK_RT_NO_MEMORY ||
+                              rc == DECK_LOAD_PARSE_ERROR);
     bool sentinel_hit = strstr(s_log_cap,
                                 "DECK_CONF_OK:lang.strings") != NULL;
 
@@ -739,9 +744,9 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
              deck_err_name(rc),
              sentinel_hit ? "hit(!)" : "miss(ok)",
              ok_after ? "PASS" : "FAIL");
-    /* Success = runtime rejected with NO_MEMORY specifically AND
+    /* Success = runtime rejected with a pressure-related error AND
      * recovery sanity passes AND sentinel did not fire. */
-    return got_oom && !sentinel_hit && ok_after;
+    return got_pressure_err && !sentinel_hit && ok_after;
 }
 
 /* Corrupt-input stress: drive deck_runtime_run_on_launch with adversarial
