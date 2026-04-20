@@ -122,6 +122,16 @@ deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
                                      const char *event,
                                      deck_value_t *payload);
 
+/* Concept #47 — bridge intent dispatch.
+ *
+ * When the bridge emits a tap/interaction with an intent_id (the value the
+ * runtime stamped onto a DVC_TRIGGER / DVC_NAVIGATE node at render time),
+ * the shell calls this entry point. The runtime looks up the binding
+ * (assigned during content_render) and fires the corresponding
+ * `Machine.send(:event)` — redrawing the next state's content on success.
+ * Unknown intent_id is a silent no-op (returns DECK_RT_OK). */
+deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id);
+
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */
 void deck_runtime_app_unload(deck_runtime_app_t *app);

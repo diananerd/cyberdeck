@@ -152,6 +152,27 @@ static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload);
 static deck_value_t *b_machine_send (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 
+/* Concept #47 — intent binding table + app struct moved forward so
+ * content_render (concept #46) can access app->intents directly. */
+#define DECK_RUNTIME_MAX_INTENTS 64
+
+typedef struct {
+    uint32_t    id;              /* 0 = slot empty */
+    const char *event;           /* arena-owned atom text */
+} deck_intent_binding_t;
+
+struct deck_runtime_app {
+    bool               in_use;
+    deck_arena_t       arena;
+    deck_loader_t      ld;
+    deck_interp_ctx_t  ctx;
+    const char        *machine_state;
+    deck_intent_binding_t intents[DECK_RUNTIME_MAX_INTENTS];
+    uint32_t           next_intent_id;
+};
+
+static struct deck_runtime_app *app_from_ctx(deck_interp_ctx_t *c);
+
 static deck_value_t *b_log_info(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n; (void)c;
@@ -4101,10 +4122,34 @@ static const char *content_value_as_str(deck_value_t *v, char *buf, size_t cap)
     }
 }
 
+/* Concept #47 — extract the event atom from an action expression shaped like
+ *   Machine.send(:event)  or  Machine.send(:event, payload_expr)
+ *   machine.send(:event)  (lowercase form also accepted)
+ * Returns NULL for any other shape (including bare values, fn calls with
+ * non-atom first arg, nested expressions). The atom text is intern-owned. */
+static const char *content_extract_event(const ast_node_t *action)
+{
+    if (!action || action->kind != AST_CALL) return NULL;
+    const ast_node_t *fn = action->as.call.fn;
+    if (!fn || fn->kind != AST_DOT) return NULL;
+    const char *field = fn->as.dot.field;
+    if (!field || strcmp(field, "send") != 0) return NULL;
+    if (action->as.call.args.len < 1) return NULL;
+    const ast_node_t *arg0 = action->as.call.args.items[0];
+    if (!arg0 || arg0->kind != AST_LIT_ATOM) return NULL;
+    return arg0->as.s;
+}
+
 static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *block)
 {
     if (!block || block->kind != AST_CONTENT_BLOCK) return;
     bui_ensure_init();
+    /* Reset intent table — stale ids from previous state must not persist. */
+    struct deck_runtime_app *app = app_from_ctx(c);
+    if (app) {
+        memset(app->intents, 0, sizeof(app->intents));
+        app->next_intent_id = 1;   /* 0 reserved for "no intent" */
+    }
     deck_dvc_node_t *root = deck_dvc_node_new(&s_bui_arena, DVC_FLOW);
     if (!root) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "content: root alloc"); return; }
 
@@ -4120,9 +4165,30 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
         if (kind && strcmp(kind, "trigger") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_TRIGGER);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            /* Concept #47 — bind the action's :event atom to a fresh
+             * intent_id so bridge-side taps round-trip back through
+             * deck_runtime_app_intent(app, id) → Machine.send(:event). */
+            if (node && app) {
+                const char *ev = content_extract_event(action);
+                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
+                    uint32_t id = app->next_intent_id++;
+                    app->intents[id].id = id;
+                    app->intents[id].event = ev;
+                    node->intent_id = id;
+                }
+            }
         } else if (kind && strcmp(kind, "navigate") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_NAVIGATE);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            if (node && app) {
+                const char *ev = content_extract_event(action);
+                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
+                    uint32_t id = app->next_intent_id++;
+                    app->intents[id].id = id;
+                    app->intents[id].event = ev;
+                    node->intent_id = id;
+                }
+            }
         } else if (kind && strcmp(kind, "loading") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
         } else if (kind && strcmp(kind, "label") == 0) {
@@ -5812,16 +5878,9 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
  * module AST, interned atoms, top-level fn bindings, and any let bindings
  * created during @on launch remain live until unload.
  */
-struct deck_runtime_app {
-    bool               in_use;
-    deck_arena_t       arena;
-    deck_loader_t      ld;
-    deck_interp_ctx_t  ctx;
-    /* Concept #44 — current machine state (interned atom text, or NULL when
-     * no @machine exists). Set by run_machine to the initial state at load;
-     * updated by deck_runtime_app_send on every successful transition. */
-    const char        *machine_state;
-};
+/* Concept #47 — struct deck_runtime_app was moved forward (near the top
+ * of this file) so content_render can access app->intents directly.
+ * This spot left as a locator comment only. */
 
 static struct deck_runtime_app s_app_slots[DECK_RUNTIME_MAX_APPS];
 
@@ -5940,6 +5999,35 @@ static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_inter
     struct deck_runtime_app *app = app_from_ctx(c);
     if (!app || !app->machine_state) return deck_new_none();
     return deck_new_some(deck_new_atom(app->machine_state));
+}
+
+/* Concept #47 — bridge intent entry. Called by the shell when the bridge
+ * delivers a trigger/navigate tap. Looks up the binding populated by
+ * content_render and invokes b_machine_send with the bound event atom. */
+deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id)
+{
+    if (!app || !app->in_use) return DECK_RT_INTERNAL;
+    if (intent_id == 0 || intent_id >= DECK_RUNTIME_MAX_INTENTS) return DECK_RT_OK;
+    const deck_intent_binding_t *b = &app->intents[intent_id];
+    if (b->id != intent_id || !b->event) return DECK_RT_OK;   /* unknown / cleared */
+
+    /* Build args for b_machine_send: atom event, no payload. */
+    deck_value_t *ev = deck_new_atom(b->event);
+    if (!ev) return DECK_RT_NO_MEMORY;
+    deck_value_t *argv[1] = { ev };
+    app->ctx.err = DECK_RT_OK;
+    app->ctx.err_line = 0;
+    app->ctx.err_col = 0;
+    app->ctx.err_msg[0] = '\0';
+    app->ctx.depth = 0;
+    deck_value_t *r = b_machine_send(argv, 1, &app->ctx);
+    deck_release(ev);
+    if (r) deck_release(r);
+    if (app->ctx.err != DECK_RT_OK) {
+        ESP_LOGE(TAG, "app_intent(%u → :%s): %s",
+                 (unsigned)intent_id, b->event, app->ctx.err_msg);
+    }
+    return app->ctx.err;
 }
 
 /* ----- DL2 F28.4: @migration runner ------------------------------------

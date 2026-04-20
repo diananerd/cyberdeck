@@ -1491,3 +1491,25 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 - **Reactive re-render on stream emission** — `@stream` integration.
 
 **A→B note**: combined with concepts #38 + #44 + #45, this concept closes the "annex apps declare content, runtime renders it, transitions redraw" story at the coarse level. Every annex's primary state can now render a minimal UI. Fine-grained interactivity depends on the intent-id wiring (#47).
+
+### Concept #47 — intent_id ↔ event binding (bridge ↔ runtime round-trip)
+
+**Drift**: concept #46 rendered triggers/navigates as DVC nodes, but those nodes had no intent_id wired to an event. The bridge side couldn't know which `Machine.send(:evt)` to fire when the user tapped a trigger. Every rendered trigger was inert.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * Moved `struct deck_runtime_app` + the new `deck_intent_binding_t` table forward in the file so `content_render` (concept #46) can access `app->intents` directly. The old location left as a locator comment.
+  * New field `deck_intent_binding_t intents[DECK_RUNTIME_MAX_INTENTS]` (64 slots) + `next_intent_id` on each app slot. Cleared at the start of every `content_render`; populated as triggers/navigates are emitted. Id 0 is reserved for "no intent" — matches the DVC envelope convention.
+  * New helper `content_extract_event(action)` — inspects an `AST_CALL(AST_DOT(_, "send"), [AST_LIT_ATOM(x)])` shape and returns the interned atom text. Matches both `Machine.send(:evt)` and `machine.send(:evt)` (dot field is just `"send"`). Non-matching shapes → NULL (trigger renders without an intent; tap is a no-op).
+  * `content_render` extended: for each trigger/navigate, assign a fresh intent_id, stamp it on the DVC node, record `{id, event}` in `app->intents`.
+  * New public entry `deck_runtime_app_intent(app, intent_id)` in `include/deck_interp.h` — called by the shell when the bridge delivers a tap. Looks up the binding, builds an atom value, invokes `b_machine_send` with `(atom, no payload)`. Unknown or cleared ids are silent no-ops (returns OK).
+
+**What this unblocks**: the user-tap → state-change round trip is now wired at the runtime layer. Shell-side: `deck_shell_deck_apps.c` (or wherever bridge taps are currently caught) just needs to call `deck_runtime_app_intent(app, id)` when an intent fires. The next state's content renders automatically via concept #46's hook in `machine.send`.
+
+**Deferred**:
+- Payload passing on triggers — `Machine.send(:add_item, item_data)` from a trigger would require the intent binding to also carry a payload-builder expression. Today only zero-arg events work.
+- Intent coalescing when multiple renders happen rapidly — not a real issue until reactive streams arrive.
+- Bridge-side wiring (shell layer) — the runtime is ready; the shell's tap handler still needs the `deck_runtime_app_intent` call. Flagged as shell work.
+
+**Combined with #38 / #44 / #45 / #46**: annex apps are now runnable end-to-end at the interactive layer. Press trigger → intent → `Machine.send` → transition runs → new state renders → UI redraws. The only thing missing for *real* annex demos is the list / group / form / media item kinds (concepts #48+).
