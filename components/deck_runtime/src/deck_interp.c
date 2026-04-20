@@ -4807,7 +4807,9 @@ deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
     return DECK_RT_OK;
 }
 
-deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app, const char *event)
+deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
+                                     const char *event,
+                                     deck_value_t *payload)
 {
     if (!app || !app->in_use || !event) return DECK_RT_INTERNAL;
     /* launch/terminate are handled by load/unload; ignoring them keeps
@@ -4827,8 +4829,64 @@ deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app, const char *event)
     app->ctx.err_msg[0] = '\0';
     app->ctx.depth = 0;
 
-    deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, on->as.on.body);
+    /* Concept #38 — parameter binding / filtering per spec §11.
+     * Build a child env so bindings don't leak into the module's global env.
+     * Walk the declared params[]; for each, look up the payload field and:
+     *   - match_pattern() against it — success extends the env (for binders)
+     *                                   or passes through (for value patterns),
+     *                                   failure aborts the handler without firing. */
+    deck_env_t *bind_env = app->ctx.global;
+    bool skip_handler = false;
+    if (on->as.on.n_params > 0) {
+        bind_env = deck_env_new(&app->arena, app->ctx.global);
+        if (!bind_env) return DECK_RT_NO_MEMORY;
+        for (uint32_t i = 0; i < on->as.on.n_params; i++) {
+            const ast_on_param_t *p = &on->as.on.params[i];
+            if (!p->field || !p->pattern) continue;
+            deck_value_t *field_val = NULL;
+            if (payload && payload->type == DECK_T_MAP) {
+                /* Try atom key first (records), then string key (JSON / raw maps). */
+                deck_value_t *akey = deck_new_atom(p->field);
+                if (akey) {
+                    field_val = deck_map_get(payload, akey);
+                    deck_release(akey);
+                }
+                if (!field_val) {
+                    deck_value_t *skey = deck_new_str_cstr(p->field);
+                    if (skey) {
+                        field_val = deck_map_get(payload, skey);
+                        deck_release(skey);
+                    }
+                }
+            }
+            /* A missing field is unit — binders will capture that; value
+             * patterns won't match unit against a concrete literal. */
+            if (!field_val) field_val = deck_unit();
+            if (!match_pattern(&app->arena, bind_env, p->pattern, field_val)) {
+                skip_handler = true;
+                break;
+            }
+        }
+        if (skip_handler) {
+            deck_env_release(bind_env);
+            return DECK_RT_OK;
+        }
+    }
+
+    /* Make the raw event payload accessible as `event` for no-param handlers
+     * that use `event.field` accessors (the other spec §11 style). */
+    if (payload) {
+        if (bind_env == app->ctx.global) {
+            bind_env = deck_env_new(&app->arena, app->ctx.global);
+            if (!bind_env) return DECK_RT_NO_MEMORY;
+        }
+        deck_env_bind(&app->arena, bind_env, "event", payload);
+    }
+
+    deck_value_t *r = deck_interp_run(&app->ctx, bind_env, on->as.on.body);
     if (r) deck_release(r);
+
+    if (bind_env != app->ctx.global) deck_env_release(bind_env);
 
     if (app->ctx.err != DECK_RT_OK) {
         ESP_LOGE(TAG, "app_dispatch(%s): runtime error @ %u:%u — %s: %s",

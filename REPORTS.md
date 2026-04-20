@@ -1244,3 +1244,38 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why libm wrappers instead of inline polynomial approximations**: ESP-IDF ships with a full libm; the xtensa FPU handles float ops in hardware. No reason to roll our own polynomials when `sin` / `cos` / `log` are one-cycle FPU ops.
 
 **Running tally**: `math.*` now at 33/33. `text.*` 36/36, `time.*` 18/18, `nvs.*` 13/13, `fs.*` 10/10, `math.*` 33/33 — all five §3 DL1-mandatory capabilities complete at the runtime surface.
+
+### Concept #38 — `@on os.event` payload dispatch (spec §11)
+
+**Drift**: concept #13 taught the parser the three spec §11 binding styles:
+- no-params: `@on os.locked`
+- named binders: `@on os.wifi_changed (ssid: s, connected: c)`
+- value-pattern filters: `@on hardware.button (id: 0, action: :press)`
+
+…but `deck_runtime_app_dispatch` took only `(app, event)` — no payload. The parameter clauses sat in the AST untouched. Every annex example `@on os.*` / `@on hardware.*` with named binders or filters was parseable but couldn't actually fire with its payload bound.
+
+**Fix applied (layer 4, runtime)**:
+
+- 2026-04-19 · layer 4 edit · `include/deck_interp.h` — `deck_runtime_app_dispatch` gained a `deck_value_t *payload` parameter. Lifecycle callers (resume/pause/`trigger_*` dispatch) pass `NULL`; OS-event callers pass a `{str: any}` map.
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` — rewrote `deck_runtime_app_dispatch`:
+  * Walks `on->as.on.params[]` if present. For each `(field, pattern)`, looks up `payload[field]` using concept #33's dual atom/string key logic.
+  * Calls the existing `match_pattern` engine (reused from match arms) against the field value. A binder (`IDENT` pattern) extends a newly-allocated child env; a value pattern matches or skips; wildcard `_` accepts any without binding.
+  * **If any pattern fails to match, the handler doesn't fire** — this is the spec §11 value-pattern filter semantics (handler only runs when all declared filter values match).
+  * After the binder/filter pass, the handler body runs in the child env so bindings don't leak into the app's global env.
+  * The raw payload map is also bound to the implicit `event` identifier, supporting the no-params style `event.ssid` / `event.field` accessor in the body. Both styles now coexist — same handler body can mix binders and `event.field` lookups freely.
+- 2026-04-19 · layer 5 edit · `src/deck_interp_test.c` + `src/deck_shell_deck_apps.c` — four call sites updated to the new 3-arg signature (`NULL` payload for lifecycle events).
+
+**What this unblocks**:
+
+- `@on os.wifi_changed (ssid: s, connected: c)` — with a payload `{"ssid": "HomeAP", "connected": true}`, the handler runs with `s = "HomeAP"` and `c = true` bound.
+- `@on hardware.button (id: 0, action: :press)` — only fires when the payload has `id = 0` AND `action = :press`; any other `id` or action is filtered out at dispatch.
+- `@on os.low_memory` — no params, body can use `event.free_bytes` / `event.severity` via implicit `event` binding.
+
+**Deferred**:
+
+- Payload delivery from the platform (bridge / shell) — the runtime accepts a payload map, but no caller constructs one today. `deck_shell_deck_apps.c` dispatches lifecycle events with `NULL`. Wiring actual OS events (wifi changes, button presses, low-memory warnings) from the ESP-IDF event bus to a Deck dispatch call is its own concept — the runtime is now ready to receive whatever the bridge constructs.
+- Machine-level transitions firing on `@on` events (spec §8.4 `transition :event`) — parse-and-discard today; full dispatch is concept #23's deferred runtime work.
+
+**Why keep the parameter as `deck_value_t *` instead of `const deck_value_t *`**: the map is temporarily bound into the handler env; `deck_map_get` / `deck_env_bind` don't accept `const`-qualified values. No mutation happens, but the retain/release refcount path needs the mutable pointer.
+
+**A→B note**: this is a case where the parser was taught a shape the runtime couldn't deliver. Concept #13 said explicitly "runtime dispatch is now the only remaining hurdle"; concept #38 closes that hurdle. Every future session that adds `@on` handlers in an annex or app now has working end-to-end plumbing.

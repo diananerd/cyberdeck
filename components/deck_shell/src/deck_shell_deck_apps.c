@@ -119,14 +119,14 @@ static void deck_app_on_resume(deck_bridge_ui_activity_t *act, void *intent_data
 {
     deck_runtime_app_t *app = adapter_handle(act, intent_data);
     if (!app) return;
-    (void)deck_runtime_app_dispatch(app, "resume");
+    (void)deck_runtime_app_dispatch(app, "resume", NULL);
 }
 
 static void deck_app_on_pause(deck_bridge_ui_activity_t *act, void *intent_data)
 {
     deck_runtime_app_t *app = adapter_handle(act, intent_data);
     if (!app) return;
-    (void)deck_runtime_app_dispatch(app, "pause");
+    (void)deck_runtime_app_dispatch(app, "pause", NULL);
 }
 
 /* on_destroy runs after on_pause during a pop (activity-stack ordering:
@@ -170,7 +170,7 @@ static void deck_app_intent_hook(uint32_t intent_id)
 
     char evt[32];
     snprintf(evt, sizeof(evt), "trigger_%u", (unsigned)intent_id);
-    deck_err_t rc = deck_runtime_app_dispatch(slot->handle, evt);
+    deck_err_t rc = deck_runtime_app_dispatch(slot->handle, evt, NULL);
     if (rc != DECK_RT_OK) {
         ESP_LOGW(TAG, "dispatch(%s) → %s on %s",
                  evt, deck_err_name(rc), slot->path);

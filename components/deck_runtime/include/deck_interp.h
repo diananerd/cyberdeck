@@ -106,8 +106,21 @@ deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
                                  deck_runtime_app_t **out);
 
 /* Fire @on <event> on the app. Missing handler is a silent no-op, returns
- * DECK_RT_OK. Event body errors bubble up. */
-deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app, const char *event);
+ * DECK_RT_OK. Event body errors bubble up.
+ *
+ * `payload` is an optional map of event fields. When the handler declares
+ * parameter clauses (spec §11 `@on os.wifi_changed (ssid: s, connected: c)`),
+ * each parameter is matched against the corresponding payload field:
+ *   - binder pattern (IDENT) → bind payload field into the handler's env
+ *   - value pattern (literal/atom) → filter: handler only fires when payload
+ *     field equals the declared value
+ *   - wildcard `_` → accept any, no binding
+ * Pass NULL for lifecycle events (launch/resume/pause/terminate) that carry
+ * no payload; the handler's body runs with its implicit `event` identifier
+ * bound to unit. */
+deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
+                                     const char *event,
+                                     deck_value_t *payload);
 
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */

@@ -294,15 +294,15 @@ static bool t_app_dispatch(const char *name)
     const char *id = deck_runtime_app_id(app);
     CHECK(id != NULL, "id");
 
-    rc = deck_runtime_app_dispatch(app, "resume");
+    rc = deck_runtime_app_dispatch(app, "resume", NULL);
     CHECK(rc == DECK_RT_OK, "dispatch resume");
 
     /* Unknown event → no-op, no error. */
-    rc = deck_runtime_app_dispatch(app, "network_change");
+    rc = deck_runtime_app_dispatch(app, "network_change", NULL);
     CHECK(rc == DECK_RT_OK, "dispatch unknown");
 
     /* launch is reserved: dispatching it is a no-op (load already ran it). */
-    rc = deck_runtime_app_dispatch(app, "launch");
+    rc = deck_runtime_app_dispatch(app, "launch", NULL);
     CHECK(rc == DECK_RT_OK, "dispatch launch reserved");
 
     deck_runtime_app_unload(app);
