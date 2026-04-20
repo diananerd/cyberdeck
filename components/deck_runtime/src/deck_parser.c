@@ -260,6 +260,14 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                 case TOK_ATOM: case TOK_IDENT:
                 case TOK_LPAREN: case TOK_LBRACKET: case TOK_LBRACE:
                     starts_primary = true; break;
+                /* `:ctor -N` — unary-negated numeric payload counts as a
+                 * primary (spec §3.7 allows any expression as payload;
+                 * in practice fixtures use `:some -7` / `:err -1`). */
+                case TOK_MINUS:
+                    if (peek_next_tok(p) == TOK_INT ||
+                        peek_next_tok(p) == TOK_FLOAT)
+                        starts_primary = true;
+                    break;
                 default: break;
             }
             if (!starts_primary) {

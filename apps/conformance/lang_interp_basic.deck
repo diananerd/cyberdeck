@@ -32,9 +32,10 @@
   let s5 = "length={text.len(name)}"
   let ok_fn = s5 == "length=5"
 
-  -- Escape: `\{` produces a literal brace.
+  -- Escape: `\{` produces a literal brace (spec §2.6). Both sides
+  -- must escape — unescaped `{` opens an interpolation block.
   let s6 = "literal \{ brace"
-  let ok_esc = s6 == "literal { brace"
+  let ok_esc = s6 == "literal \{ brace"
 
   -- Multiple interpolations in one string.
   let a = 1
