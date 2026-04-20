@@ -1178,3 +1178,30 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 - `fs.list` currently returns `"name1\nname2\n..."` string; spec wants `Result [FsEntry] fs.Error` with `FsEntry { name, is_dir, size, modified }`. Rewrite requires `@type FsEntry` record construction from C. Separate concept.
 
 **Running tally**: `fs.*` now at 8/10 (exists/read/list/write/append/delete/mkdir/move vs spec 10). Remaining: `read_bytes` + `write_bytes`, plus a rewrite of `list` to return the FsEntry record form. `os_fs.deck` still has the FsEntry pattern-match which won't parse against the current `list` shape — noted, deferred.
+
+### Concept #35 — nvs.* completeness + spec-canonical arity (spec §3 / §05 §3)
+
+**Drift (three-part)**:
+
+1. **Arity shift**: runtime had `nvs.get(ns, key)` / `nvs.set(ns, key, value)` / `nvs.delete(ns, key)` — an explicit namespace as the first argument. Spec §3 declares `get(key: str) -> str?`, `set(key, value)` etc. — **no** explicit namespace. Apps get an isolated namespace derived from `@app.id`. Every fixture and annex used the spec form; every call failed at arity check pre-concept.
+2. **Value-type surface missing**: runtime had only `get/set` for `str`. Spec surfaces `get_int/set_int/get_bool/set_bool/get_float/set_float/get_bytes/set_bytes` as first-class. Eight missing builtins.
+3. **Iteration/clear missing**: spec has `keys() -> Result [str]` and `clear() -> Result unit`. Runtime had neither. SDI vtable had no iterator at all — had to extend the platform driver.
+
+**Fix applied (three layers)**:
+
+- 2026-04-19 · layer 4 SDI · `components/deck_sdi/include/drivers/deck_sdi_nvs.h` — added wrapper declarations for `get_blob`, `set_blob`, `keys`, `clear`. Blob wrappers were already in the vtable but never exposed at the high-level API.
+- 2026-04-19 · layer 4 SDI · `components/deck_sdi/src/drivers/deck_sdi_nvs_esp32.c`:
+  * `deck_sdi_nvs_get_blob` / `set_blob` — thin vtable dispatchers.
+  * `deck_sdi_nvs_keys` — iterates `nvs_entry_find`/`_next` across five NVS types (STR, I64, BLOB, U8, I32) and invokes a callback per key. Stop-early if cb returns false.
+  * `deck_sdi_nvs_clear` — opens the namespace RW, calls `nvs_erase_all`, commits.
+- 2026-04-19 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c`:
+  * `nvs_app_ns(c, out, cap)` helper walks the current module's `AST_APP` for the `id` field and truncates to NVS's 15-char limit. Falls back to `"deck.app"` when no app context (scratch eval / tests).
+  * `nvs_err_result(rc)` maps SDI error codes to spec-canonical `nvs.Error` atoms (`:not_found`, `:invalid_key`, `:full`, `:write_fail`).
+  * `nvs_copy_key` validates key is `str` and ≤ 15 chars; too-long → `*out_too_long = true` so caller can return `:err :invalid_key` (Result-shape) on write ops or `:none` (Option-shape) on read ops — matches what the fixture asserts.
+  * Eleven new / rewritten builtins: `nvs.get` (1-arg, returns Option), `nvs.set` / `nvs.delete` (Result), `nvs.get_int/set_int`, `nvs.get_bool/set_bool` (stored as i64 0/1), `nvs.get_float/set_float` (bit-pattern preserved via `memcpy` int64↔double), `nvs.get_bytes/set_bytes` ([int] surface with 0–255 range check), `nvs.keys()` / `nvs.clear()`.
+
+**Why float as i64 bits instead of its own NVS type**: ESP-IDF NVS has only int / str / blob types; no native float. Bit-cast via `memcpy(&bits, &d, sizeof(bits))` is well-defined C, preserves NaN/Inf, round-trips exactly. Storing as a 9-byte blob would work too but costs more flash.
+
+**Why the blob cap is 1 KB**: NVS blobs can be much larger, but an explicit cap here matches the runtime's "no runaway allocations" convention from concepts #26–29. Apps that genuinely need larger persistent buffers use `fs.write_bytes` (future concept) instead.
+
+**Running tally**: `nvs.*` now at 13/13 (11 new + 2 kept). Spec §3 capability complete. `text.*` 36/36. `time.*` 18/18. `fs.*` 8/10. The first three capabilities of §3 (`nvs`, `text`, `time`) are fully implemented at the runtime surface.

@@ -209,6 +209,60 @@ deck_sdi_err_t deck_sdi_nvs_commit(const char *ns)
     return vt->commit(ctx, ns);
 }
 
+deck_sdi_err_t deck_sdi_nvs_get_blob(const char *ns, const char *key,
+                                     void *out, size_t *io_size)
+{
+    void *ctx; const deck_sdi_nvs_vtable_t *vt = nvs_vt(&ctx);
+    if (!vt || !vt->get_blob) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->get_blob(ctx, ns, key, out, io_size);
+}
+
+deck_sdi_err_t deck_sdi_nvs_set_blob(const char *ns, const char *key,
+                                     const void *buf, size_t size)
+{
+    void *ctx; const deck_sdi_nvs_vtable_t *vt = nvs_vt(&ctx);
+    if (!vt || !vt->set_blob) return DECK_SDI_ERR_NOT_SUPPORTED;
+    return vt->set_blob(ctx, ns, key, buf, size);
+}
+
+/* Iteration over keys within a namespace. Enumerates only the keys; the
+ * caller collects them. ESP-IDF's nvs_iterator_t walks across all types,
+ * so we need to iterate once per type and merge. For simplicity in DL1
+ * this returns string + i64 + blob keys. */
+deck_sdi_err_t deck_sdi_nvs_keys(const char *ns,
+                                 bool (*cb)(const char *key, void *user),
+                                 void *user)
+{
+    if (!ns || !cb) return DECK_SDI_ERR_INVALID_ARG;
+    const nvs_type_t want[] = { NVS_TYPE_STR, NVS_TYPE_I64, NVS_TYPE_BLOB,
+                                NVS_TYPE_U8,  NVS_TYPE_I32 };
+    for (size_t t = 0; t < sizeof(want) / sizeof(want[0]); t++) {
+        nvs_iterator_t it = NULL;
+        esp_err_t e = nvs_entry_find("nvs", ns, want[t], &it);
+        while (e == ESP_OK && it) {
+            nvs_entry_info_t info;
+            nvs_entry_info(it, &info);
+            if (!cb(info.key, user)) { nvs_release_iterator(it); return DECK_SDI_OK; }
+            e = nvs_entry_next(&it);
+        }
+        if (it) nvs_release_iterator(it);
+        if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) return map_esp(e);
+    }
+    return DECK_SDI_OK;
+}
+
+deck_sdi_err_t deck_sdi_nvs_clear(const char *ns)
+{
+    if (!ns) return DECK_SDI_ERR_INVALID_ARG;
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(ns, NVS_READWRITE, &h);
+    if (e != ESP_OK) return map_esp(e);
+    e = nvs_erase_all(h);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return map_esp(e);
+}
+
 /* ---------- selftest ---------- */
 
 #define SELFTEST_NS   "deck.test"

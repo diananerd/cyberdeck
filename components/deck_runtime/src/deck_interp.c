@@ -795,43 +795,291 @@ static deck_value_t *b_time_ago(deck_value_t **a, uint32_t n, deck_interp_ctx_t 
     return deck_new_str(buf, (uint32_t)k);
 }
 
-/* ---- nvs.* ---- */
+/* ---- nvs.* (concept #35, spec §3 / §05 §3) ----
+ * Spec signature: `nvs.get(key)` / `nvs.set(key, value)` — no explicit
+ * namespace. The namespace is the currently-executing app's `@app.id`.
+ * Without an app context (test harness, scratch eval) a fallback ns is used
+ * so operations still work deterministically. ESP32 NVS keys are limited to
+ * 15 chars; we validate and return `:err :invalid_key` for too-long keys. */
+
+#define NVS_KEY_MAX 15
+#define NVS_FALLBACK_NS "deck.app"
+
+static void nvs_app_ns(deck_interp_ctx_t *c, char *out, size_t cap)
+{
+    const char *id = NULL;
+    if (c && c->module && c->module->kind == AST_MODULE) {
+        for (uint32_t i = 0; i < c->module->as.module.items.len; i++) {
+            const ast_node_t *it = c->module->as.module.items.items[i];
+            if (!it || it->kind != AST_APP) continue;
+            for (uint32_t f = 0; f < it->as.app.n_fields; f++) {
+                const ast_app_field_t *fld = &it->as.app.fields[f];
+                if (fld->name && strcmp(fld->name, "id") == 0 &&
+                    fld->value && fld->value->kind == AST_LIT_STR) {
+                    id = fld->value->as.s;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    if (!id || !*id) id = NVS_FALLBACK_NS;
+    /* ESP-IDF NVS namespaces are limited to 15 characters; truncate. */
+    size_t L = strlen(id);
+    if (L >= cap) L = cap - 1;
+    if (L > 15) L = 15;
+    memcpy(out, id, L);
+    out[L] = 0;
+}
+
+static deck_value_t *nvs_err_result(deck_sdi_err_t rc)
+{
+    const char *name;
+    switch (rc) {
+        case DECK_SDI_ERR_NOT_FOUND:    name = "not_found";    break;
+        case DECK_SDI_ERR_INVALID_ARG:  name = "invalid_key";  break;
+        case DECK_SDI_ERR_NO_MEMORY:    name = "full";         break;
+        case DECK_SDI_ERR_NOT_SUPPORTED:name = "write_fail";   break;
+        default:                        name = "write_fail";   break;
+    }
+    deck_value_t *atom = deck_new_atom(name);
+    if (!atom) return NULL;
+    deck_value_t *r = make_result_tag("err", atom);
+    deck_release(atom);
+    return r;
+}
+
+/* Copy + null-terminate a key value into `dst`. Returns false on type error
+ * or key too long (the latter surfaces as a :err :invalid_key Result, so the
+ * caller distinguishes via `*out_key_too_long`). */
+static bool nvs_copy_key(deck_value_t *v, char *dst, bool *out_too_long)
+{
+    *out_too_long = false;
+    if (!v || v->type != DECK_T_STR) return false;
+    if (v->as.s.len > NVS_KEY_MAX) { *out_too_long = true; return false; }
+    memcpy(dst, v->as.s.ptr, v->as.s.len);
+    dst[v->as.s.len] = 0;
+    return true;
+}
+
+/* String get: returns :some str or :none (spec §3 sig `get(key) -> str?`). */
 static deck_value_t *b_nvs_get(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get(ns, key)"); return NULL; }
-    char out[128]; memcpy(out, args[0]->as.s.ptr, args[0]->as.s.len); out[args[0]->as.s.len] = 0;
-    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
-    char val[128]; val[0] = 0;
-    deck_sdi_err_t rc = deck_sdi_nvs_get_str(out, key, val, sizeof(val));
-    if (rc == DECK_SDI_OK) return deck_new_str_cstr(val);
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) {
+        if (too_long) return deck_new_none();
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get(key:str)"); return NULL;
+    }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    char val[512];
+    deck_sdi_err_t rc = deck_sdi_nvs_get_str(ns, key, val, sizeof(val));
     if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_none();
-    set_err(c, DECK_RT_INTERNAL, 0, 0, "nvs.get failed: %s", deck_sdi_strerror(rc));
-    return NULL;
+    if (rc != DECK_SDI_OK) return deck_new_none();
+    return deck_new_some(deck_new_str_cstr(val));
 }
+
+/* String set: returns :ok unit / :err :atom. */
 static deck_value_t *b_nvs_set(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR ||
-        !args[2] || args[2]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set(ns, key, str)"); return NULL; }
-    char ns[64]; memcpy(ns, args[0]->as.s.ptr, args[0]->as.s.len); ns[args[0]->as.s.len] = 0;
-    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
-    char val[128]; memcpy(val, args[2]->as.s.ptr, args[2]->as.s.len); val[args[2]->as.s.len] = 0;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) {
+        if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG);
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set(key:str, val:str)"); return NULL;
+    }
+    if (!args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set(key:str, val:str)"); return NULL;
+    }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    char val[512];
+    uint32_t L = args[1]->as.s.len < 511 ? args[1]->as.s.len : 511;
+    memcpy(val, args[1]->as.s.ptr, L); val[L] = 0;
     deck_sdi_err_t rc = deck_sdi_nvs_set_str(ns, key, val);
-    if (rc != DECK_SDI_OK) { set_err(c, DECK_RT_INTERNAL, 0, 0, "nvs.set failed: %s", deck_sdi_strerror(rc)); return NULL; }
-    return deck_retain(deck_unit());
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
 }
+
+/* Delete: returns :ok unit or :err :not_found. */
 static deck_value_t *b_nvs_delete(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.delete(ns, key)"); return NULL; }
-    char ns[64]; memcpy(ns, args[0]->as.s.ptr, args[0]->as.s.len); ns[args[0]->as.s.len] = 0;
-    char key[64]; memcpy(key, args[1]->as.s.ptr, args[1]->as.s.len); key[args[1]->as.s.len] = 0;
-    deck_sdi_nvs_del(ns, key);
-    return deck_retain(deck_unit());
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) {
+        if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG);
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.delete(key:str)"); return NULL;
+    }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    deck_sdi_err_t rc = deck_sdi_nvs_del(ns, key);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* Int round-trip (SDI i64). */
+static deck_value_t *b_nvs_get_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return deck_new_none(); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get_int"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    int64_t v = 0;
+    if (deck_sdi_nvs_get_i64(ns, key, &v) != DECK_SDI_OK) return deck_new_none();
+    return deck_new_some(deck_new_int(v));
+}
+
+static deck_value_t *b_nvs_set_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_int"); return NULL; }
+    if (!args[1] || args[1]->type != DECK_T_INT) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_int(key, int)"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    deck_sdi_err_t rc = deck_sdi_nvs_set_i64(ns, key, args[1]->as.i);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* Bool piggybacks on i64 (0/1). */
+static deck_value_t *b_nvs_get_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return deck_new_none(); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get_bool"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    int64_t v = 0;
+    if (deck_sdi_nvs_get_i64(ns, key, &v) != DECK_SDI_OK) return deck_new_none();
+    return deck_new_some(deck_retain(v ? deck_true() : deck_false()));
+}
+
+static deck_value_t *b_nvs_set_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_bool"); return NULL; }
+    if (!args[1] || args[1]->type != DECK_T_BOOL) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_bool(key, bool)"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    deck_sdi_err_t rc = deck_sdi_nvs_set_i64(ns, key, args[1]->as.b ? 1 : 0);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* Float piggybacks on i64 with bit-pattern preservation. */
+static deck_value_t *b_nvs_get_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return deck_new_none(); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get_float"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    int64_t bits = 0;
+    if (deck_sdi_nvs_get_i64(ns, key, &bits) != DECK_SDI_OK) return deck_new_none();
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    return deck_new_some(deck_new_float(d));
+}
+
+static deck_value_t *b_nvs_set_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_float"); return NULL; }
+    if (!args[1] || args[1]->type != DECK_T_FLOAT) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_float(key, float)"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    double d = args[1]->as.f;
+    int64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    deck_sdi_err_t rc = deck_sdi_nvs_set_i64(ns, key, bits);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* Bytes ↔ blob. Values surface as [int] (each 0..255). */
+static deck_value_t *b_nvs_get_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return deck_new_none(); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get_bytes"); return NULL; }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    uint8_t buf[512];
+    size_t sz = sizeof(buf);
+    if (deck_sdi_nvs_get_blob(ns, key, buf, &sz) != DECK_SDI_OK) return deck_new_none();
+    deck_value_t *out = deck_new_list((uint32_t)sz);
+    if (!out) return NULL;
+    for (size_t i = 0; i < sz; i++) {
+        deck_value_t *b = deck_new_int(buf[i]);
+        deck_list_push(out, b); deck_release(b);
+    }
+    deck_value_t *some = deck_new_some(out);
+    deck_release(out);
+    return some;
+}
+
+static deck_value_t *b_nvs_set_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) { if (too_long) return nvs_err_result(DECK_SDI_ERR_INVALID_ARG); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_bytes"); return NULL; }
+    if (!args[1] || args[1]->type != DECK_T_LIST) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_bytes(key, [int])"); return NULL; }
+    uint32_t L = args[1]->as.list.len;
+    if (L > 1024) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "nvs.set_bytes: payload > 1KB"); return NULL; }
+    uint8_t buf[1024];
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *v = args[1]->as.list.items[i];
+        if (!v || v->type != DECK_T_INT) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.set_bytes: element %u not int", (unsigned)i); return NULL; }
+        int64_t x = v->as.i;
+        if (x < 0 || x > 255) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "nvs.set_bytes: byte out of range"); return NULL; }
+        buf[i] = (uint8_t)x;
+    }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    deck_sdi_err_t rc = deck_sdi_nvs_set_blob(ns, key, buf, L);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* keys() → Result [str] nvs.Error. */
+typedef struct { deck_value_t *list; bool alloc_fail; } nvs_keys_ctx_t;
+static bool nvs_keys_cb(const char *key, void *user)
+{
+    nvs_keys_ctx_t *ctx = (nvs_keys_ctx_t *)user;
+    if (ctx->alloc_fail) return false;
+    deck_value_t *v = deck_new_str_cstr(key);
+    if (!v) { ctx->alloc_fail = true; return false; }
+    deck_list_push(ctx->list, v);
+    deck_release(v);
+    return true;
+}
+
+static deck_value_t *b_nvs_keys(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    nvs_keys_ctx_t ctx = { deck_new_list(8), false };
+    if (!ctx.list) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "nvs.keys alloc"); return NULL; }
+    deck_sdi_err_t rc = deck_sdi_nvs_keys(ns, nvs_keys_cb, &ctx);
+    if (ctx.alloc_fail) { deck_release(ctx.list); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "nvs.keys alloc"); return NULL; }
+    if (rc != DECK_SDI_OK) { deck_release(ctx.list); return nvs_err_result(rc); }
+    deck_value_t *r = make_result_tag("ok", ctx.list);
+    deck_release(ctx.list);
+    return r;
+}
+
+static deck_value_t *b_nvs_clear(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    deck_sdi_err_t rc = deck_sdi_nvs_clear(ns);
+    if (rc != DECK_SDI_OK) return nvs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
 }
 
 /* ---- fs.* ---- */
@@ -2795,9 +3043,20 @@ static const builtin_t BUILTINS[] = {
     { "math.round",             b_math_round,        1, 1 },
 
     /* nvs */
-    { "nvs.get",                b_nvs_get,           2, 2 },
-    { "nvs.set",                b_nvs_set,           3, 3 },
-    { "nvs.delete",             b_nvs_delete,        2, 2 },
+    /* Concept #35 — spec §3 arity (1-arg/2-arg, implicit app-scoped ns). */
+    { "nvs.get",                b_nvs_get,           1, 1 },
+    { "nvs.set",                b_nvs_set,           2, 2 },
+    { "nvs.delete",             b_nvs_delete,        1, 1 },
+    { "nvs.get_int",            b_nvs_get_int,       1, 1 },
+    { "nvs.set_int",            b_nvs_set_int,       2, 2 },
+    { "nvs.get_bool",           b_nvs_get_bool,      1, 1 },
+    { "nvs.set_bool",           b_nvs_set_bool,      2, 2 },
+    { "nvs.get_float",          b_nvs_get_float,     1, 1 },
+    { "nvs.set_float",          b_nvs_set_float,     2, 2 },
+    { "nvs.get_bytes",          b_nvs_get_bytes,     1, 1 },
+    { "nvs.set_bytes",          b_nvs_set_bytes,     2, 2 },
+    { "nvs.keys",               b_nvs_keys,          0, 0 },
+    { "nvs.clear",              b_nvs_clear,         0, 0 },
 
     /* fs (read-only) */
     { "fs.exists",              b_fs_exists,         1, 1 },

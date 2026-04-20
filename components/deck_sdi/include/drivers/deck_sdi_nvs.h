@@ -49,6 +49,22 @@ deck_sdi_err_t deck_sdi_nvs_set_i64(const char *ns, const char *key,
 deck_sdi_err_t deck_sdi_nvs_del(const char *ns, const char *key);
 deck_sdi_err_t deck_sdi_nvs_commit(const char *ns);
 
+/* Blob round-trip. io_size is bytes-available in / bytes-written out. */
+deck_sdi_err_t deck_sdi_nvs_get_blob(const char *ns, const char *key,
+                                     void *out, size_t *io_size);
+deck_sdi_err_t deck_sdi_nvs_set_blob(const char *ns, const char *key,
+                                     const void *buf, size_t size);
+
+/* Enumerate keys in a namespace. cb is called once per key; return false
+ * to stop early. Non-portable across drivers — platforms that can't
+ * enumerate should return DECK_SDI_ERR_NOT_SUPPORTED. */
+deck_sdi_err_t deck_sdi_nvs_keys(const char *ns,
+                                 bool (*cb)(const char *key, void *user),
+                                 void *user);
+
+/* Erase every key in a namespace. */
+deck_sdi_err_t deck_sdi_nvs_clear(const char *ns);
+
 /* Round-trip selftest over namespace "deck.test". Leaves no residue. */
 deck_sdi_err_t deck_sdi_nvs_selftest(void);
 
