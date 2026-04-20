@@ -1225,3 +1225,22 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Running tally**: `fs.*` now at **10/10**. Spec §3 `@capability fs` complete at the builtin layer (modulo the `size` / `modified` SDI gap).
 
 **Four consecutive §3 capabilities fully runtime-implemented**: `text` (36/36), `time` (18/18), `nvs` (13/13), `fs` (10/10). Every capability that §3 declares as mandatory at DL1 now has 100% of its method surface registered. That closes the "deepened fixture silently calls un-registered builtin" gap for the DL1 capability baseline.
+
+### Concept #37 — math.* completeness (spec §3 @builtin math)
+
+**Drift**: runtime had 6 registrations (abs/min/max/floor/ceil/round) vs spec's 30+ methods. `math.round` was arity 1 but spec is 1–2. Constants `math.pi / math.e / math.tau` missing — every trig-heavy app would crash at load.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `components/deck_runtime/src/deck_interp.c`:
+  * `math.round` extended to arity 1–2; two-arg form rounds to N decimal places (`round(x, 3) → 3.142`). Internal cap of 12 places to bound the `10^n` multiplier.
+  * **Unary float → float helpers** via `MATH_UNARY` macro: sqrt / sin / cos / tan / asin / acos / atan / exp / ln / log2 / log10. Each is a one-line libm wrapper.
+  * **Multi-arg float ops**: pow / atan2 / clamp / lerp. `clamp` preserves int type if all three args are ints.
+  * **Predicates / sign**: sign (`-1 / 0 / 1` as float), is_nan, is_inf.
+  * **Conversions**: to_radians / to_degrees via `M_PI / 180`.
+  * **Int helpers**: abs_int / min_int / max_int / clamp_int / gcd / lcm. GCD uses the standard Euclidean loop; LCM composes via `abs(x) / gcd * abs(y)` to avoid overflow.
+  * **Constants**: `math.pi / math.e / math.tau` registered as zero-arity builtins. AST_DOT's existing capability-dispatch path (concept #33's map lookup comes _after_ the cap-name lookup) auto-calls 0-arity builtins, so bare `math.pi` works as a value.
+
+**Why libm wrappers instead of inline polynomial approximations**: ESP-IDF ships with a full libm; the xtensa FPU handles float ops in hardware. No reason to roll our own polynomials when `sin` / `cos` / `log` are one-cycle FPU ops.
+
+**Running tally**: `math.*` now at 33/33. `text.*` 36/36, `time.*` 18/18, `nvs.*` 13/13, `fs.*` 10/10, `math.*` 33/33 — all five §3 DL1-mandatory capabilities complete at the runtime surface.

@@ -269,11 +269,193 @@ static deck_value_t *b_math_ceil(deck_value_t **args, uint32_t n, deck_interp_ct
 }
 static deck_value_t *b_math_round(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)n;
+    /* Spec §3: round(x, n) - rounds to n decimal places (returns float when n provided). */
     if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.round needs number"); return NULL; }
+    if (n >= 2) {
+        if (!args[1] || args[1]->type != DECK_T_INT) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.round(x, n:int)"); return NULL; }
+        int64_t places = args[1]->as.i;
+        if (places < 0) places = 0;
+        if (places > 12) places = 12;
+        double x = args[0]->type == DECK_T_INT ? (double)args[0]->as.i : args[0]->as.f;
+        double mult = 1.0;
+        for (int64_t i = 0; i < places; i++) mult *= 10.0;
+        return deck_new_float(round(x * mult) / mult);
+    }
     if (args[0]->type == DECK_T_INT) return deck_new_int(args[0]->as.i);
     return deck_new_int((int64_t)round(args[0]->as.f));
 }
+
+/* ---- math.* completeness (concept #37, spec §3) ---- */
+
+static double numd(deck_value_t *v) { return v->type == DECK_T_INT ? (double)v->as.i : v->as.f; }
+
+#define MATH_UNARY(name, fn) \
+    static deck_value_t *b_math_##name(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { \
+        (void)n; \
+        if (!is_num(a[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math." #name " needs number"); return NULL; } \
+        return deck_new_float(fn(numd(a[0]))); \
+    }
+
+MATH_UNARY(sqrt, sqrt)
+MATH_UNARY(sin,  sin)
+MATH_UNARY(cos,  cos)
+MATH_UNARY(tan,  tan)
+MATH_UNARY(asin, asin)
+MATH_UNARY(acos, acos)
+MATH_UNARY(atan, atan)
+MATH_UNARY(exp,  exp)
+MATH_UNARY(ln,   log)
+MATH_UNARY(log2, log2)
+MATH_UNARY(log10,log10)
+#undef MATH_UNARY
+
+static deck_value_t *b_math_pow(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0]) || !is_num(a[1])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.pow needs numbers"); return NULL; }
+    return deck_new_float(pow(numd(a[0]), numd(a[1])));
+}
+
+static deck_value_t *b_math_atan2(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0]) || !is_num(a[1])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.atan2 needs numbers"); return NULL; }
+    return deck_new_float(atan2(numd(a[0]), numd(a[1])));
+}
+
+static deck_value_t *b_math_clamp(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0]) || !is_num(a[1]) || !is_num(a[2])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.clamp needs numbers"); return NULL; }
+    double x = numd(a[0]), lo = numd(a[1]), hi = numd(a[2]);
+    if (x < lo) x = lo;
+    if (x > hi) x = hi;
+    if (a[0]->type == DECK_T_INT && a[1]->type == DECK_T_INT && a[2]->type == DECK_T_INT)
+        return deck_new_int((int64_t)x);
+    return deck_new_float(x);
+}
+
+static deck_value_t *b_math_lerp(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0]) || !is_num(a[1]) || !is_num(a[2])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.lerp needs numbers"); return NULL; }
+    double A = numd(a[0]), B = numd(a[1]), t = numd(a[2]);
+    return deck_new_float(A + (B - A) * t);
+}
+
+static deck_value_t *b_math_sign(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.sign needs number"); return NULL; }
+    double x = numd(a[0]);
+    return deck_new_float(x > 0 ? 1.0 : x < 0 ? -1.0 : 0.0);
+}
+
+static deck_value_t *b_math_is_nan(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!is_num(a[0])) return deck_retain(deck_false());
+    if (a[0]->type == DECK_T_INT) return deck_retain(deck_false());
+    return deck_retain(isnan(a[0]->as.f) ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_math_is_inf(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!is_num(a[0])) return deck_retain(deck_false());
+    if (a[0]->type == DECK_T_INT) return deck_retain(deck_false());
+    return deck_retain(isinf(a[0]->as.f) ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_math_to_radians(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.to_radians needs number"); return NULL; }
+    return deck_new_float(numd(a[0]) * (M_PI / 180.0));
+}
+
+static deck_value_t *b_math_to_degrees(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!is_num(a[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "math.to_degrees needs number"); return NULL; }
+    return deck_new_float(numd(a[0]) * (180.0 / M_PI));
+}
+
+/* ---- int helpers ---- */
+static int64_t int_or(deck_value_t *v, deck_interp_ctx_t *c, const char *who)
+{
+    if (!v || v->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s needs int", who);
+        return 0;
+    }
+    return v->as.i;
+}
+
+static deck_value_t *b_math_abs_int(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = int_or(a[0], c, "math.abs_int");
+    if (c->err) return NULL;
+    return deck_new_int(x < 0 ? -x : x);
+}
+
+static deck_value_t *b_math_min_int(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = int_or(a[0], c, "math.min_int"); if (c->err) return NULL;
+    int64_t y = int_or(a[1], c, "math.min_int"); if (c->err) return NULL;
+    return deck_new_int(x < y ? x : y);
+}
+
+static deck_value_t *b_math_max_int(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = int_or(a[0], c, "math.max_int"); if (c->err) return NULL;
+    int64_t y = int_or(a[1], c, "math.max_int"); if (c->err) return NULL;
+    return deck_new_int(x > y ? x : y);
+}
+
+static deck_value_t *b_math_clamp_int(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x  = int_or(a[0], c, "math.clamp_int"); if (c->err) return NULL;
+    int64_t lo = int_or(a[1], c, "math.clamp_int"); if (c->err) return NULL;
+    int64_t hi = int_or(a[2], c, "math.clamp_int"); if (c->err) return NULL;
+    if (x < lo) x = lo;
+    if (x > hi) x = hi;
+    return deck_new_int(x);
+}
+
+static deck_value_t *b_math_gcd(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = int_or(a[0], c, "math.gcd"); if (c->err) return NULL;
+    int64_t y = int_or(a[1], c, "math.gcd"); if (c->err) return NULL;
+    if (x < 0) x = -x;
+    if (y < 0) y = -y;
+    while (y) { int64_t t = x % y; x = y; y = t; }
+    return deck_new_int(x);
+}
+
+static deck_value_t *b_math_lcm(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    int64_t x = int_or(a[0], c, "math.lcm"); if (c->err) return NULL;
+    int64_t y = int_or(a[1], c, "math.lcm"); if (c->err) return NULL;
+    if (x == 0 || y == 0) return deck_new_int(0);
+    int64_t ax = x < 0 ? -x : x;
+    int64_t ay = y < 0 ? -y : y;
+    int64_t g = ax, b = ay;
+    while (b) { int64_t t = g % b; g = b; b = t; }
+    return deck_new_int(ax / g * ay);
+}
+
+/* Zero-arity constants — picked up by AST_DOT's capability dispatch path
+ * (interp.c around the build_cap_name block), which auto-calls 0-arity
+ * builtins on bare `math.pi` / `math.e` / `math.tau` accesses. */
+static deck_value_t *b_math_pi (deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)a;(void)n;(void)c; return deck_new_float(M_PI); }
+static deck_value_t *b_math_e  (deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)a;(void)n;(void)c; return deck_new_float(M_E); }
+static deck_value_t *b_math_tau(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c) { (void)a;(void)n;(void)c; return deck_new_float(2.0 * M_PI); }
 
 /* ---- text.* ---- */
 static deck_value_t *b_text_lower(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -3103,7 +3285,38 @@ static const builtin_t BUILTINS[] = {
     { "math.max",               b_math_max,          2, 2 },
     { "math.floor",             b_math_floor,        1, 1 },
     { "math.ceil",              b_math_ceil,         1, 1 },
-    { "math.round",             b_math_round,        1, 1 },
+    { "math.round",             b_math_round,        1, 2 },
+    /* Concept #37 — §3 @builtin math completeness. */
+    { "math.sqrt",              b_math_sqrt,         1, 1 },
+    { "math.pow",               b_math_pow,          2, 2 },
+    { "math.clamp",             b_math_clamp,        3, 3 },
+    { "math.lerp",              b_math_lerp,         3, 3 },
+    { "math.sin",               b_math_sin,          1, 1 },
+    { "math.cos",               b_math_cos,          1, 1 },
+    { "math.tan",               b_math_tan,          1, 1 },
+    { "math.asin",              b_math_asin,         1, 1 },
+    { "math.acos",              b_math_acos,         1, 1 },
+    { "math.atan",              b_math_atan,         1, 1 },
+    { "math.atan2",             b_math_atan2,        2, 2 },
+    { "math.exp",               b_math_exp,          1, 1 },
+    { "math.ln",                b_math_ln,           1, 1 },
+    { "math.log2",              b_math_log2,         1, 1 },
+    { "math.log10",             b_math_log10,        1, 1 },
+    { "math.sign",              b_math_sign,         1, 1 },
+    { "math.is_nan",            b_math_is_nan,       1, 1 },
+    { "math.is_inf",            b_math_is_inf,       1, 1 },
+    { "math.to_radians",        b_math_to_radians,   1, 1 },
+    { "math.to_degrees",        b_math_to_degrees,   1, 1 },
+    { "math.abs_int",           b_math_abs_int,      1, 1 },
+    { "math.min_int",           b_math_min_int,      2, 2 },
+    { "math.max_int",           b_math_max_int,      2, 2 },
+    { "math.clamp_int",         b_math_clamp_int,    3, 3 },
+    { "math.gcd",               b_math_gcd,          2, 2 },
+    { "math.lcm",               b_math_lcm,          2, 2 },
+    /* Constants — 0-arity so AST_DOT auto-dispatches on `math.pi` etc. */
+    { "math.pi",                b_math_pi,           0, 0 },
+    { "math.e",                 b_math_e,            0, 0 },
+    { "math.tau",               b_math_tau,          0, 0 },
 
     /* nvs */
     /* Concept #35 — spec §3 arity (1-arg/2-arg, implicit app-scoped ns). */
