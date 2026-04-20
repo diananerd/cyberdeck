@@ -1697,6 +1697,22 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         }
                         /* Concept #57 — inline per-widget options. */
                         parse_content_options(p, ci);
+                        /* Concept #58 — inline trailing `[on] -> action`
+                         * after options, per spec §12.4
+                         * (`toggle :x state: s on -> action` form) and
+                         * annex-a `trigger L badge: B -> action`. */
+                        if (at(p, TOK_KW_ON)) advance(p);
+                        if (at(p, TOK_ARROW)) {
+                            advance(p);
+                            ast_node_t *tail = parse_expr_prec(p, 0);
+                            if (tail) {
+                                if (ci->as.content_item.action_expr &&
+                                    !ci->as.content_item.data_expr)
+                                    ci->as.content_item.data_expr =
+                                        ci->as.content_item.action_expr;
+                                ci->as.content_item.action_expr = tail;
+                            }
+                        }
                         /* Consume any still-unread tokens on this line (unknown
                          * shapes fall through to here). */
                         while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
@@ -1799,6 +1815,21 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         /* Concept #57 — per-item options (e.g.
                                          * `trigger x.name badge: x.count`). */
                                         parse_content_options(p, sub);
+                                        /* Concept #58 — inline trailing
+                                         * `[on] -> action` for per-item shapes
+                                         * like `trigger x.name badge: N -> act`. */
+                                        if (at(p, TOK_KW_ON)) advance(p);
+                                        if (at(p, TOK_ARROW)) {
+                                            advance(p);
+                                            ast_node_t *tail = parse_expr_prec(p, 0);
+                                            if (tail) {
+                                                if (sub->as.content_item.action_expr &&
+                                                    !sub->as.content_item.data_expr)
+                                                    sub->as.content_item.data_expr =
+                                                        sub->as.content_item.action_expr;
+                                                sub->as.content_item.action_expr = tail;
+                                            }
+                                        }
                                         while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
                                             advance(p);
                                         while (at(p, TOK_NEWLINE)) advance(p);
@@ -1836,6 +1867,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         while (at(p, TOK_NEWLINE)) advance(p);
                                         continue;
                                     }
+                                    if (at(p, TOK_KW_ON)) advance(p);
                                     if (at(p, TOK_ARROW)) {
                                         advance(p);
                                         ast_node_t *action = parse_expr_prec(p, 0);

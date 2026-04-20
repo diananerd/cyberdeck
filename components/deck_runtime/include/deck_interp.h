@@ -122,15 +122,49 @@ deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
                                      const char *event,
                                      deck_value_t *payload);
 
-/* Concept #47 — bridge intent dispatch.
+/* Concept #47 + #58 — bridge intent dispatch.
  *
  * When the bridge emits a tap/interaction with an intent_id (the value the
- * runtime stamped onto a DVC_TRIGGER / DVC_NAVIGATE node at render time),
- * the shell calls this entry point. The runtime looks up the binding
- * (assigned during content_render) and fires the corresponding
- * `Machine.send(:event)` — redrawing the next state's content on success.
- * Unknown intent_id is a silent no-op (returns DECK_RT_OK). */
+ * runtime stamped onto a DVC_TRIGGER / DVC_NAVIGATE / input-intent node at
+ * render time), the shell calls this entry point. The runtime evaluates the
+ * captured action AST in the captured env — which works for `Machine.send`
+ * as well as arbitrary action calls (`apps.launch`, etc.). Unknown intent_id
+ * is a silent no-op (returns DECK_RT_OK). */
 deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id);
+
+/* Concept #59 + #60 — bridge intent dispatch with payload.
+ *
+ * `vals` carries either the scalar that the widget produced (single entry,
+ * `key == NULL`) or a form-submit's aggregated field map (multiple entries,
+ * every `key != NULL`). The runtime binds `event.value` (scalar form) or
+ * `event.values` (map form) into a child of the captured env before
+ * evaluating the action AST, so authors can write:
+ *     toggle :lights state: s on -> Machine.send(:toggled, event.value)
+ *     form on submit -> Machine.send(:login, event.values)
+ *
+ * `n_vals == 0` and `vals == NULL` is equivalent to the zero-arg form. */
+typedef enum {
+    DECK_INTENT_VAL_NONE = 0,
+    DECK_INTENT_VAL_BOOL,
+    DECK_INTENT_VAL_I64,
+    DECK_INTENT_VAL_F64,
+    DECK_INTENT_VAL_STR,    /* NUL-terminated */
+    DECK_INTENT_VAL_ATOM,
+} deck_intent_val_kind_t;
+
+typedef struct {
+    const char            *key;     /* NULL → single scalar payload */
+    deck_intent_val_kind_t kind;
+    bool                   b;
+    int64_t                i;
+    double                 f;
+    const char            *s;       /* for STR / ATOM */
+} deck_intent_val_t;
+
+deck_err_t deck_runtime_app_intent_v(deck_runtime_app_t *app,
+                                      uint32_t intent_id,
+                                      const deck_intent_val_t *vals,
+                                      uint32_t n_vals);
 
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */

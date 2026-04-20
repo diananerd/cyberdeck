@@ -157,7 +157,9 @@ static const deck_bridge_ui_lifecycle_t s_deck_app_cbs = {
  * are silently ignored — the intent_id name collision with the C-side
  * launcher apps is impossible because the launcher doesn't emit triggers
  * with non-zero intent_id from DVC (it builds its UI imperatively). */
-static void deck_app_intent_hook(uint32_t intent_id)
+static void deck_app_intent_hook(uint32_t intent_id,
+                                  const deck_bridge_ui_val_t *vals,
+                                  uint32_t n_vals)
 {
     deck_bridge_ui_activity_t *top = deck_bridge_ui_activity_current();
     if (!top) return;
@@ -168,13 +170,41 @@ static void deck_app_intent_hook(uint32_t intent_id)
     }
     if (!slot || !slot->handle) return;
 
+    /* Concept #58/#59/#60 — prefer the captured-action path. If the runtime
+     * has a binding for this intent_id it evaluates the stored action AST
+     * with the bridge-supplied payload exposed as `event.value[s]`. If not
+     * (e.g. imperative-builder apps that registered `@on trigger_N`),
+     * fall back to the legacy event-dispatch path. */
+    enum { INTENT_VALS_CAP = 32 };
+    deck_intent_val_t rt_vals[INTENT_VALS_CAP];
+    uint32_t rt_n = n_vals <= INTENT_VALS_CAP ? n_vals : INTENT_VALS_CAP;
+    for (uint32_t i = 0; i < rt_n; i++) {
+        rt_vals[i].key = vals[i].key;
+        rt_vals[i].b   = vals[i].b;
+        rt_vals[i].i   = vals[i].i;
+        rt_vals[i].f   = vals[i].f;
+        rt_vals[i].s   = vals[i].s;
+        switch (vals[i].kind) {
+            case DECK_BRIDGE_UI_VAL_BOOL: rt_vals[i].kind = DECK_INTENT_VAL_BOOL; break;
+            case DECK_BRIDGE_UI_VAL_I64:  rt_vals[i].kind = DECK_INTENT_VAL_I64;  break;
+            case DECK_BRIDGE_UI_VAL_F64:  rt_vals[i].kind = DECK_INTENT_VAL_F64;  break;
+            case DECK_BRIDGE_UI_VAL_STR:  rt_vals[i].kind = DECK_INTENT_VAL_STR;  break;
+            case DECK_BRIDGE_UI_VAL_ATOM: rt_vals[i].kind = DECK_INTENT_VAL_ATOM; break;
+            default:                       rt_vals[i].kind = DECK_INTENT_VAL_NONE; break;
+        }
+    }
+    deck_err_t rc = deck_runtime_app_intent_v(slot->handle, intent_id,
+                                               rt_n ? rt_vals : NULL, rt_n);
+    if (rc != DECK_RT_OK) {
+        ESP_LOGW(TAG, "intent_v(%u) → %s on %s",
+                 (unsigned)intent_id, deck_err_name(rc), slot->path);
+    }
+    /* Legacy fallback — `@on trigger_N` still dispatched for imperative
+     * apps (hello.deck / ping.deck). Declarative apps have no such
+     * handler, so the dispatch is a silent no-op for them. */
     char evt[32];
     snprintf(evt, sizeof(evt), "trigger_%u", (unsigned)intent_id);
-    deck_err_t rc = deck_runtime_app_dispatch(slot->handle, evt, NULL);
-    if (rc != DECK_RT_OK) {
-        ESP_LOGW(TAG, "dispatch(%s) → %s on %s",
-                 evt, deck_err_name(rc), slot->path);
-    }
+    (void)deck_runtime_app_dispatch(slot->handle, evt, NULL);
 }
 
 /* Intent resolver — pushes an activity for the .deck app and lets the

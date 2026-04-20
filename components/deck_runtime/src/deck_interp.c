@@ -156,10 +156,21 @@ static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_inter
  * content_render (concept #46) can access app->intents directly. */
 #define DECK_RUNTIME_MAX_INTENTS 64
 
+/* Concept #58 — binding carries a captured action AST + env. At tap time
+ * the runtime evaluates `action_ast` in a child of `captured_env`, with
+ * `event` optionally injected by concept #59/#60 payload-carrying API.
+ * Works for any action shape: `Machine.send(:e[, payload])`, `apps.launch`,
+ * `bluesky.post(...)`, composed `do … end` blocks, pipelines, etc.
+ *
+ * `form_node` — concept #60: when non-NULL, this binding is the submit
+ * intent of a form; the dispatcher walks the DVC subtree at tap time to
+ * aggregate {field_name: current_value} into `event.values`. Currently
+ * the aggregation happens on the bridge side (richer access to widget
+ * state); `form_node` is reserved for a future runtime-side walker. */
 typedef struct {
     uint32_t      id;              /* 0 = slot empty */
-    const char   *event;           /* arena-owned atom text */
-    deck_value_t *payload;         /* retained; NULL for zero-arg events (#51) */
+    ast_node_t   *action_ast;      /* expression to evaluate on tap */
+    deck_env_t   *captured_env;    /* retained; released when slot is cleared */
 } deck_intent_binding_t;
 
 struct deck_runtime_app {
@@ -4141,14 +4152,23 @@ static const char *content_extract_event(const ast_node_t *action)
     return arg0->as.s;
 }
 
-/* Concept #51 — return the optional payload expression AST (second arg to
- * Machine.send), or NULL when the call has only the event atom. Requires
- * content_extract_event to have validated the shape. */
-static ast_node_t *content_extract_payload_expr(const ast_node_t *action)
+/* Concept #58 — capture any action expression + its render-time env so
+ * the tap dispatcher can evaluate it later (Machine.send, apps.launch,
+ * arbitrary composition — anything). Returns the allocated intent_id, or
+ * 0 when no action is present or the table is full. Retains env so it
+ * survives past the walker's stack frame. Caller stamps the returned id
+ * onto the DVC node. */
+static uint32_t content_bind_intent(struct deck_runtime_app *app,
+                                     ast_node_t *action,
+                                     deck_env_t *env)
 {
-    if (!action || action->kind != AST_CALL) return NULL;
-    if (action->as.call.args.len < 2) return NULL;
-    return action->as.call.args.items[1];
+    if (!app || !action) return 0;
+    if (app->next_intent_id >= DECK_RUNTIME_MAX_INTENTS) return 0;
+    uint32_t id = app->next_intent_id++;
+    app->intents[id].id = id;
+    app->intents[id].action_ast = action;
+    app->intents[id].captured_env = deck_env_retain(env);
+    return id;
 }
 
 /* Concept #57 — set a DVC attribute on `node` from a Deck runtime value,
@@ -4246,12 +4266,13 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
     if (!block || block->kind != AST_CONTENT_BLOCK) return;
     bui_ensure_init();
     /* Reset intent table — stale ids from previous state must not persist.
-     * Concept #51 — release any retained payloads from the prior render
-     * before zeroing the table. */
+     * Concept #58 — release any retained captured env (with all its
+     * bindings) from the prior render before zeroing. */
     struct deck_runtime_app *app = app_from_ctx(c);
     if (app) {
         for (uint32_t j = 0; j < DECK_RUNTIME_MAX_INTENTS; j++) {
-            if (app->intents[j].payload) deck_release(app->intents[j].payload);
+            if (app->intents[j].captured_env)
+                deck_env_release(app->intents[j].captured_env);
         }
         memset(app->intents, 0, sizeof(app->intents));
         app->next_intent_id = 1;   /* 0 reserved for "no intent" */
@@ -4283,25 +4304,13 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                     deck_release(lv);
                 }
             }
-            /* Concept #47 — bind the action's :event atom to a fresh
-             * intent_id so bridge-side taps round-trip back through
-             * deck_runtime_app_intent(app, id) → Machine.send(:event).
-             * Concept #51 — capture the optional payload expression
-             * evaluated in the current env so tap-time dispatch passes it
-             * to Machine.send. */
-            if (node && app) {
-                const char *ev = content_extract_event(action);
-                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
-                    uint32_t id = app->next_intent_id++;
-                    app->intents[id].id = id;
-                    app->intents[id].event = ev;
-                    ast_node_t *pe = content_extract_payload_expr(action);
-                    if (pe) {
-                        deck_value_t *pv = content_eval_expr(c, env, pe);
-                        if (pv) app->intents[id].payload = pv;
-                    }
-                    node->intent_id = id;
-                }
+            /* Concept #58 — capture the action expression + render env. At
+             * tap time `deck_runtime_app_intent` evaluates it in a child
+             * of that env, so any action shape works (Machine.send,
+             * apps.launch, bluesky.post(…), composed do-blocks, …). */
+            if (node && app && action) {
+                uint32_t id = content_bind_intent(app, action, env);
+                if (id) node->intent_id = id;
             }
         } else if (kind && strcmp(kind, "navigate") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_NAVIGATE);
@@ -4316,19 +4325,9 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                     deck_release(lv);
                 }
             }
-            if (node && app) {
-                const char *ev = content_extract_event(action);
-                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
-                    uint32_t id = app->next_intent_id++;
-                    app->intents[id].id = id;
-                    app->intents[id].event = ev;
-                    ast_node_t *pe = content_extract_payload_expr(action);
-                    if (pe) {
-                        deck_value_t *pv = content_eval_expr(c, env, pe);
-                        if (pv) app->intents[id].payload = pv;
-                    }
-                    node->intent_id = id;
-                }
+            if (node && app && action) {
+                uint32_t id = content_bind_intent(app, action, env);
+                if (id) node->intent_id = id;
             }
         } else if (kind && strcmp(kind, "list") == 0) {
             /* Concept #48+#49 — evaluate data_expr. If a per-item template
@@ -4431,25 +4430,17 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                                                 deck_release(lv);
                                             }
                                         }
-                                        /* Concept #50 — per-item intent binding
-                                         * for Machine.send(:event) actions.
-                                         * Concept #51 — evaluate optional
-                                         * payload expression in the per-item
-                                         * env so `Machine.send(:open, app.id)`
-                                         * captures the binder-scoped value. */
+                                        /* Concept #58 — per-item intent binding
+                                         * captures the action AST + per-item
+                                         * env (which has the binder in scope
+                                         * via item_env), so a tap evaluates
+                                         * `Machine.send(:open, app.id)` /
+                                         * `apps.launch(app.id)` / anything
+                                         * else against the element's values. */
                                         if (action_expr2 && cur_app) {
-                                            const char *ev = content_extract_event(action_expr2);
-                                            if (ev && cur_app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
-                                                uint32_t id = cur_app->next_intent_id++;
-                                                cur_app->intents[id].id = id;
-                                                cur_app->intents[id].event = ev;
-                                                ast_node_t *pe = content_extract_payload_expr(action_expr2);
-                                                if (pe) {
-                                                    deck_value_t *pv = content_eval_expr(c, item_env, pe);
-                                                    if (pv) cur_app->intents[id].payload = pv;
-                                                }
-                                                sn->intent_id = id;
-                                            }
+                                            uint32_t id = content_bind_intent(
+                                                cur_app, action_expr2, item_env);
+                                            if (id) sn->intent_id = id;
                                         }
                                     }
                                 } else if (sk && strcmp(sk, "label") == 0) {
@@ -4504,21 +4495,16 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
             node = deck_dvc_node_new(&s_bui_arena, DVC_GROUP);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
         } else if (kind && strcmp(kind, "form") == 0) {
-            /* Concept #53 — `form` primitive. Today renders an empty
-             * DVC_FORM shell. Full field aggregation + on-submit binding
-             * is spec §12.1 footprint; currently apps can emit the form
-             * wrapper and inline fields via other triggers. */
+            /* Concept #60 — `form on submit -> action`. The intent is
+             * captured on the DVC_FORM itself; the bridge walks the form's
+             * subtree at submit tap time and aggregates every field's
+             * current value by its `:name` attr into a `{name: value}`
+             * map that the runtime exposes as `event.values`. */
             node = deck_dvc_node_new(&s_bui_arena, DVC_FORM);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
-            /* Bind submit intent if action is Machine.send(:evt). */
             if (node && app && action) {
-                const char *ev = content_extract_event(action);
-                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
-                    uint32_t id = app->next_intent_id++;
-                    app->intents[id].id = id;
-                    app->intents[id].event = ev;
-                    node->intent_id = id;
-                }
+                uint32_t id = content_bind_intent(app, action, env);
+                if (id) node->intent_id = id;
             }
         } else if (kind && strcmp(kind, "markdown") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_MARKDOWN);
@@ -4607,19 +4593,18 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
             else if (strcmp(kind, "create")      == 0) t = DVC_TRIGGER;
             node = deck_dvc_node_new(&s_bui_arena, t);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            /* Concept #60 — mark each input intent inside a form with its
+             * `:name` atom so the form's submit-time aggregation can key
+             * by it. The name comes from the item's data_expr/action_expr
+             * if it's a bare atom literal (e.g. `toggle :lights …`). */
+            if (node) {
+                const ast_node_t *probe = action ? action : data;
+                if (probe && probe->kind == AST_LIT_ATOM && probe->as.s)
+                    deck_dvc_set_atom(&s_bui_arena, node, "name", probe->as.s);
+            }
             if (node && app && action) {
-                const char *ev = content_extract_event(action);
-                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
-                    uint32_t id = app->next_intent_id++;
-                    app->intents[id].id = id;
-                    app->intents[id].event = ev;
-                    ast_node_t *pe = content_extract_payload_expr(action);
-                    if (pe) {
-                        deck_value_t *pv = content_eval_expr(c, env, pe);
-                        if (pv) app->intents[id].payload = pv;
-                    }
-                    node->intent_id = id;
-                }
+                uint32_t id = content_bind_intent(app, action, env);
+                if (id) node->intent_id = id;
             }
         } else if (kind && strcmp(kind, "loading") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
@@ -6439,34 +6424,100 @@ static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_inter
     return deck_new_some(deck_new_atom(app->machine_state));
 }
 
-/* Concept #47 — bridge intent entry. Called by the shell when the bridge
- * delivers a trigger/navigate tap. Looks up the binding populated by
- * content_render and invokes b_machine_send with the bound event atom. */
-deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id)
+/* Concept #58/#59/#60 — bridge intent dispatch.
+ *
+ * The binding holds a captured action AST and the render-time env. At tap
+ * time we build a child env on top of captured_env and, if the bridge
+ * supplied a value payload, bind `event` to a `{value: v}` / `{values: {…}}`
+ * map there. Evaluating `action_ast` in that env runs whatever the author
+ * wrote — `Machine.send(:e, event.value)`, `apps.launch(app.id)`, a `do`
+ * block chaining several calls, etc. */
+static deck_value_t *intent_val_to_deck(const deck_intent_val_t *v)
+{
+    switch (v->kind) {
+        case DECK_INTENT_VAL_BOOL: return deck_new_bool(v->b);
+        case DECK_INTENT_VAL_I64:  return deck_new_int (v->i);
+        case DECK_INTENT_VAL_F64:  return deck_new_float(v->f);
+        case DECK_INTENT_VAL_STR:  return deck_new_str_cstr(v->s ? v->s : "");
+        case DECK_INTENT_VAL_ATOM: return v->s ? deck_new_atom(v->s) : NULL;
+        default: return NULL;
+    }
+}
+
+static deck_value_t *make_intent_event_value(const deck_intent_val_t *vals,
+                                              uint32_t n_vals)
+{
+    if (!vals || n_vals == 0) return NULL;
+    deck_value_t *event_map = deck_new_map(4);
+    if (!event_map) return NULL;
+    bool any_keyed = false;
+    for (uint32_t i = 0; i < n_vals; i++) {
+        if (vals[i].key && vals[i].key[0]) { any_keyed = true; break; }
+    }
+    if (n_vals == 1 && !any_keyed) {
+        /* Scalar payload — expose as `event.value`. */
+        deck_value_t *v = intent_val_to_deck(&vals[0]);
+        if (v) {
+            deck_value_t *k = deck_new_atom("value");
+            if (k) { deck_map_put(event_map, k, v); deck_release(k); }
+            deck_release(v);
+        }
+        return event_map;
+    }
+    /* Keyed entries — expose as `event.values` map. */
+    deck_value_t *values_map = deck_new_map(n_vals);
+    if (!values_map) { deck_release(event_map); return NULL; }
+    for (uint32_t i = 0; i < n_vals; i++) {
+        const char *k = vals[i].key;
+        if (!k || !*k) continue;
+        deck_value_t *v = intent_val_to_deck(&vals[i]);
+        if (!v) continue;
+        deck_value_t *kv = deck_new_atom(k);
+        if (kv) { deck_map_put(values_map, kv, v); deck_release(kv); }
+        deck_release(v);
+    }
+    deck_value_t *values_k = deck_new_atom("values");
+    if (values_k) { deck_map_put(event_map, values_k, values_map); deck_release(values_k); }
+    deck_release(values_map);
+    return event_map;
+}
+
+deck_err_t deck_runtime_app_intent_v(deck_runtime_app_t *app,
+                                      uint32_t intent_id,
+                                      const deck_intent_val_t *vals,
+                                      uint32_t n_vals)
 {
     if (!app || !app->in_use) return DECK_RT_INTERNAL;
     if (intent_id == 0 || intent_id >= DECK_RUNTIME_MAX_INTENTS) return DECK_RT_OK;
-    const deck_intent_binding_t *b = &app->intents[intent_id];
-    if (b->id != intent_id || !b->event) return DECK_RT_OK;   /* unknown / cleared */
+    deck_intent_binding_t *b = &app->intents[intent_id];
+    if (b->id != intent_id || !b->action_ast) return DECK_RT_OK;
 
-    /* Build args for b_machine_send: atom event + optional payload (#51). */
-    deck_value_t *ev = deck_new_atom(b->event);
-    if (!ev) return DECK_RT_NO_MEMORY;
-    deck_value_t *argv[2] = { ev, b->payload };
-    uint32_t argc = b->payload ? 2 : 1;
+    deck_env_t *tap_env = deck_env_new(&app->arena, b->captured_env);
+    if (!tap_env) return DECK_RT_NO_MEMORY;
+    deck_value_t *event_val = make_intent_event_value(vals, n_vals);
+    if (event_val) {
+        deck_env_bind(&app->arena, tap_env, "event", event_val);
+        deck_release(event_val);
+    }
     app->ctx.err = DECK_RT_OK;
     app->ctx.err_line = 0;
-    app->ctx.err_col = 0;
+    app->ctx.err_col  = 0;
     app->ctx.err_msg[0] = '\0';
     app->ctx.depth = 0;
-    deck_value_t *r = b_machine_send(argv, argc, &app->ctx);
-    deck_release(ev);
+    app->ctx.module = app->ld.module;
+    deck_value_t *r = deck_interp_run(&app->ctx, tap_env, b->action_ast);
     if (r) deck_release(r);
+    deck_env_release(tap_env);
     if (app->ctx.err != DECK_RT_OK) {
-        ESP_LOGE(TAG, "app_intent(%u → :%s): %s",
-                 (unsigned)intent_id, b->event, app->ctx.err_msg);
+        ESP_LOGE(TAG, "app_intent(%u): %s",
+                 (unsigned)intent_id, app->ctx.err_msg);
     }
     return app->ctx.err;
+}
+
+deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id)
+{
+    return deck_runtime_app_intent_v(app, intent_id, NULL, 0);
 }
 
 /* ----- DL2 F28.4: @migration runner ------------------------------------
@@ -6769,12 +6820,12 @@ void deck_runtime_app_unload(deck_runtime_app_t *app)
         }
     }
 
-    /* Concept #51 — release any retained intent payloads before the arena
-     * dies under us. */
+    /* Concept #58 — release captured envs (and their retained values)
+     * before the arena dies. */
     for (uint32_t j = 0; j < DECK_RUNTIME_MAX_INTENTS; j++) {
-        if (app->intents[j].payload) {
-            deck_release(app->intents[j].payload);
-            app->intents[j].payload = NULL;
+        if (app->intents[j].captured_env) {
+            deck_env_release(app->intents[j].captured_env);
+            app->intents[j].captured_env = NULL;
         }
     }
     deck_env_release(app->ctx.global);

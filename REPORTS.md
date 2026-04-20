@@ -1715,9 +1715,68 @@ The annex-a multi-line trigger form surfaced a second gap: `trigger app.name \n 
 - `confirm "Delete?" prompt: "Are you sure?"` → DVC_CONFIRM with both strings.
 - annex-a multi-line form: `trigger app.name \n  badge: unread_badge(app.id) \n  -> apps.launch(app.id)` — label expression captured, badge bound to runtime value per element, action arrow bound (currently for the Machine.send subset; `apps.launch` is noted in the existing deferred list of "non-Machine.send actions").
 
-**Deferred**:
-- **Captured-action dispatch** (non-Machine.send): `apps.launch(app.id)` and other arbitrary action expressions. Intent binding still only kicks in for `Machine.send(:evt)` shapes — the tail-arrow parser captures the action AST but the bridge round-trip infrastructure can't yet evaluate arbitrary expressions at tap time. Separate concept; needs snapshot + deferred-eval plumbing.
-- **Bidirectional binding** for `value:` / `state:` on stateful widgets. The value travels app → bridge at render time; bridge → app reflection on change still needs stream-driven re-render.
-- **Per-field aggregation inside `form`**. Individual field intents work; form submit doesn't yet receive a `{field: value}` map — each field carries its own event.
-
 **A→B note**: this closes the "declared, rendered, but inert" gap for every input widget. Before: `toggle :x state: on` rendered as an uninitialised switch. After: the initial state reaches the bridge, the author's intent survives the parser, and the widget starts in the correct position. Same story for every slider, choice list, text placeholder, media role — twelve widget categories lit up in one concept.
+
+### Concept #58 — captured-action dispatch (any action, not just Machine.send)
+
+**Drift**: concepts #47/#50/#51/#55/#57 all looked at the action expression through one keyhole — `content_extract_event(action)` — that only matched `Machine.send(:evt[, payload])`. Any other action shape (`apps.launch(app.id)`, `bluesky.post(draft)`, composed `do … end` blocks, pipelines) silently produced `intent_id = 0` on the DVC node. The tap round-trip worked in exactly one case, so annex-a's canonical launcher example `trigger app.name -> apps.launch(app.id)` rendered a visibly-labeled button that did nothing when tapped.
+
+**Fix applied (runtime only)**:
+
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * `deck_intent_binding_t` lost its `event`/`payload` fields and gained `action_ast: ast_node_t*` + `captured_env: deck_env_t*`. Each binding now stores the full action expression plus the env in which references resolve (top-level app env, or per-item env with the list binder bound). `captured_env` is retained via `deck_env_retain`; released on re-render and at `deck_runtime_app_unload`.
+  * New helper `content_bind_intent(app, action, env)` — allocates the next id, retains the env, stashes the AST, returns the id (or 0 if action is NULL / table is full). Every intent-binding site in the walker switched to this helper (top-level trigger / navigate / form, per-item trigger / navigate, every §12.4 input intent).
+  * `content_extract_event` / `content_extract_payload_expr` removed — the dispatcher no longer needs to specialise on Machine.send. Every action is treated uniformly.
+- 2026-04-19 · layer 4 runtime · tap dispatch rewritten:
+  * `deck_runtime_app_intent_v(app, id, vals, n_vals)` — new public entry. Builds a child env on top of `captured_env`, binds `event` to a payload map (concept #59/#60 shape — see below), evaluates `action_ast` in that env. Any side-effecting expression works: Machine.send, apps.launch, a do-block combining both, a pipe chain, an `@stream.emit(…)` call.
+  * `deck_runtime_app_intent(app, id)` retained as a thin `intent_v(…, NULL, 0)` wrapper so existing callers compile.
+
+**What this unblocks**: `apps.launch(app.id)` in annex-a's launcher fires on tap. `bluesky.post(draft)` in annex-xx's compose flow actually runs. `do\n  Machine.send(:x)\n  flash(:ok)\nend` as a compound action runs both statements. Arbitrary author-defined fn calls as intents work.
+
+### Concept #59 — bridge-supplied payload (`event.value` at tap time)
+
+**Drift**: concept #51 evaluated payloads at **render time** and stored them on the binding. That works for per-element capture (`Machine.send(:open, app.id)` where `app.id` is known at render time). It does not work for input intents that need the **user's new value** — a toggle's new checked state, a slider's released value, a text input's current string. Those values exist only at tap time, on the bridge side. Every `toggle :x on -> Machine.send(:toggled, event.value)` therefore lost `event.value`.
+
+**Fix applied (runtime + bridge)**:
+
+- 2026-04-19 · layer 5 bridge · `components/deck_bridge_ui/include/deck_bridge_ui.h`:
+  * Intent hook signature gained `(vals, n_vals)` carrying `deck_bridge_ui_val_t` entries — bool / i64 / f64 / str / atom. `vals[0].key == NULL` + `n_vals == 1` means scalar payload; keyed entries mean form aggregation (concept #60).
+- 2026-04-19 · layer 5 bridge · `components/deck_bridge_ui/src/deck_bridge_ui_decode.c`:
+  * Every widget event callback (toggle, slider, choice, text) now packs its current LVGL value into a `deck_bridge_ui_val_t` and passes it through the hook. Toggles send their bool, sliders their int, text inputs their UTF-8 buffer, choices their selected option text.
+- 2026-04-19 · layer 5 shell · `components/deck_shell/src/deck_shell_deck_apps.c`:
+  * Intent-hook shim translates the bridge value-kind enum to the runtime's `deck_intent_val_t` and calls `deck_runtime_app_intent_v`. The legacy `@on trigger_N` fallback dispatch still fires so imperative-builder apps (`hello.deck`, `ping.deck`) keep working.
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * `make_intent_event_value` builds a Deck `{value: v}` map from a single scalar and binds it as `event` in the tap env. Authors read `event.value` directly via the existing map-dot-access path (concept #33).
+
+**What this unblocks**: `toggle :lights state: s on -> Machine.send(:toggle_lights, event.value)` fires the event with the real new boolean. Volume sliders deliver their new integer. Text inputs deliver their buffered string. Every stateful widget now completes the change → machine transition → re-render loop.
+
+### Concept #60 — form field aggregation (`event.values` map on submit)
+
+**Drift**: concept #53 rendered `form on submit -> action` as an empty DVC_FORM shell. There was no UI to submit with, no children-value aggregation, no payload on submit — the form primitive looked implemented from the parser's POV but nothing worked end-to-end.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 runtime walker · `src/deck_interp.c`:
+  * Every §12.4 input intent inside the walker now writes a `:name` attr on the DVC node, picked from the widget's bare `:atom` binder (`toggle :lights` → `name="lights"`). This is the form's aggregation key.
+- 2026-04-19 · layer 5 bridge · `components/deck_bridge_ui/src/deck_bridge_ui_decode.c`:
+  * New `render_form(parent, n)` — builds a column, pushes `s_current_form = n` so descendant input renderers register themselves in a per-render `s_fields[]` table (form-owner, name, LVGL input obj, field kind), recurses children, then emits a **SUBMIT** button at the bottom when the form node carries an intent_id.
+  * `form_submit_cb` — walks `s_fields[]` for entries whose `form == the submitted DVC_FORM`, reads each input's current LVGL value, packs keyed `deck_bridge_ui_val_t` entries, calls the hook. The runtime turns them into a `{username: "...", password: "..."}` map under `event.values`.
+  * `fields_reset()` at the start of each snapshot wipes stale entries before the new render populates them.
+- 2026-04-19 · layer 4 runtime · `make_intent_event_value` path:
+  * When any entry has a key, the entries go into a `{values: {…}}` submap. `event.values` destructures to the full form snapshot.
+
+**What this unblocks**: `form on submit -> Machine.send(:login, event.values)` fires with `{username: "alice", password: "secret"}`. The annex-xx login flow and the settings configuration forms are end-to-end functional: user fills fields → taps SUBMIT → machine receives all inputs in one payload → transition + re-render.
+
+**A→B for concepts #58 + #59 + #60**: three deferred items from #57 close-out, all three closed. The runtime intent system no longer knows or cares about Machine.send specifically; it dispatches arbitrary actions with a bridge-supplied payload bound as `event.value` (scalar) or `event.values` (form map). From the annex author's perspective:
+
+```
+toggle :lights state: on on -> Machine.send(:toggle_lights, event.value)
+range  :volume min: 0 max: 100 value: v on -> Machine.send(:volume, event.value)
+form on submit -> Machine.send(:login, event.values)
+trigger "Open" -> apps.launch(app.id)
+trigger app.name -> do
+  LauncherState.send(:close_search)
+  apps.launch(app.id)
+```
+
+…all of these run end-to-end on the device now.

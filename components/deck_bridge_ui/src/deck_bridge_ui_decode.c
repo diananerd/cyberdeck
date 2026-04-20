@@ -60,6 +60,47 @@ static int64_t attr_i64(const deck_dvc_node_t *n, const char *atom, int64_t fall
 /* Forward decl. */
 static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n);
 
+/* ---------- Concept #60 field registry ----------
+ *
+ * Each input widget emitted as a descendant of a DVC_FORM registers itself
+ * here at render time with (form, :name, underlying-input-lv_obj, kind).
+ * At submit time the bridge walks the table picking entries whose form
+ * matches the tapped DVC_FORM and reads the widget's current value from
+ * LVGL. The table is reset at the start of each snapshot render. */
+
+#define DECK_BRIDGE_MAX_FIELDS 32
+
+typedef enum {
+    FIELD_KIND_BOOL = 0,
+    FIELD_KIND_I64,
+    FIELD_KIND_STR,
+    FIELD_KIND_DROPDOWN,
+} field_kind_t;
+
+typedef struct {
+    const deck_dvc_node_t *form;     /* owning DVC_FORM node (render arena) */
+    const char            *name;     /* :name attr — arena-owned string */
+    lv_obj_t              *input;    /* LV_SWITCH / LV_SLIDER / LV_TEXTAREA / LV_DROPDOWN */
+    field_kind_t           kind;
+} form_field_entry_t;
+
+static form_field_entry_t s_fields[DECK_BRIDGE_MAX_FIELDS];
+static uint32_t           s_n_fields = 0;
+static const deck_dvc_node_t *s_current_form = NULL;
+
+static void fields_reset(void) { s_n_fields = 0; s_current_form = NULL; }
+
+static void field_register(const char *name, lv_obj_t *input, field_kind_t kind)
+{
+    if (!s_current_form || !name || !input) return;
+    if (s_n_fields >= DECK_BRIDGE_MAX_FIELDS) return;
+    s_fields[s_n_fields].form  = s_current_form;
+    s_fields[s_n_fields].name  = name;
+    s_fields[s_n_fields].input = input;
+    s_fields[s_n_fields].kind  = kind;
+    s_n_fields++;
+}
+
 /* ---------- per-type renderers ---------- */
 
 static void style_card(lv_obj_t *obj)
@@ -157,7 +198,7 @@ static void trigger_click_cb(lv_event_t *e)
     uint32_t intent_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     if (intent_id == 0) return;
     ESP_LOGI(TAG, "intent fired: id=%u", (unsigned)intent_id);
-    if (s_intent_hook) s_intent_hook(intent_id);
+    if (s_intent_hook) s_intent_hook(intent_id, NULL, 0);
 }
 
 static lv_obj_t *render_trigger(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -252,6 +293,14 @@ static void textarea_event_cb(lv_event_t *e)
     const char *txt = lv_textarea_get_text(ta);
     ESP_LOGI(TAG, "intent fired: id=%u text=\"%s\"",
              (unsigned)intent_id, txt ? txt : "");
+    if (s_intent_hook) {
+        deck_bridge_ui_val_t v = {
+            .key = NULL,
+            .kind = DECK_BRIDGE_UI_VAL_STR,
+            .s = txt ? txt : "",
+        };
+        s_intent_hook(intent_id, &v, 1);
+    }
 }
 
 static lv_obj_t *render_text_input(lv_obj_t *parent, const deck_dvc_node_t *n,
@@ -287,6 +336,8 @@ static lv_obj_t *render_text_input(lv_obj_t *parent, const deck_dvc_node_t *n,
         lv_obj_add_event_cb(ta, textarea_event_cb, LV_EVENT_READY,
                              (void *)(uintptr_t)n->intent_id);
     }
+    /* Concept #60 — register for form aggregation. */
+    field_register(attr_str(n, "name", NULL), ta, FIELD_KIND_STR);
     return col;
 }
 
@@ -300,6 +351,14 @@ static void toggle_event_cb(lv_event_t *e)
     bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
     ESP_LOGI(TAG, "intent fired: id=%u toggle=%s",
              (unsigned)intent_id, checked ? "true" : "false");
+    if (s_intent_hook) {
+        deck_bridge_ui_val_t v = {
+            .key = NULL,
+            .kind = DECK_BRIDGE_UI_VAL_BOOL,
+            .b = checked,
+        };
+        s_intent_hook(intent_id, &v, 1);
+    }
 }
 
 static lv_obj_t *render_toggle(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -331,6 +390,7 @@ static lv_obj_t *render_toggle(lv_obj_t *parent, const deck_dvc_node_t *n)
         lv_obj_add_event_cb(sw, toggle_event_cb, LV_EVENT_VALUE_CHANGED,
                              (void *)(uintptr_t)n->intent_id);
     }
+    field_register(attr_str(n, "name", NULL), sw, FIELD_KIND_BOOL);
     return row;
 }
 
@@ -341,8 +401,16 @@ static void slider_event_cb(lv_event_t *e)
     uint32_t intent_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     lv_obj_t *sl = lv_event_get_target(e);
     if (intent_id == 0) return;
-    int32_t v = lv_slider_get_value(sl);
-    ESP_LOGI(TAG, "intent fired: id=%u slider=%d", (unsigned)intent_id, (int)v);
+    int32_t sv = lv_slider_get_value(sl);
+    ESP_LOGI(TAG, "intent fired: id=%u slider=%d", (unsigned)intent_id, (int)sv);
+    if (s_intent_hook) {
+        deck_bridge_ui_val_t v = {
+            .key = NULL,
+            .kind = DECK_BRIDGE_UI_VAL_I64,
+            .i = sv,
+        };
+        s_intent_hook(intent_id, &v, 1);
+    }
 }
 
 static lv_obj_t *render_slider(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -375,6 +443,7 @@ static lv_obj_t *render_slider(lv_obj_t *parent, const deck_dvc_node_t *n)
         lv_obj_add_event_cb(sl, slider_event_cb, LV_EVENT_RELEASED,
                              (void *)(uintptr_t)n->intent_id);
     }
+    field_register(attr_str(n, "name", NULL), sl, FIELD_KIND_I64);
     return col;
 }
 
@@ -385,10 +454,19 @@ static void choice_event_cb(lv_event_t *e)
     uint32_t intent_id = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     lv_obj_t *dd = lv_event_get_target(e);
     if (intent_id == 0) return;
-    char buf[32] = {0};
+    static char buf[32];
+    buf[0] = 0;
     lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
     ESP_LOGI(TAG, "intent fired: id=%u choice=\"%s\"",
              (unsigned)intent_id, buf);
+    if (s_intent_hook) {
+        deck_bridge_ui_val_t v = {
+            .key = NULL,
+            .kind = DECK_BRIDGE_UI_VAL_STR,
+            .s = buf,
+        };
+        s_intent_hook(intent_id, &v, 1);
+    }
 }
 
 static lv_obj_t *render_choice(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -439,6 +517,7 @@ static lv_obj_t *render_choice(lv_obj_t *parent, const deck_dvc_node_t *n)
         lv_obj_add_event_cb(dd, choice_event_cb, LV_EVENT_VALUE_CHANGED,
                              (void *)(uintptr_t)n->intent_id);
     }
+    field_register(attr_str(n, "name", NULL), dd, FIELD_KIND_DROPDOWN);
     return col;
 }
 
@@ -492,6 +571,99 @@ static lv_obj_t *render_data_row(lv_obj_t *parent, const deck_dvc_node_t *n)
     return col;
 }
 
+/* ---------- FORM + submit aggregation (concept #60) ---------- */
+
+static void form_submit_cb(lv_event_t *e)
+{
+    const deck_dvc_node_t *form = lv_event_get_user_data(e);
+    if (!form || form->intent_id == 0 || !s_intent_hook) return;
+    deck_bridge_ui_val_t vals[DECK_BRIDGE_MAX_FIELDS];
+    static char str_bufs[DECK_BRIDGE_MAX_FIELDS][64];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < s_n_fields && n < DECK_BRIDGE_MAX_FIELDS; i++) {
+        if (s_fields[i].form != form) continue;
+        vals[n].key = s_fields[i].name;
+        switch (s_fields[i].kind) {
+            case FIELD_KIND_BOOL:
+                vals[n].kind = DECK_BRIDGE_UI_VAL_BOOL;
+                vals[n].b = lv_obj_has_state(s_fields[i].input, LV_STATE_CHECKED);
+                break;
+            case FIELD_KIND_I64:
+                vals[n].kind = DECK_BRIDGE_UI_VAL_I64;
+                vals[n].i = lv_slider_get_value(s_fields[i].input);
+                break;
+            case FIELD_KIND_STR: {
+                const char *t = lv_textarea_get_text(s_fields[i].input);
+                strncpy(str_bufs[n], t ? t : "", sizeof(str_bufs[n]) - 1);
+                str_bufs[n][sizeof(str_bufs[n]) - 1] = 0;
+                vals[n].kind = DECK_BRIDGE_UI_VAL_STR;
+                vals[n].s = str_bufs[n];
+                break;
+            }
+            case FIELD_KIND_DROPDOWN: {
+                str_bufs[n][0] = 0;
+                lv_dropdown_get_selected_str(s_fields[i].input,
+                                              str_bufs[n], sizeof(str_bufs[n]));
+                vals[n].kind = DECK_BRIDGE_UI_VAL_STR;
+                vals[n].s = str_bufs[n];
+                break;
+            }
+        }
+        n++;
+    }
+    ESP_LOGI(TAG, "form submit: id=%u fields=%u",
+             (unsigned)form->intent_id, (unsigned)n);
+    s_intent_hook(form->intent_id, vals, n);
+}
+
+static lv_obj_t *render_form(lv_obj_t *parent, const deck_dvc_node_t *n)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_set_width(col, lv_pct(100));
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(col, 12, LV_PART_MAIN);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START,
+                                LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    /* Push form context so descendant inputs register themselves. */
+    const deck_dvc_node_t *prev_form = s_current_form;
+    s_current_form = n;
+
+    const char *label = attr_str(n, "label", NULL);
+    if (label && *label) {
+        lv_obj_t *l = lv_label_create(col);
+        lv_label_set_text(l, label);
+        lv_obj_set_style_text_color(l, CD_PRIMARY, LV_PART_MAIN);
+    }
+    for (uint16_t i = 0; i < n->child_count; i++) {
+        render_node(col, n->children[i]);
+    }
+    s_current_form = prev_form;
+
+    if (n->intent_id != 0) {
+        lv_obj_t *btn = lv_btn_create(col);
+        lv_obj_set_height(btn, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_hor(btn, 16, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(btn, 8,  LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 12, LV_PART_MAIN);
+        lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
+        lv_obj_set_style_border_color(btn, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(btn, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "SUBMIT");
+        lv_obj_set_style_text_color(lbl, CD_BG_DARK, LV_PART_MAIN);
+        lv_obj_center(lbl);
+        lv_obj_add_event_cb(btn, form_submit_cb, LV_EVENT_CLICKED, (void *)n);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    }
+    return col;
+}
+
 /* ---------- dispatch ---------- */
 
 static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -500,7 +672,7 @@ static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
     switch ((deck_dvc_type_t)n->type) {
         case DVC_GROUP:    return render_group(parent, n);
         case DVC_COLUMN:   return render_column(parent, n);
-        case DVC_FORM:
+        case DVC_FORM:     return render_form(parent, n);
         case DVC_LIST:
         case DVC_LIST_ITEM: return render_column(parent, n);
         case DVC_ROW:      return render_row(parent, n);
@@ -534,6 +706,10 @@ static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
 deck_sdi_err_t deck_bridge_ui_render(const deck_dvc_node_t *root)
 {
     if (!root) return DECK_SDI_ERR_INVALID_ARG;
+
+    /* Concept #60 — clear the per-render field table. Entries become
+     * invalid once LVGL obj they point to is destroyed by lv_obj_clean. */
+    fields_reset();
 
     /* Overlays render onto lv_layer_top, leaving the active screen
      * untouched. Useful for toasts/loading/confirm that don't disturb

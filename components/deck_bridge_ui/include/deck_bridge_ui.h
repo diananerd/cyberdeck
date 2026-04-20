@@ -128,11 +128,37 @@ void          deck_bridge_ui_activity_recreate_all(void);
 /* ---------- Intent hook ----------
  *
  * When a rendered widget with `intent_id != 0` is activated (trigger
- * click, toggle change, slider release, …), the decoder invokes the
- * registered hook so higher layers can route the intent. Passing NULL
- * clears the hook; missing hook = no-op. Called from the LVGL task
- * context with the UI lock held. */
-typedef void (*deck_bridge_ui_intent_hook_t)(uint32_t intent_id);
+ * click, toggle change, slider release, form submit, …), the decoder
+ * invokes the registered hook so higher layers can route the intent.
+ * Passing NULL clears the hook; missing hook = no-op. Called from the
+ * LVGL task context with the UI lock held.
+ *
+ * Concept #59/#60: `vals` carries the widget's current value payload.
+ *   - Scalar widgets: n_vals == 1, vals[0].key == NULL, kind set.
+ *   - Form submit:    n_vals == N, every vals[i].key non-NULL (field name).
+ *   - Plain trigger:  n_vals == 0, vals == NULL.
+ * The runtime side exposes this to Deck apps as `event.value` / `event.values`. */
+typedef enum {
+    DECK_BRIDGE_UI_VAL_NONE = 0,
+    DECK_BRIDGE_UI_VAL_BOOL,
+    DECK_BRIDGE_UI_VAL_I64,
+    DECK_BRIDGE_UI_VAL_F64,
+    DECK_BRIDGE_UI_VAL_STR,
+    DECK_BRIDGE_UI_VAL_ATOM,
+} deck_bridge_ui_val_kind_t;
+
+typedef struct {
+    const char               *key;      /* NULL for scalar payloads */
+    deck_bridge_ui_val_kind_t kind;
+    bool                      b;
+    int64_t                   i;
+    double                    f;
+    const char               *s;        /* NUL-terminated; lifetime until hook returns */
+} deck_bridge_ui_val_t;
+
+typedef void (*deck_bridge_ui_intent_hook_t)(uint32_t intent_id,
+                                              const deck_bridge_ui_val_t *vals,
+                                              uint32_t n_vals);
 
 void deck_bridge_ui_set_intent_hook(deck_bridge_ui_intent_hook_t hook);
 
