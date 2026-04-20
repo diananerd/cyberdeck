@@ -145,6 +145,9 @@ typedef struct {
     int min_arity, max_arity;
 } builtin_t;
 
+/* Forward declarations for helpers defined later in this file. */
+static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload);
+
 static deck_value_t *b_log_info(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n; (void)c;
@@ -840,20 +843,150 @@ static deck_value_t *b_fs_exists(deck_value_t **args, uint32_t n, deck_interp_ct
     deck_sdi_err_t rc = deck_sdi_fs_exists(path, NULL);
     return deck_retain(rc == DECK_SDI_OK ? deck_true() : deck_false());
 }
+/* Map SDI error code to the spec-canonical fs.Error atom (§3). */
+static deck_value_t *fs_err_atom(deck_sdi_err_t rc)
+{
+    const char *name;
+    switch (rc) {
+        case DECK_SDI_ERR_NOT_FOUND:       name = "not_found"; break;
+        case DECK_SDI_ERR_ALREADY_EXISTS:  name = "exists";    break;
+        case DECK_SDI_ERR_NOT_SUPPORTED:   name = "io";        break;
+        case DECK_SDI_ERR_INVALID_ARG:     name = "io";        break;
+        case DECK_SDI_ERR_NO_MEMORY:       name = "full";      break;
+        default:                           name = "io";        break;
+    }
+    return deck_new_atom(name);
+}
+
+/* Build a Result :err with the fs.Error atom payload. */
+static deck_value_t *fs_err_result(deck_sdi_err_t rc)
+{
+    deck_value_t *atom = fs_err_atom(rc);
+    if (!atom) return NULL;
+    deck_value_t *r = make_result_tag("err", atom);
+    deck_release(atom);
+    return r;
+}
+
+/* Shared path-copy helper: validates + null-terminates into a 192-byte buffer.
+ * Returns false + sets err on failure. */
+static bool fs_copy_path(deck_value_t *v, char *dst, size_t cap, deck_interp_ctx_t *c, const char *who)
+{
+    if (!v || v->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s: path must be str", who); return false; }
+    if (v->as.s.len >= cap) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "%s: path too long", who); return false; }
+    memcpy(dst, v->as.s.ptr, v->as.s.len);
+    dst[v->as.s.len] = 0;
+    return true;
+}
+
+/* fs.read → Result str fs.Error (spec §3). Content capped at 8 KB per read. */
 static deck_value_t *b_fs_read(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.read(path)"); return NULL; }
-    char path[128]; memcpy(path, args[0]->as.s.ptr, args[0]->as.s.len); path[args[0]->as.s.len] = 0;
-    char buf[512]; size_t sz = sizeof(buf);
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.read")) return NULL;
+    static const size_t READ_CAP = 8192;
+    char *buf = (char *)malloc(READ_CAP);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.read alloc"); return NULL; }
+    size_t sz = READ_CAP;
     deck_sdi_err_t rc = deck_sdi_fs_read(path, buf, &sz);
-    if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_none();
-    if (rc != DECK_SDI_OK) { set_err(c, DECK_RT_INTERNAL, 0, 0, "fs.read failed: %s", deck_sdi_strerror(rc)); return NULL; }
+    if (rc != DECK_SDI_OK) { free(buf); return fs_err_result(rc); }
     deck_value_t *inner = deck_new_str(buf, (uint32_t)sz);
+    free(buf);
     if (!inner) return NULL;
-    deck_value_t *some = deck_new_some(inner);
+    deck_value_t *ok = make_result_tag("ok", inner);
     deck_release(inner);
-    return some;
+    return ok;
+}
+
+/* fs.write(path, content) → Result unit fs.Error. Truncates. */
+static deck_value_t *b_fs_write(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.write")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.write(path, str)"); return NULL;
+    }
+    deck_sdi_err_t rc = deck_sdi_fs_write(path, args[1]->as.s.ptr, args[1]->as.s.len);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* fs.append(path, content). SDI has no seek+write; we read existing + concat +
+ * write. If path doesn't exist yet, append creates it (same as write). */
+static deck_value_t *b_fs_append(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.append")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.append(path, str)"); return NULL;
+    }
+    /* Read existing (if any) into a heap buffer. */
+    static const size_t APPEND_CAP = 16384;
+    char *buf = (char *)malloc(APPEND_CAP);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.append alloc"); return NULL; }
+    size_t existing_sz = APPEND_CAP;
+    deck_sdi_err_t rc = deck_sdi_fs_read(path, buf, &existing_sz);
+    if (rc == DECK_SDI_ERR_NOT_FOUND) { existing_sz = 0; rc = DECK_SDI_OK; }
+    if (rc != DECK_SDI_OK) { free(buf); return fs_err_result(rc); }
+    uint32_t add_len = args[1]->as.s.len;
+    if (existing_sz + add_len > APPEND_CAP) {
+        free(buf);
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "fs.append: combined size > 16KB");
+        return NULL;
+    }
+    memcpy(buf + existing_sz, args[1]->as.s.ptr, add_len);
+    rc = deck_sdi_fs_write(path, buf, existing_sz + add_len);
+    free(buf);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* fs.delete → Result unit fs.Error. */
+static deck_value_t *b_fs_delete(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.delete")) return NULL;
+    deck_sdi_err_t rc = deck_sdi_fs_remove(path);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* fs.mkdir → Result unit fs.Error. Parent must already exist (SDI contract). */
+static deck_value_t *b_fs_mkdir(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.mkdir")) return NULL;
+    deck_sdi_err_t rc = deck_sdi_fs_mkdir(path);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
+/* fs.move(from, to). SDI has no rename primitive, so implement as
+ * read-existing + write-new + delete-old. Atomicity is best-effort: if the
+ * write succeeds but delete fails, the file exists at both paths. */
+static deck_value_t *b_fs_move(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char from[192], to[192];
+    if (!fs_copy_path(args[0], from, sizeof(from), c, "fs.move")) return NULL;
+    if (!fs_copy_path(args[1], to,   sizeof(to),   c, "fs.move")) return NULL;
+    static const size_t MOVE_CAP = 16384;
+    char *buf = (char *)malloc(MOVE_CAP);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.move alloc"); return NULL; }
+    size_t sz = MOVE_CAP;
+    deck_sdi_err_t rc = deck_sdi_fs_read(from, buf, &sz);
+    if (rc != DECK_SDI_OK) { free(buf); return fs_err_result(rc); }
+    rc = deck_sdi_fs_write(to, buf, sz);
+    free(buf);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    rc = deck_sdi_fs_remove(from);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
 }
 
 /* fs.list — returns entries separated by '\n' as a single string.
@@ -2670,6 +2803,12 @@ static const builtin_t BUILTINS[] = {
     { "fs.exists",              b_fs_exists,         1, 1 },
     { "fs.read",                b_fs_read,           1, 1 },
     { "fs.list",                b_fs_list,           1, 1 },
+    /* Concept #34 — fs.* write surface. All return Result unit fs.Error. */
+    { "fs.write",               b_fs_write,          2, 2 },
+    { "fs.append",              b_fs_append,         2, 2 },
+    { "fs.delete",              b_fs_delete,         1, 1 },
+    { "fs.mkdir",               b_fs_mkdir,          1, 1 },
+    { "fs.move",                b_fs_move,           2, 2 },
 
     /* os lifecycle (single-app stubs in DL1) */
     { "os.resume",              b_os_resume,         0, 0 },

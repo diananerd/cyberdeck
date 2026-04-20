@@ -1152,3 +1152,29 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why not wrap in Option**: making `obj.field` always return `:some(v)` / `:none` would be the "safer" shape but breaks every existing record-access pattern in the codebase (`u.name == "diana"`, `e.is_dir`, `p.user.name`, …). Those would all need `| :some v -> v` unwrapping inserted. Since field access on a record is inherently "I know this field exists because the type has it", keeping raw-value semantics is the match with how humans read the syntax. For genuinely-optional lookups, `map.get(m, key)` still returns `:some/:none` — apps that want option semantics use that.
 
 **Consequence**: `time.date_parts` and `time.duration_parts` now work via `parts.year` / `parts.days` etc. `text.from_json(...)` outputs get dot-accessed the same way. `text.query_parse("a=1&b=2")` yields `{"a": "1", "b": "2"}` → `q.a == "1"`.
+
+### Concept #34 — fs.* write surface + spec-canonical Result returns (spec §3)
+
+**Drift**:
+- `fs.read` returned `:some str` / `:none` (Option shape). Spec §3 says `Result str fs.Error`. Fixture `os_fs.deck` asserts `fs.read(probe) == :ok "hello deck"` — requires Result wrapping.
+- `fs.write` / `fs.append` / `fs.delete` / `fs.mkdir` / `fs.move` — not registered at runtime. Every `os_fs.deck` assertion past `ok_exists` failed silently.
+- SDI exposes `write`, `remove`, `mkdir` but no `move` or `append` primitives — those must compose on top.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `components/deck_runtime/src/deck_interp.c`:
+  * Promoted `make_result_tag` forward declaration to the top of the file (previously buried in the text-section helpers). Result construction is broadly useful across fs/nvs/api_client/etc, so it belongs with the other general forward decls.
+  * `fs_err_atom` / `fs_err_result` helpers — map SDI error codes to spec §3 `fs.Error` atoms (`:not_found`, `:permission`, `:full`, `:io`, `:exists`).
+  * `fs_copy_path` shared helper — validates `DECK_T_STR`, copies + null-terminates into a 192-byte buffer, sets `DECK_RT_TYPE_MISMATCH` / `DECK_RT_OUT_OF_RANGE` on failure.
+  * `fs.read` rewritten to return Result form. Uses an 8 KB heap buffer (stack was 512 B — sources > 512 B would truncate silently, another silent-truncation bug class).
+  * `fs.write(path, str)` — direct wrap of `deck_sdi_fs_write`.
+  * `fs.append(path, str)` — read-existing + concat + write. Capped at 16 KB combined size. If path doesn't exist, effectively acts like `fs.write` (missing-file on read treated as empty rather than error, so the "create if absent" common-case matches §3 semantics).
+  * `fs.delete(path)` — wraps `deck_sdi_fs_remove`.
+  * `fs.mkdir(path)` — wraps `deck_sdi_fs_mkdir` (SDI contract: parent must already exist; no recursive mkdir at this layer).
+  * `fs.move(from, to)` — read + write + remove composition since SDI lacks rename. Atomicity is best-effort (if delete fails after write, the file appears at both paths) — documented in the function comment.
+
+**Deferred for future concepts**:
+- `fs.read_bytes` / `fs.write_bytes` — byte-returning variants. Need the `[int]` representation decision first.
+- `fs.list` currently returns `"name1\nname2\n..."` string; spec wants `Result [FsEntry] fs.Error` with `FsEntry { name, is_dir, size, modified }`. Rewrite requires `@type FsEntry` record construction from C. Separate concept.
+
+**Running tally**: `fs.*` now at 8/10 (exists/read/list/write/append/delete/mkdir/move vs spec 10). Remaining: `read_bytes` + `write_bytes`, plus a rewrite of `list` to return the FsEntry record form. `os_fs.deck` still has the FsEntry pattern-match which won't parse against the current `list` shape — noted, deferred.
