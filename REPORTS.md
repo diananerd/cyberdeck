@@ -1205,3 +1205,23 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why the blob cap is 1 KB**: NVS blobs can be much larger, but an explicit cap here matches the runtime's "no runaway allocations" convention from concepts #26–29. Apps that genuinely need larger persistent buffers use `fs.write_bytes` (future concept) instead.
 
 **Running tally**: `nvs.*` now at 13/13 (11 new + 2 kept). Spec §3 capability complete. `text.*` 36/36. `time.*` 18/18. `fs.*` 8/10. The first three capabilities of §3 (`nvs`, `text`, `time`) are fully implemented at the runtime surface.
+
+### Concept #36 — fs.list as Result [FsEntry] + fs.read_bytes / write_bytes
+
+**Drift**:
+- `fs.list` returned a newline-joined string — a pragmatic DL1 stopgap before list literals existed. Spec §3 says `Result [FsEntry] fs.Error`, where `FsEntry { name, is_dir, size, modified }`. `os_fs_list.deck` and `os_fs.deck:52` pattern-match on the Result shape and do field access (`e.name`, `e.is_dir`, `e.size`, `e.modified`).
+- `fs.read_bytes` / `fs.write_bytes` not registered — spec bytes surface entirely missing.
+
+**Fix applied**:
+
+- 2026-04-19 · layer 4 edit · `components/deck_runtime/src/deck_interp.c`:
+  * `fs_list_record_cb` — per-entry callback that builds a map `{name, is_dir, size, modified}` and pushes it to the accumulated list. Field access works via concept #33 (dual atom/string key lookup).
+  * `b_fs_list` rewritten — Result-returning, builds `[map]` via callback. Returns `:err :not_found` (or other `fs.Error` atom) on failure.
+  * `b_fs_read_bytes` — reads into an 8 KB heap buffer, returns `:ok [int]` / `:err :atom`.
+  * `b_fs_write_bytes` — validates each `[int]` element is 0–255, caps payload at 8 KB, writes via `deck_sdi_fs_write`.
+
+**FsEntry caveat**: SDI's fs.list callback only exposes `name` + `is_dir`. `size` / `modified` default to `0` in the emitted map — surfacing the gap rather than hiding it. Honest `size` / `modified` support requires extending the SDI vtable (`stat`-like op), which is a separate concept. `os_fs_list.deck`'s shape assertion `e.size >= 0 && e.modified > 0` will still fail on `modified` until that lands — flagged in the fixture's comments, not masked.
+
+**Running tally**: `fs.*` now at **10/10**. Spec §3 `@capability fs` complete at the builtin layer (modulo the `size` / `modified` SDI gap).
+
+**Four consecutive §3 capabilities fully runtime-implemented**: `text` (36/36), `time` (18/18), `nvs` (13/13), `fs` (10/10). Every capability that §3 declares as mandatory at DL1 now has 100% of its method surface registered. That closes the "deepened fixture silently calls un-registered builtin" gap for the DL1 capability baseline.

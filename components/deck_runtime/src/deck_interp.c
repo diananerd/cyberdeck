@@ -1237,6 +1237,83 @@ static deck_value_t *b_fs_move(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return make_result_tag("ok", deck_unit());
 }
 
+/* Concept #36 — fs.list returns Result [FsEntry] fs.Error per spec §3.
+ * FsEntry is a map with string keys: name / is_dir / size / modified.
+ * SDI exposes only name + is_dir at the callback; size / modified default
+ * to 0 until the SDI vtable grows those fields. Map field access then
+ * works via concept #33's dual-key lookup (both atom and string keys). */
+typedef struct {
+    deck_value_t *list;
+    bool alloc_fail;
+} fs_list_rec_ctx_t;
+
+static bool fs_list_record_cb(const char *name, bool is_dir, void *user)
+{
+    fs_list_rec_ctx_t *ctx = user;
+    if (ctx->alloc_fail || !name) return true;
+    deck_value_t *entry = deck_new_map(8);
+    if (!entry) { ctx->alloc_fail = true; return false; }
+    #define PUT(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = (v); deck_map_put(entry, kk, vv); deck_release(kk); deck_release(vv); } while (0)
+    PUT("name",     deck_new_str_cstr(name));
+    PUT("is_dir",   deck_retain(is_dir ? deck_true() : deck_false()));
+    PUT("size",     deck_new_int(0));          /* SDI doesn't surface size yet */
+    PUT("modified", deck_new_int(0));          /* SDI doesn't surface mtime yet */
+    #undef PUT
+    deck_list_push(ctx->list, entry);
+    deck_release(entry);
+    return true;
+}
+
+/* fs.read_bytes(path) -> Result [int] fs.Error. */
+static deck_value_t *b_fs_read_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.read_bytes")) return NULL;
+    static const size_t READ_CAP = 8192;
+    uint8_t *buf = (uint8_t *)malloc(READ_CAP);
+    if (!buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.read_bytes alloc"); return NULL; }
+    size_t sz = READ_CAP;
+    deck_sdi_err_t rc = deck_sdi_fs_read(path, buf, &sz);
+    if (rc != DECK_SDI_OK) { free(buf); return fs_err_result(rc); }
+    deck_value_t *out = deck_new_list((uint32_t)sz);
+    if (!out) { free(buf); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.read_bytes list alloc"); return NULL; }
+    for (size_t i = 0; i < sz; i++) {
+        deck_value_t *b = deck_new_int(buf[i]);
+        deck_list_push(out, b); deck_release(b);
+    }
+    free(buf);
+    deck_value_t *r = make_result_tag("ok", out);
+    deck_release(out);
+    return r;
+}
+
+/* fs.write_bytes(path, [int]) -> Result unit fs.Error. */
+static deck_value_t *b_fs_write_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.write_bytes")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.write_bytes(path, [int])"); return NULL;
+    }
+    uint32_t L = args[1]->as.list.len;
+    if (L > 8192) { set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "fs.write_bytes: payload > 8KB"); return NULL; }
+    uint8_t *buf = L > 0 ? (uint8_t *)malloc(L) : NULL;
+    if (L > 0 && !buf) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.write_bytes alloc"); return NULL; }
+    for (uint32_t i = 0; i < L; i++) {
+        deck_value_t *v = args[1]->as.list.items[i];
+        if (!v || v->type != DECK_T_INT) { free(buf); set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.write_bytes: element %u not int", (unsigned)i); return NULL; }
+        int64_t x = v->as.i;
+        if (x < 0 || x > 255) { free(buf); set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "fs.write_bytes: byte out of range"); return NULL; }
+        buf[i] = (uint8_t)x;
+    }
+    deck_sdi_err_t rc = deck_sdi_fs_write(path, buf, L);
+    free(buf);
+    if (rc != DECK_SDI_OK) return fs_err_result(rc);
+    return make_result_tag("ok", deck_unit());
+}
+
 /* fs.list — returns entries separated by '\n' as a single string.
  * DL1 lacks list literal syntax, so a newline-joined string is the
  * pragmatic representation: callable via text.contains / text.len.
@@ -1268,30 +1345,16 @@ static bool fs_list_cb(const char *name, bool is_dir, void *user)
 static deck_value_t *b_fs_list(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "fs.list(path)");
-        return NULL;
-    }
-    char path[128];
-    memcpy(path, args[0]->as.s.ptr, args[0]->as.s.len);
-    path[args[0]->as.s.len] = 0;
-
-    static char        s_buf[FS_LIST_BUF];
-    s_buf[0] = '\0';
-    fs_list_ctx_t lc = { .buf = s_buf, .cap = FS_LIST_BUF, .len = 0, .overflow = false };
-    deck_sdi_err_t rc = deck_sdi_fs_list(path, fs_list_cb, &lc);
-    if (rc == DECK_SDI_ERR_NOT_FOUND) return deck_new_str_cstr("");
-    if (rc != DECK_SDI_OK) {
-        set_err(c, DECK_RT_INTERNAL, 0, 0,
-                "fs.list failed: %s", deck_sdi_strerror(rc));
-        return NULL;
-    }
-    if (lc.overflow) {
-        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0,
-                "fs.list: buffer overflow (>%u bytes)", (unsigned)FS_LIST_BUF);
-        return NULL;
-    }
-    return deck_new_str(s_buf, (uint32_t)lc.len);
+    char path[192];
+    if (!fs_copy_path(args[0], path, sizeof(path), c, "fs.list")) return NULL;
+    fs_list_rec_ctx_t ctx = { deck_new_list(8), false };
+    if (!ctx.list) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.list alloc"); return NULL; }
+    deck_sdi_err_t rc = deck_sdi_fs_list(path, fs_list_record_cb, &ctx);
+    if (ctx.alloc_fail) { deck_release(ctx.list); set_err(c, DECK_RT_NO_MEMORY, 0, 0, "fs.list entry alloc"); return NULL; }
+    if (rc != DECK_SDI_OK) { deck_release(ctx.list); return fs_err_result(rc); }
+    deck_value_t *r = make_result_tag("ok", ctx.list);
+    deck_release(ctx.list);
+    return r;
 }
 
 /* ---- text.split / text.repeat (DL2) ---- */
@@ -3068,6 +3131,9 @@ static const builtin_t BUILTINS[] = {
     { "fs.delete",              b_fs_delete,         1, 1 },
     { "fs.mkdir",               b_fs_mkdir,          1, 1 },
     { "fs.move",                b_fs_move,           2, 2 },
+    /* Concept #36 — bytes surface. */
+    { "fs.read_bytes",          b_fs_read_bytes,     1, 1 },
+    { "fs.write_bytes",         b_fs_write_bytes,    2, 2 },
 
     /* os lifecycle (single-app stubs in DL1) */
     { "os.resume",              b_os_resume,         0, 0 },
