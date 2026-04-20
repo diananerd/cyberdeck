@@ -790,6 +790,17 @@ static deck_value_t *b_list_scan(deck_value_t **args, uint32_t n, deck_interp_ct
 /* Structural equality — used by list.contains, list.unique, map.has, etc.
  * Strings and atoms are interned, so pointer equality suffices.
  * Numeric mixed (int vs float) compares by promoted double value. */
+/* Concept #63 — Optional repr bridge. The runtime's DECK_T_OPTIONAL is a
+ * legacy convenience for `some()`/`none()` builtins + `map.get` returns;
+ * concept #11 made `:some v` / `:none` first-class atom-variant value
+ * syntax that desugars to a 2-tuple `(:some, v)` / bare atom `:none`.
+ * Both forms must compare equal so authors don't see the divergence.
+ *
+ * Returns true if `o` is an Optional and `t` is the equivalent variant
+ * shape (tuple `(:some, inner)` or atom `:none`).
+ */
+static bool optional_equal_variant(deck_value_t *o, deck_value_t *t);
+
 static bool values_equal(deck_value_t *a, deck_value_t *b)
 {
     if (a == b) return true;
@@ -801,6 +812,8 @@ static bool values_equal(deck_value_t *a, deck_value_t *b)
             double y = b->type == DECK_T_INT ? (double)b->as.i : b->as.f;
             return x == y;
         }
+        if (a->type == DECK_T_OPTIONAL) return optional_equal_variant(a, b);
+        if (b->type == DECK_T_OPTIONAL) return optional_equal_variant(b, a);
         return false;
     }
     switch (a->type) {
@@ -822,8 +835,46 @@ static bool values_equal(deck_value_t *a, deck_value_t *b)
                 if (!values_equal(a->as.tuple.items[i], b->as.tuple.items[i])) return false;
             return true;
         }
+        case DECK_T_OPTIONAL: {
+            bool an = (a->as.opt.inner == NULL);
+            bool bn = (b->as.opt.inner == NULL);
+            if (an != bn) return false;
+            if (an) return true;
+            return values_equal(a->as.opt.inner, b->as.opt.inner);
+        }
+        case DECK_T_MAP: {
+            if (a->as.map.len != b->as.map.len) return false;
+            /* Compare by lookup so hash-table internal ordering doesn't
+             * matter. Each used key in `a` must have an equal value in `b`. */
+            for (uint32_t i = 0; i < a->as.map.cap; i++) {
+                if (!a->as.map.entries[i].used) continue;
+                deck_value_t *bv = deck_map_get(b, a->as.map.entries[i].key);
+                if (!bv) return false;
+                if (!values_equal(a->as.map.entries[i].val, bv)) return false;
+            }
+            return true;
+        }
         default: return a == b;
     }
+}
+
+static bool optional_equal_variant(deck_value_t *o, deck_value_t *t)
+{
+    if (!o || o->type != DECK_T_OPTIONAL || !t) return false;
+    if (o->as.opt.inner == NULL) {
+        /* :none ≡ bare atom :none */
+        return t->type == DECK_T_ATOM && t->as.atom &&
+               t->as.atom[0] == 'n' && t->as.atom[1] == 'o' &&
+               t->as.atom[2] == 'n' && t->as.atom[3] == 'e' && t->as.atom[4] == '\0';
+    }
+    /* :some inner ≡ tuple (:some, inner) */
+    if (t->type != DECK_T_TUPLE || t->as.tuple.arity != 2) return false;
+    deck_value_t *ctor = t->as.tuple.items[0];
+    if (!ctor || ctor->type != DECK_T_ATOM || !ctor->as.atom) return false;
+    if (!(ctor->as.atom[0] == 's' && ctor->as.atom[1] == 'o' &&
+          ctor->as.atom[2] == 'm' && ctor->as.atom[3] == 'e' &&
+          ctor->as.atom[4] == '\0')) return false;
+    return values_equal(o->as.opt.inner, t->as.tuple.items[1]);
 }
 
 /* ---- list.* completeness (concept #41, spec §11.2) ---- */
@@ -5753,6 +5804,15 @@ static deck_value_t *do_compare(deck_interp_ctx_t *c, binop_t op,
                                  deck_value_t *L, deck_value_t *R)
 {
     (void)c;
+    /* Concept #63 — equality / inequality delegate to values_equal so
+     * lists, tuples, maps, optionals all compare structurally and the
+     * Optional ↔ atom-variant tuple bridge works (`:some 1 == :some 1`
+     * regardless of which path produced each side). Ordering ops still
+     * only make sense on scalars. */
+    if (op == BINOP_EQ || op == BINOP_NE) {
+        bool eq = values_equal(L, R);
+        return deck_new_bool(op == BINOP_EQ ? eq : !eq);
+    }
     int cmp = 0;
     if ((L->type == DECK_T_INT || L->type == DECK_T_FLOAT) &&
         (R->type == DECK_T_INT || R->type == DECK_T_FLOAT)) {
@@ -5761,9 +5821,16 @@ static deck_value_t *do_compare(deck_interp_ctx_t *c, binop_t op,
         cmp = (a < b) ? -1 : (a > b) ? 1 : 0;
     } else if (L->type == R->type) {
         switch (L->type) {
-            case DECK_T_STR:  cmp = (L->as.s.ptr == R->as.s.ptr) ? 0 : 1; break;
+            case DECK_T_STR: {
+                /* Lexicographic for ordering even though == above is by ptr. */
+                uint32_t la = L->as.s.len, lb = R->as.s.len;
+                uint32_t m = la < lb ? la : lb;
+                int rc = m ? memcmp(L->as.s.ptr, R->as.s.ptr, m) : 0;
+                cmp = rc != 0 ? (rc < 0 ? -1 : 1) : (la < lb ? -1 : la > lb ? 1 : 0);
+                break;
+            }
             case DECK_T_ATOM: cmp = (L->as.atom  == R->as.atom)  ? 0 : 1; break;
-            case DECK_T_BOOL: cmp = (L->as.b == R->as.b) ? 0 : 1; break;
+            case DECK_T_BOOL: cmp = (int)L->as.b - (int)R->as.b; break;
             case DECK_T_UNIT: cmp = 0; break;
             default: cmp = 1; break;
         }
@@ -5774,8 +5841,6 @@ static deck_value_t *do_compare(deck_interp_ctx_t *c, binop_t op,
         case BINOP_LE: out = cmp <= 0; break;
         case BINOP_GT: out = cmp >  0; break;
         case BINOP_GE: out = cmp >= 0; break;
-        case BINOP_EQ: out = cmp == 0; break;
-        case BINOP_NE: out = cmp != 0; break;
         default: break;
     }
     return deck_new_bool(out);

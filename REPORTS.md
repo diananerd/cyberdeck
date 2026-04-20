@@ -1892,3 +1892,33 @@ A→B shape: `lang_tuple_basic.deck` listed in session #5 deferred as "various a
 **What this unblocks**: every nested tuple access pattern across all fixtures + annexes. `lang_tuple_basic.deck` becomes parseable end-to-end; downstream `(a, b) := ...` destructuring + match patterns + structural equality were already implemented and just needed reachable input.
 
 **Why this matters (A→B)**: a pure lexer-level fix that masquerades as a "tuple feature gap" two layers up. The diagnostic noise — "tuple index must be non-negative" appearing for valid `nested.0.0` syntax — pointed at the parser, but the real bug was the byte stream the parser was reading. Sessions where bug reports get assigned by symptom text (the parser error message) systematically miss this kind of cross-layer drift.
+
+### Concept #63 — structural equality + Optional ↔ variant-tuple bridging
+
+**Two-fold drift on `==`/`!=`**:
+
+1. **Lists / tuples / maps never compared structurally**. `do_compare` for `BINOP_EQ`/`BINOP_NE` only handled scalars (INT/FLOAT/STR/ATOM/BOOL/UNIT); for any other type it set `cmp = 1` (always-not-equal). So `(1,2) == (1,2)` returned `false`, `[1,2,3] == [1,2,3]` returned `false`, and every fixture line testing structural equality silently failed. This blocks `lang_tuple_basic.deck:45-47`, `lang_list_basic.deck:47/50/56-58`, `lang_map_basic.deck` value-by-value comparisons, and any annex that compares records/lists.
+
+2. **Optional vs atom-variant-tuple repr split**. `map.get(...)` and `some(...)`/`none()` builtins return `DECK_T_OPTIONAL{.inner=v}`. But concept #11 made `:some v` / `:none` first-class atom-variant value syntax that desugars to a 2-tuple `(:some, v)` and bare atom `:none`. Both representations are observable in user code; equality between them was always `false` because the types differ. So `map.get(m, :name) == :some "diana"` and `map.get(m, :missing) == :none` from `lang_map_basic.deck:34-35` (and many others) silently fail.
+
+A→B shape: scalars compare correctly → "equality works" → assumption breaks at the moment a fixture inserts a list/tuple/map/option literal on either side of `==`. The conformance harness reported PASS on fixtures that happen to only compare scalars and FAIL on fixtures that exercise structural equality, with no signal that the runtime was missing something foundational.
+
+**Fix applied**:
+
+- 2026-04-20 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c`:
+  * `do_compare` short-circuits at the top: `BINOP_EQ`/`BINOP_NE` delegate to `values_equal(L, R)` (already structural and recursive). Ordering ops (`<` `<=` `>` `>=`) keep the scalar-only logic — they don't make sense for compound types.
+  * `values_equal` extended to handle `DECK_T_OPTIONAL` (recurse into `.inner`; both-none → equal; one-none → not equal) and `DECK_T_MAP` (compare by lookup so internal hash order doesn't leak).
+  * New `optional_equal_variant(o, t)` helper handles cross-type comparisons: `Optional{.inner=v}` vs `Tuple(:some, v)` and `Optional{.inner=NULL}` vs `Atom(:none)`. Called from the type-mismatch branch when one side is Optional and the other is the variant shape.
+  * `do_compare` ordering side also gained string lexicographic comparison for `<`/`>` etc — was previously `cmp = (ptr == ptr) ? 0 : 1`, giving meaningless ordering for non-interned strings. (Strings are interned in practice, but the comparison was structurally wrong.)
+- 2026-04-20 · layer 5 test · `components/deck_runtime/src/deck_interp_test.c` — new `t_eq_structural` case covers tuple ==/!=, list ==/!=, and the Optional ↔ tuple bridge for both `:some v` and `:none`. Registered in `CASES[]`.
+
+**Verification**: `idf.py build` succeeds. Test will run on hardware selftest at next flash; all five sub-assertions must pass.
+
+**What this unblocks**:
+
+- `lang_tuple_basic.deck` — `(1, 2) == (1, 2)` and `(1, 2) != (2, 1)` and `(1, "a") != (1, "b")` now true.
+- `lang_list_basic.deck` — `doubled == [20, 40, 60, 80, 100]`, `evens == [20, 40]`, `[1, 2] ++ [3, 4] == [1, 2, 3, 4]` etc. become decidable.
+- `lang_map_basic.deck` — every `map.get(m, k) == :some v` and `== :none` line. Plus `m.name == "diana"` was already supported via concept #33 dual atom/string lookup.
+- Any annex that compares records, lists, or option-returning calls against literals.
+
+**Why this matters (Deck minimalism + spec-honoring)**: equality is the most fundamental observable. Having `==` lie about compound values for years would erode every higher-order assertion — list filtering (`list.contains`), map lookup matching, pattern-match guards, every `if/then/else` branch on a structural comparison. The Optional↔tuple bridge in particular embodies the user's "follow the spirit of the spec" rule: spec §3.7 says `:some v` is a value, concept #11 made the literal syntax produce a tuple, so the runtime's older Optional repr must transparently compare equal — anything else creates a Schrödinger's value where the source of the construction (literal vs builtin) determines equality semantics.

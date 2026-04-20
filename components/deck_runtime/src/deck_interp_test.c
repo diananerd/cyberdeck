@@ -474,6 +474,40 @@ static bool t_intent_event_values(const char *name)
     return true;
 }
 
+/* Concept #63 — structural equality for tuples / lists / maps via the
+ * `==` operator (do_compare delegates to values_equal for EQ/NE) AND
+ * Optional ↔ atom-variant tuple bridging so map.get returns equal to
+ * the literal `:some v`. Spec §3.7 + concept #11.
+ */
+static bool t_eq_structural(const char *name)
+{
+    deck_err_t e;
+    deck_value_t *v;
+    /* Tuple structural eq. */
+    v = run_expr("(1, 2) == (1, 2)", &e);
+    CHECK(v && v->type == DECK_T_BOOL && v->as.b, "tup ==");
+    deck_release(v);
+    v = run_expr("(1, 2) != (2, 1)", &e);
+    CHECK(v && v->as.b, "tup !=");
+    deck_release(v);
+    /* List structural eq. */
+    v = run_expr("[1, 2, 3] == [1, 2, 3]", &e);
+    CHECK(v && v->as.b, "list ==");
+    deck_release(v);
+    v = run_expr("[1, 2] != [1, 2, 3]", &e);
+    CHECK(v && v->as.b, "list !=");
+    deck_release(v);
+    /* Optional ↔ tuple bridge. map.get returns DECK_T_OPTIONAL; the
+     * literal `:some "x"` parses into a 2-tuple. They must compare equal. */
+    v = run_expr("map.get({:k: \"v\"}, :k) == :some \"v\"", &e);
+    CHECK(v && v->as.b, "opt some bridge");
+    deck_release(v);
+    v = run_expr("map.get({:k: \"v\"}, :missing) == :none", &e);
+    CHECK(v && v->as.b, "opt none bridge");
+    deck_release(v);
+    return true;
+}
+
 /* DL2 F28.1 — @machine.before / .after run around each transition. The
  * test machine does boot → ready, and @machine.after sets a log marker
  * that we cannot verify here (no log capture in the interp test harness),
@@ -555,6 +589,7 @@ static const case_t CASES[] = {
     { "intent_captured_action", t_intent_captured_action },
     { "intent_event_value",     t_intent_event_value },
     { "intent_event_values",    t_intent_event_values },
+    { "eq_structural",          t_eq_structural },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 
