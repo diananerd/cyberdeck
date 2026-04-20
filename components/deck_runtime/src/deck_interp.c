@@ -147,6 +147,10 @@ typedef struct {
 
 /* Forward declarations for helpers defined later in this file. */
 static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload);
+/* Concept #44 — machine.* builtins defined after struct deck_runtime_app
+ * (way below) so they can access the slot array. */
+static deck_value_t *b_machine_send (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 
 static deck_value_t *b_log_info(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -4295,6 +4299,14 @@ static const builtin_t BUILTINS[] = {
     { "map.to_list",            b_map_to_list,       1, 1 },
     { "map.from_list",          b_map_from_list,     1, 1 },
     /* Concept #42 — §11.4 tuple ops. */
+    /* Concept #44 — machine.send / machine.state (spec §8.4).
+     * Also registered under capitalized `Machine.*` since spec examples
+     * use the capitalized form. */
+    { "machine.send",           b_machine_send,      1, 2 },
+    { "machine.state",          b_machine_state,     0, 0 },
+    { "Machine.send",           b_machine_send,      1, 2 },
+    { "Machine.state",          b_machine_state,     0, 0 },
+
     { "tup.fst",                b_tup_fst,           1, 1 },
     { "tup.snd",                b_tup_snd,           1, 1 },
     { "tup.third",              b_tup_third,         1, 1 },
@@ -5527,6 +5539,20 @@ static deck_err_t run_machine(const ast_node_t *machine,
     ESP_LOGI(TAG, "machine '%s' start state :%s",
              machine->as.machine.name, state->as.state.name);
 
+    /* Concept #44 — when the machine declares top-level transitions
+     * (spec §8.4 event-driven form), we don't auto-run. The machine sits
+     * in its initial state, and user code drives transitions via
+     * `machine.send(:event, payload)`. Legacy sequential flows (no top-
+     * level transitions, all progression via state-internal `transition`
+     * hooks) keep the auto-loop below. */
+    if (machine->as.machine.transitions.len > 0) {
+        const char *ignored = NULL;
+        run_state_hooks(c, state, "enter", &ignored);
+        /* The machine now sits waiting for send() calls. The caller
+         * (deck_runtime_app_load) records app->machine_state separately. */
+        return c->err;
+    }
+
     for (int steps = 0; steps < DECK_MACHINE_MAX_TRANSITIONS; steps++) {
         const char *next = NULL;
         run_state_hooks(c, state, "enter", &next);
@@ -5638,6 +5664,10 @@ struct deck_runtime_app {
     deck_arena_t       arena;
     deck_loader_t      ld;
     deck_interp_ctx_t  ctx;
+    /* Concept #44 — current machine state (interned atom text, or NULL when
+     * no @machine exists). Set by run_machine to the initial state at load;
+     * updated by deck_runtime_app_send on every successful transition. */
+    const char        *machine_state;
 };
 
 static struct deck_runtime_app s_app_slots[DECK_RUNTIME_MAX_APPS];
@@ -5658,6 +5688,101 @@ static void app_slot_free(struct deck_runtime_app *app)
 {
     if (!app) return;
     app->in_use = false;
+}
+
+/* ---- machine.send / machine.state (concept #44 — spec §8.4) ----
+ * Defined here (after s_app_slots) so app_from_ctx can scan the array.
+ * Forward-declared near the top of the file for the BUILTINS table. */
+static struct deck_runtime_app *app_from_ctx(deck_interp_ctx_t *c)
+{
+    for (int i = 0; i < DECK_RUNTIME_MAX_APPS; i++) {
+        if (s_app_slots[i].in_use && &s_app_slots[i].ctx == c) return &s_app_slots[i];
+    }
+    return NULL;
+}
+
+static deck_value_t *b_machine_send(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    if (!args[0] || args[0]->type != DECK_T_ATOM) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "machine.send(:event, payload?)"); return NULL;
+    }
+    struct deck_runtime_app *app = app_from_ctx(c);
+    if (!app) { set_err(c, DECK_RT_INTERNAL, 0, 0, "machine.send: no app context"); return NULL; }
+    const char *event = args[0]->as.atom;
+    deck_value_t *payload = (n >= 2) ? args[1] : NULL;
+
+    const ast_node_t *machine = find_machine(app->ld.module);
+    if (!machine) return deck_new_none();
+    if (!app->machine_state) return deck_new_none();
+
+    /* Linear scan for the first matching transition. Deferred: specificity
+     * resolution when multiple transitions match. */
+    const ast_node_t *match_tn = NULL;
+    for (uint32_t i = 0; i < machine->as.machine.transitions.len; i++) {
+        const ast_node_t *tn = machine->as.machine.transitions.items[i];
+        if (!tn || tn->kind != AST_MACHINE_TRANSITION) continue;
+        if (!tn->as.machine_transition.event) continue;
+        if (strcmp(tn->as.machine_transition.event, event) != 0) continue;
+        if (tn->as.machine_transition.from_state &&
+            strcmp(tn->as.machine_transition.from_state, app->machine_state) != 0) continue;
+        match_tn = tn;
+        break;
+    }
+    if (!match_tn) return deck_new_none();
+
+    /* Bind payload to `event` identifier in a child env for when/before/after bodies. */
+    deck_env_t *bind_env = deck_env_new(&app->arena, c->global);
+    if (!bind_env) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "machine.send alloc"); return NULL; }
+    deck_env_bind(&app->arena, bind_env, "event",
+                  payload ? payload : deck_unit());
+
+    if (match_tn->as.machine_transition.when_expr) {
+        deck_value_t *w = deck_interp_run(c, bind_env, match_tn->as.machine_transition.when_expr);
+        if (!w) { deck_env_release(bind_env); return NULL; }
+        bool truthy = deck_is_truthy(w);
+        deck_release(w);
+        if (!truthy) { deck_env_release(bind_env); return deck_new_none(); }
+    }
+
+    const ast_node_t *src_state = find_state(machine, app->machine_state);
+    if (src_state) {
+        run_state_hooks(c, src_state, "leave", NULL);
+        if (c->err != DECK_RT_OK) { deck_env_release(bind_env); return NULL; }
+    }
+
+    if (match_tn->as.machine_transition.before_body) {
+        deck_value_t *r = deck_interp_run(c, bind_env, match_tn->as.machine_transition.before_body);
+        if (r) deck_release(r);
+        if (c->err != DECK_RT_OK) { deck_env_release(bind_env); return NULL; }
+    }
+
+    app->machine_state = match_tn->as.machine_transition.to_state;
+    ESP_LOGI(TAG, "machine.send(:%s): :%s -> :%s", event,
+             src_state ? src_state->as.state.name : "?",
+             app->machine_state);
+
+    const ast_node_t *dst_state = find_state(machine, app->machine_state);
+    if (dst_state) {
+        const char *ignored = NULL;
+        run_state_hooks(c, dst_state, "enter", &ignored);
+        if (c->err != DECK_RT_OK) { deck_env_release(bind_env); return NULL; }
+    }
+
+    if (match_tn->as.machine_transition.after_body) {
+        deck_value_t *r = deck_interp_run(c, bind_env, match_tn->as.machine_transition.after_body);
+        if (r) deck_release(r);
+    }
+
+    deck_env_release(bind_env);
+    return deck_new_atom(app->machine_state);
+}
+
+static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    struct deck_runtime_app *app = app_from_ctx(c);
+    if (!app || !app->machine_state) return deck_new_none();
+    return deck_new_some(deck_new_atom(app->machine_state));
 }
 
 /* ----- DL2 F28.4: @migration runner ------------------------------------
@@ -5819,11 +5944,23 @@ deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
         }
     }
 
-    /* Run @machine to reach its terminal state. Async transitions are not
-     * yet modelled; the machine runs to completion at load time. */
+    /* Run @machine. Two modes (concept #44):
+     *   - Sequential: no top-level transitions → run_machine auto-progresses
+     *     until a terminal state (legacy DL1 / @flow behaviour).
+     *   - Event-driven: top-level transitions present → run_machine enters
+     *     the initial state and returns; subsequent progression is via
+     *     machine.send(:event, payload) calls. */
     if (app->ctx.err == DECK_RT_OK) {
         const ast_node_t *machine = find_machine(app->ld.module);
-        if (machine) run_machine(machine, app->ld.module, &app->ctx);
+        if (machine) {
+            run_machine(machine, app->ld.module, &app->ctx);
+            /* Capture the state the machine settled in, so machine.send can
+             * find matching transitions by from_state. */
+            if (machine->as.machine.initial_state)
+                app->machine_state = machine->as.machine.initial_state;
+            else if (machine->as.machine.states.len > 0)
+                app->machine_state = machine->as.machine.states.items[0]->as.state.name;
+        }
     }
 
     deck_err_t run_rc = app->ctx.err;

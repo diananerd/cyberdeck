@@ -1381,3 +1381,47 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Running tally**: `list.*` now at 33/~35. Missing: `list.sort_by`, `list.sort_desc`, `list.sort_by_desc`, `list.sort_by_str`, `list.group_by`, `list.chunk`, `list.window`, `list.scan`, `list.tabulate`, `list.interleave`, `list.unique_by`. Most are 10-line variants; a future concept can bundle them.
 
 **Session #4 cumulative**: `text` 36/36, `time` 18/18, `nvs` 13/13, `fs` 10/10, `math` 33/33, `system.info` 11/11, `bytes` 8/8, `log` 4/4, `map` 13/13, `tup` 6/6, `list` 33/~35, plus Result / Option helpers. Every §3 DL1-mandatory capability + most of the §11 standard vocabulary is runtime-complete. The combinatorial gap between "fixture calls builtin X" and "runtime provides X" is closed for the overwhelming majority of Deck's stdlib.
+
+### Concept #44 — @machine transition dispatch (spec §8.4)
+
+**Drift**: concept #23 parsed top-level `transition :event from:/to:/when:/before:/after:` clauses and **threw them away**. Annex state machines had nothing to fire. `run_machine` was a sequential-flow loop — it took the first state's `on enter`'s suggested next, followed auto-transitions until a terminal state, and returned. No event-driven dispatch. `Machine.send(:foo)` had no target.
+
+This was the single biggest block to actually *running* annex apps (a/b/c/d/xx). Every annex's interactive behaviour — launcher tap → app launch, Bluesky login → feed → post — is a machine transition triggered by a user-emitted event.
+
+**Scope**: parse + store transitions; enter the initial state at load; implement `machine.send(:event, payload?)` as a first-class builtin that scans the machine for matching transitions and runs them. Preserve the legacy sequential loop for machines without top-level transitions (existing `@flow` fixtures keep working).
+
+**Fix applied (five layers)**:
+
+- 2026-04-19 · layer 4 AST · `include/deck_ast.h`:
+  * New `AST_MACHINE_TRANSITION` node kind (distinct from the legacy `AST_TRANSITION` intra-state statement).
+  * Added `transitions` list to the `machine` union payload.
+  * Added `machine_transition` payload `{event, from_state, to_state, when_expr, before_body, after_body}`. `from_state == NULL` = `from *` wildcard.
+- 2026-04-19 · layer 4 parser · `src/deck_parser.c:parse_machine_decl` rewritten from parse-and-discard: now constructs `AST_MACHINE_TRANSITION` nodes, parses `from:/to:/when:/before:/after:` clauses into real AST fields (expressions for when/before/after; atom for from/to; `*` token for wildcard from). Stores into `machine.transitions`.
+- 2026-04-19 · layer 4 AST printer · `src/deck_ast.c` — `ast_kind_name` knows `machine_transition`.
+- 2026-04-19 · layer 4 runtime · `src/deck_interp.c`:
+  * `struct deck_runtime_app` gained `machine_state` field — the current state atom, updated on every transition.
+  * `run_machine` split into two modes. If `machine.transitions.len > 0`, the machine is event-driven: run initial state's `on enter` and return. Otherwise, run the legacy sequential loop (preserves every existing `@flow` fixture).
+  * `deck_runtime_app_load` captures the initial state into `app->machine_state` after `run_machine` returns.
+  * New `machine.send(:event, payload?)` builtin (also registered as spec-capitalized `Machine.send`):
+    - `app_from_ctx(c)` scans the slot array to find the app whose interp ctx matches — cheap linear scan over ≤ 8 slots.
+    - Walks `machine.transitions`, finds the first match by `(event, from_state OR wildcard)`.
+    - Binds `event` identifier in a child env to the payload (unit if absent) for use by when/before/after bodies.
+    - Execution order matches concept #23's spec §8.5 rewrite: **when → source.on_leave → before → [state change] → dest.on_enter → after**.
+    - Returns the new state as `:atom`; `:none` if no transition matched (spec-compliant no-op behaviour, not an error).
+  * New `machine.state()` builtin returns the current state as `:some :atom` / `:none` for apps that need to query without firing a transition.
+
+**What this unblocks**:
+- Every annex `@machine` block now runs end-to-end: initial state enters, user actions (via triggers that call `Machine.send`) fire transitions, each transition advances machine_state and runs destination's on-enter hook.
+- `machine.state()` lets app code query and condition on current state without a round-trip through the flow.
+
+**Deferred (tracked)**:
+- **Payload binding across state payloads** — spec `state :active (temp: float)` entered via `transition … to :active (temp: expr)` should bind `temp` in destination's scope (concept #22 deferred this; still not implemented).
+- **Reactive `watch:` transitions** — spec §8.4 allows transitions that fire when a predicate toggles false→true without explicit send. Needs reactive dependency tracking.
+- **`to history`** — spec §8.4 compound-machine history pseudostate.
+- **Multi-`from`/multi-`to`** — spec allows lists; current impl takes a single source and target.
+- **Nested machine composition** — `state :home machine: Other` semantics (concept #22 deferred).
+- **Transition-scoped hook order for `@machine.before/.after`** — concept #4 noted execution order drift; machine-level transitions inherit the legacy order for now.
+
+**A→B note**: this is the third-largest architectural lever behind declarative content eval and @stream execution. With #38 (`@on` payload binding) + #44 (machine dispatch), an annex app can now be genuinely interactive — `@on os.event (field: binder) → Machine.send(:event_name, payload)` becomes a wire that runs end-to-end. The bridge UI layer still needs DVC re-rendering on state change (which is concept-content-eval territory), so apps using the declarative `content = …` form won't visibly re-draw, but the underlying transitions run correctly and `machine.state()` reports the new state.
+
+**Running tally**: §3 DL1 capabilities: `text / time / nvs / fs / math / system.info / bytes / log` — all 100%. §11 stdlib: `list 33/35 / map 13/13 / tup 6/6`. Runtime dispatch: `@on` events with payload binding (#38), machine transitions with when/before/after (#44), map dual-key access (#33). Duration literals (#32). The project transitioned from "parser accepts, runtime ignores" to "end-to-end wired" across the stdlib + dispatch axes.

@@ -71,6 +71,7 @@ typedef enum {
     AST_MACHINE,
     AST_STATE,
     AST_STATE_HOOK,   /* on enter / on leave */
+    AST_MACHINE_TRANSITION,   /* Spec §8.4 — top-level `transition :event from:/to:/when:` */
 
     AST_MODULE,
     AST_TYPE_DEF,    /* DL2 F22.2 — @type X { fields } */
@@ -231,9 +232,21 @@ struct ast_node {
             const char *name;
             const char *initial_state;   /* interned atom text, or NULL */
             ast_list_t  states;
+            ast_list_t  transitions;     /* Concept #44 — AST_MACHINE_TRANSITION list */
         } machine;
         struct { const char *name; ast_list_t hooks; }         state;
         struct { const char *kind; ast_node_t *body; }         state_hook; /* "enter" | "leave" | atom for transition */
+        /* Concept #44 — spec §8.4 top-level machine transition.
+         * from_state == NULL means `from *` (wildcard — any source state).
+         * when_expr, before_body, after_body are optional (NULL = absent). */
+        struct {
+            const char *event;
+            const char *from_state;
+            const char *to_state;
+            ast_node_t *when_expr;
+            ast_node_t *before_body;
+            ast_node_t *after_body;
+        } machine_transition;
 
         struct { ast_list_t items; }                 module;
         struct {

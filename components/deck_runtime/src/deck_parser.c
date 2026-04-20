@@ -1640,6 +1640,7 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
     while (at(p, TOK_NEWLINE)) advance(p);
     if (!expect(p, TOK_INDENT, "expected indented machine body")) return NULL;
     ast_list_init(&m->as.machine.states);
+    ast_list_init(&m->as.machine.transitions);
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (at(p, TOK_KW_STATE)) {
             ast_node_t *st = parse_state_decl(p); if (!st) return NULL;
@@ -1669,16 +1670,23 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
         }
         /* Spec 02-deck-app §8.4 — top-level `transition :event …` with
          * optional `(args)` and an indented clause block of
-         * from:/to:/when:/before:/after:/watch:. Parse-and-discard today:
-         * the runtime doesn't honour machine-level transitions yet (every
-         * executing transition lives inside a state body via the legacy
-         * simple form). This stub lets annex machines parse; the actual
-         * dispatch of top-level transitions is a separate concept. */
+         * from:/to:/when:/before:/after:/watch:. Concept #44 — store the
+         * transition as AST_MACHINE_TRANSITION. Deferred: (args) payload
+         * binding, `from *` wildcard, multi-from, `watch:` reactive,
+         * `to history`, before/after as full expression bodies (currently
+         * parsed as a single expression on the same line for simplicity). */
         if (at(p, TOK_KW_TRANSITION)) {
+            ast_node_t *tn = mknode(p, AST_MACHINE_TRANSITION); if (!tn) return NULL;
+            tn->as.machine_transition.event = NULL;
+            tn->as.machine_transition.from_state = NULL;
+            tn->as.machine_transition.to_state = NULL;
+            tn->as.machine_transition.when_expr = NULL;
+            tn->as.machine_transition.before_body = NULL;
+            tn->as.machine_transition.after_body = NULL;
             advance(p); /* transition */
             /* `:event_atom` */
-            if (at(p, TOK_ATOM)) advance(p);
-            /* Optional `(args)` — eat matching parens. */
+            if (at(p, TOK_ATOM)) { tn->as.machine_transition.event = p->cur.text; advance(p); }
+            /* Optional `(args)` — eat matching parens (payload binding deferred). */
             if (at(p, TOK_LPAREN)) {
                 advance(p);
                 uint32_t depth = 1;
@@ -1691,20 +1699,46 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
                             "expected ')' closing top-level transition args"))
                     return NULL;
             }
-            /* Trailing text on the header line (e.g. `from * to :x` inline) —
-             * rare but allowed. Consume until NEWLINE. */
+            /* Trailing text on the header line up to newline. Consume. */
             while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
                 advance(p);
             while (at(p, TOK_NEWLINE)) advance(p);
-            /* Optional indented clause block — discard entirely. */
+            /* Clause block — parse known keys, discard unknowns. */
             if (at(p, TOK_INDENT)) {
                 advance(p);
-                uint32_t depth = 1;
-                while (depth > 0 && !at(p, TOK_EOF)) {
-                    if (at(p, TOK_INDENT))      { depth++; advance(p); }
-                    else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
-                    else                        { advance(p); }
+                while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                    /* Each clause is `ident: value` on its own line. */
+                    if (at(p, TOK_IDENT) && p->cur.text) {
+                        const char *key = p->cur.text;
+                        advance(p);
+                        if (at(p, TOK_COLON)) advance(p);
+                        if (strcmp(key, "from") == 0) {
+                            if (at(p, TOK_ATOM)) { tn->as.machine_transition.from_state = p->cur.text; advance(p); }
+                            else if (at(p, TOK_STAR)) { tn->as.machine_transition.from_state = NULL; advance(p); }
+                        } else if (strcmp(key, "to") == 0) {
+                            if (at(p, TOK_ATOM)) { tn->as.machine_transition.to_state = p->cur.text; advance(p); }
+                        } else if (strcmp(key, "when") == 0) {
+                            ast_node_t *e = parse_expr_prec(p, 0);
+                            if (e) tn->as.machine_transition.when_expr = e;
+                        } else if (strcmp(key, "before") == 0) {
+                            ast_node_t *e = parse_expr_prec(p, 0);
+                            if (e) tn->as.machine_transition.before_body = e;
+                        } else if (strcmp(key, "after") == 0) {
+                            ast_node_t *e = parse_expr_prec(p, 0);
+                            if (e) tn->as.machine_transition.after_body = e;
+                        }
+                        /* Skip any trailing tokens on this clause line. */
+                        while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
+                            advance(p);
+                    }
+                    while (at(p, TOK_NEWLINE)) advance(p);
                 }
+                if (at(p, TOK_DEDENT)) advance(p);
+            }
+            /* Only store if we got at least event + to_state. from is optional
+             * (defaults to wildcard when the clause was absent). */
+            if (tn->as.machine_transition.event && tn->as.machine_transition.to_state) {
+                ast_list_push(p->arena, &m->as.machine.transitions, tn);
             }
             continue;
         }
