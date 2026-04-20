@@ -5181,6 +5181,24 @@ static deck_value_t *b_is_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t
 { (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_MAP ? deck_true() : deck_false()); }
 static deck_value_t *b_is_fn(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 { (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_FN ? deck_true() : deck_false()); }
+static deck_value_t *b_is_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_BOOL ? deck_true() : deck_false()); }
+static deck_value_t *b_is_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{ (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_FLOAT ? deck_true() : deck_false()); }
+static deck_value_t *b_is_none(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0]) return deck_retain(deck_true());
+    return deck_retain(args[0]->type == DECK_T_OPTIONAL && args[0]->as.opt.inner == NULL
+                       ? deck_true() : deck_false());
+}
+static deck_value_t *b_is_some(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!args[0]) return deck_retain(deck_false());
+    return deck_retain(args[0]->type == DECK_T_OPTIONAL && args[0]->as.opt.inner != NULL
+                       ? deck_true() : deck_false());
+}
 
 /* Bare-ident builtins: str(), int(), float(), bool() type conversions. */
 static const builtin_t BARE_BUILTINS[] = {
@@ -5208,6 +5226,10 @@ static const builtin_t BARE_BUILTINS[] = {
     { "is_list", b_is_list, 1, 1 },
     { "is_map",  b_is_map,  1, 1 },
     { "is_fn",   b_is_fn,   1, 1 },
+    { "is_bool", b_is_bool, 1, 1 },
+    { "is_float",b_is_float,1, 1 },
+    { "is_none", b_is_none, 1, 1 },
+    { "is_some", b_is_some, 1, 1 },
 
     { NULL, NULL, 0, 0 },
 };
@@ -5712,16 +5734,29 @@ static deck_value_t *do_compare(deck_interp_ctx_t *c, binop_t op,
 static deck_value_t *do_concat(deck_interp_ctx_t *c, deck_value_t *L, deck_value_t *R,
                                 uint32_t ln, uint32_t co)
 {
-    if (L->type != DECK_T_STR || R->type != DECK_T_STR) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, ln, co, "++ needs two strings");
-        return NULL;
+    /* Spec §7.4 — `++` concatenates two strings OR two lists. Type must
+     * match on both sides. Maps / bytes / other types are rejected. */
+    if (L->type == DECK_T_STR && R->type == DECK_T_STR) {
+        char buf[256];
+        uint32_t a = L->as.s.len, b = R->as.s.len;
+        if (a + b >= sizeof(buf)) b = (uint32_t)(sizeof(buf) - 1 - a);
+        memcpy(buf, L->as.s.ptr, a);
+        memcpy(buf + a, R->as.s.ptr, b);
+        return deck_new_str(buf, a + b);
     }
-    char buf[256];
-    uint32_t a = L->as.s.len, b = R->as.s.len;
-    if (a + b >= sizeof(buf)) b = (uint32_t)(sizeof(buf) - 1 - a);
-    memcpy(buf, L->as.s.ptr, a);
-    memcpy(buf + a, R->as.s.ptr, b);
-    return deck_new_str(buf, a + b);
+    if (L->type == DECK_T_LIST && R->type == DECK_T_LIST) {
+        uint32_t total = L->as.list.len + R->as.list.len;
+        deck_value_t *out = deck_new_list(total);
+        if (!out) { set_err(c, DECK_RT_NO_MEMORY, ln, co, "++ list oom"); return NULL; }
+        for (uint32_t i = 0; i < L->as.list.len; i++)
+            deck_list_push(out, L->as.list.items[i]);
+        for (uint32_t i = 0; i < R->as.list.len; i++)
+            deck_list_push(out, R->as.list.items[i]);
+        return out;
+    }
+    set_err(c, DECK_RT_TYPE_MISMATCH, ln, co,
+            "++ needs two strings or two lists");
+    return NULL;
 }
 
 static deck_value_t *run_binop(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)

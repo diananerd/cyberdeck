@@ -760,7 +760,15 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
             ast_node_t *atom_lit = ast_new(p->arena, AST_LIT_ATOM, ln, co);
             if (!atom_lit) return NULL;
             atom_lit->as.s = atom_name;
-            if (at(p, TOK_IDENT)) {
+            /* `:ctor <sub>` — variant pattern. Accept any pattern-start
+             * token as the sub: ident binder / wildcard (TOK_IDENT),
+             * literal (INT/FLOAT/STRING/TRUE/FALSE/UNIT/NONE), and
+             * nested atom patterns `:err :oops` (spec §8 — Result
+             * :err :atom idiom). */
+            if (at(p, TOK_IDENT) || at(p, TOK_ATOM) ||
+                at(p, TOK_INT) || at(p, TOK_FLOAT) || at(p, TOK_STRING) ||
+                at(p, TOK_KW_TRUE) || at(p, TOK_KW_FALSE) ||
+                at(p, TOK_KW_UNIT) || at(p, TOK_KW_NONE)) {
                 ast_node_t *sub = parse_pattern(p);
                 if (!sub) return NULL;
                 ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);

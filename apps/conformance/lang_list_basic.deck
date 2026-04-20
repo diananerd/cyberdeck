@@ -49,7 +49,7 @@
   let evens   = list.filter(xs, (n) -> n % 20 == 0)
   let ok_filt = evens == [20, 40]
 
-  let sum     = list.reduce(xs, 0, (acc, n) -> acc + n)
+  let sum     = list.reduce(xs, (acc, n) -> acc + n, 0)
   let ok_red  = sum == 150
 
   -- Concat (++).
