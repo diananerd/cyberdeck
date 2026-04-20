@@ -788,8 +788,54 @@ static ast_node_t *parse_match(deck_parser_t *p)
 {
     ast_node_t *m = mknode(p, AST_MATCH); if (!m) return NULL;
     advance(p); /* match */
+    /* Scrutinee expression — suppress the IDENT-lambda lookahead so
+     * `match x | …` doesn't eat the pipe as part of an `IDENT -> body`
+     * lambda candidate. Not strictly needed (| isn't ->), but keeps
+     * the shape symmetric with guard parsing. */
     m->as.match.scrut = parse_expr_prec(p, 0);
     if (!m->as.match.scrut) return NULL;
+    /* Spec §8 — arms may appear either on continuation lines (NEWLINE
+     * INDENT) or inline on the scrutinee's own line when the first arm
+     * starts with `|`. This one-liner form is common for bool matches:
+     *     let m = match 1 < 2 | true -> 100 | false -> 200 */
+    if (at(p, TOK_BAR)) {
+        ast_arm_t arms[64];
+        uint32_t n_arms = 0;
+        while (at(p, TOK_BAR) && n_arms < 64) {
+            advance(p); /* | */
+            ast_node_t *pat = parse_pattern(p); if (!pat) return NULL;
+            ast_node_t *guard = NULL;
+            if (at(p, TOK_KW_WHEN)) {
+                advance(p);
+                bool prev = p->no_lambda;
+                p->no_lambda = true;
+                guard = parse_expr_prec(p, 0);
+                p->no_lambda = prev;
+                if (!guard) return NULL;
+            }
+            if (!at(p, TOK_ARROW)) {
+                set_err(p, DECK_LOAD_PARSE_ERROR,
+                        "expected '->' in match arm (spec 01-deck-lang §8)");
+                return NULL;
+            }
+            advance(p);
+            /* Body expression — lambda lookahead off so it stops at the
+             * next `|` rather than consuming it as a binop expression. */
+            bool prev = p->no_lambda;
+            p->no_lambda = true;
+            ast_node_t *body = parse_expr_prec(p, 0);
+            p->no_lambda = prev;
+            if (!body) return NULL;
+            arms[n_arms].pattern = pat;
+            arms[n_arms].guard   = guard;
+            arms[n_arms].body    = body;
+            n_arms++;
+        }
+        m->as.match.arms = deck_arena_memdup(p->arena, arms,
+                                              n_arms * sizeof(ast_arm_t));
+        m->as.match.n_arms = n_arms;
+        return m;
+    }
     if (!expect(p, TOK_NEWLINE, "expected newline after match scrutinee")) return NULL;
     if (!expect(p, TOK_INDENT, "expected indented block for match arms")) return NULL;
 
