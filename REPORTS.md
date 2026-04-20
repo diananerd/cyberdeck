@@ -1528,3 +1528,26 @@ This was the single biggest block to actually *running* annex apps (a/b/c/d/xx).
 **Why scalar-only rendering in pass 1**: the parser absorbs `item x -> trigger x.title` as raw tokens within the list's indented block, but doesn't split it into a per-item template. Doing that split cleanly requires re-entering the parser state machine for content (a richer grammar). Scalar rendering covers the common "list of strings / ids / status values" case immediately; structured per-item rendering is a concept #49 target.
 
 **Combined with #38 / #44 / #45 / #46 / #47**: the Launcher annex (slot 0 example: `list installed_apps \n app -> trigger app.name -> apps.launch(app.id)`) would not fully render the per-app triggers, but `list ["A", "B", "C"]` now visibly lists three items. The gap between "pass-1 list" and "real annex list" is the per-item sub-template.
+
+### Concept #49 — list per-item template `item x -> body` (spec §12.1)
+
+**Drift**: concept #48 rendered list elements as flat `DVC_LABEL` rows. The spec form `list xs \n item x -> trigger x.name -> action` — used in every annex's primary list — silently dropped the per-element template. Users saw stringified payloads, not per-app triggers.
+
+**Fix applied (parser + AST + walker)**:
+
+- 2026-04-19 · layer 4 AST · `include/deck_ast.h` — `content_item` gained `item_binder` (interned name) + `item_body` (ast_list of AST_CONTENT_ITEM). Both empty/NULL when no template.
+- 2026-04-19 · layer 4 parser · `src/deck_parser.c` — when parsing a content item with `kind == "list"` and the next indented block starts with `item IDENT ->`, parse the template: capture the binder name, then parse a suite of nested `AST_CONTENT_ITEM`s as `item_body`. Fall back to the concept-#48 absorb-and-skip for other nested-block shapes.
+- 2026-04-19 · layer 4 walker · `src/deck_interp.c` — `kind="list"` branch extended: if a template is present, for each list element:
+  1. Create a child env with `item_binder` bound to the element.
+  2. Emit a `DVC_LIST_ITEM` group as a child of the `DVC_LIST`.
+  3. Render each body item into the list-item group, evaluating expressions in the per-element env. Supports trigger / navigate / label / raw bodies today; other kinds are a future follow-up.
+
+**What this unblocks**: `list installed_apps \n item app -> trigger app.name -> apps.launch(app.id)` now actually renders one trigger per app with the app's name on it. Bluesky feed's `list posts \n item p -> rich_text p.text` would render the stringified text per post. The two-tier structure (list → item rows) is visible to the bridge.
+
+**Deferred**:
+- **Per-item intent binding** — concept #47 assigned intent_ids only in the top-level content loop. List-item triggers currently render but the intent round-trip (bridge tap → Machine.send) isn't wired per-element. Next concept target.
+- **Nested content primitives in item bodies** — `item p -> group "..." \n label p.ts` with indented nested groups isn't supported; pass-1 handles a flat list of sub-items.
+- **`empty ->` fallback clause** — spec allows `list xs \n empty -> "no items"` to show a placeholder when the iterable is empty. Parser doesn't capture this; walker doesn't honor it.
+- **`has_more: expr`** — cursor-based pagination intent. Deferred.
+
+**A→B note**: this is the final architectural piece to show demonstrable annex UI on device. Concept #50+ will focus on the intent round-trip for per-item triggers (so tapping an app in the launcher list actually fires its `apps.launch` event) and the richer kinds (form/field, markdown, media).

@@ -4190,26 +4190,112 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                 }
             }
         } else if (kind && strcmp(kind, "list") == 0) {
-            /* Concept #48 — evaluate data_expr. If it's a list of
-             * scalars, emit DVC_LIST with DVC_LABEL children. Nested
-             * `item x -> ...` bodies aren't unpacked in this pass (parser
-             * absorbs them but doesn't break them into sub-items). */
+            /* Concept #48+#49 — evaluate data_expr. If a per-item template
+             * `item x -> body` was parsed (concept #49), bind each list
+             * element to the binder name and render the body once per
+             * element as a DVC_LIST_ITEM group. Otherwise fall back to
+             * the scalar-label pass-1 form. */
             node = deck_dvc_node_new(&s_bui_arena, DVC_LIST);
             if (node && (data || action)) {
-                /* Parser may have stashed the iterable as action_expr when
-                 * there's no arrow (e.g. `list posts` with no `->`). */
                 ast_node_t *expr = data ? data : action;
                 deck_value_t *v = content_eval_expr(c, env, expr);
                 if (v && v->type == DECK_T_LIST) {
+                    bool has_template = ci->as.content_item.item_binder != NULL &&
+                                        ci->as.content_item.item_body.len > 0;
                     for (uint32_t j = 0; j < v->as.list.len; j++) {
                         deck_value_t *elem = v->as.list.items[j];
                         if (!elem) continue;
-                        deck_dvc_node_t *row = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
-                        if (!row) break;
-                        char buf[128];
-                        const char *s = content_value_as_str(elem, buf, sizeof(buf));
-                        if (s) deck_dvc_set_str(&s_bui_arena, row, "value", s);
-                        deck_dvc_add_child(&s_bui_arena, node, row);
+                        if (has_template) {
+                            /* Per-item template — create a child env with the
+                             * binder bound to this element, then recursively
+                             * emit each body item as children of a DVC_LIST_ITEM. */
+                            struct deck_runtime_app *cur_app = app_from_ctx(c);
+                            deck_env_t *item_env = deck_env_new(cur_app ? &cur_app->arena : c->arena, env);
+                            if (!item_env) continue;
+                            deck_env_bind(cur_app ? &cur_app->arena : c->arena,
+                                          item_env, ci->as.content_item.item_binder, elem);
+                            deck_dvc_node_t *item_row = deck_dvc_node_new(&s_bui_arena, DVC_LIST_ITEM);
+                            if (!item_row) { deck_env_release(item_env); break; }
+                            /* Render each body item into item_row. Reuse the same
+                             * kind-dispatch logic by recursing through a helper —
+                             * but we don't have one. Inline a minimal subset
+                             * (trigger / navigate / label / raw) for now; other
+                             * kinds in the body are future work. */
+                            for (uint32_t k = 0; k < ci->as.content_item.item_body.len; k++) {
+                                const ast_node_t *sub = ci->as.content_item.item_body.items[k];
+                                if (!sub || sub->kind != AST_CONTENT_ITEM) continue;
+                                const char *sk = sub->as.content_item.kind;
+                                const char *slabel = sub->as.content_item.label;
+                                ast_node_t *sact = sub->as.content_item.action_expr;
+                                deck_dvc_node_t *sn = NULL;
+                                /* For trigger / navigate, evaluate the label
+                                 * expression (usually a binder-field access like
+                                 * `x.name`) into a string. */
+                                char lbuf[128];
+                                const char *lstr = slabel;
+                                if (sact && !sk) sact = NULL;   /* safety */
+                                if (sk && (strcmp(sk, "trigger") == 0 || strcmp(sk, "navigate") == 0)) {
+                                    sn = deck_dvc_node_new(&s_bui_arena,
+                                        strcmp(sk, "trigger") == 0 ? DVC_TRIGGER : DVC_NAVIGATE);
+                                    /* Label: if not a string literal, evaluate
+                                     * the first positional expression as label
+                                     * source. (Parser stashes `trigger x.name`
+                                     * as action_expr — not ideal; use data_expr
+                                     * for real label resolution in a follow-up.) */
+                                    if (sn) {
+                                        if (slabel) {
+                                            deck_dvc_set_str(&s_bui_arena, sn, "label", slabel);
+                                        } else if (sact) {
+                                            deck_value_t *lv = content_eval_expr(c, item_env, sact);
+                                            if (lv) {
+                                                lstr = content_value_as_str(lv, lbuf, sizeof(lbuf));
+                                                if (lstr) deck_dvc_set_str(&s_bui_arena, sn, "label", lstr);
+                                                deck_release(lv);
+                                            }
+                                        }
+                                        /* Intent binding per-element — concept #47
+                                         * only picked up Machine.send calls; bodies
+                                         * that include arrow actions would need that
+                                         * evaluated in item_env to carry payload.
+                                         * Deferred. */
+                                    }
+                                } else if (sk && strcmp(sk, "label") == 0) {
+                                    sn = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                                    if (sn) {
+                                        if (sact) {
+                                            deck_value_t *lv = content_eval_expr(c, item_env, sact);
+                                            if (lv) {
+                                                lstr = content_value_as_str(lv, lbuf, sizeof(lbuf));
+                                                if (lstr) deck_dvc_set_str(&s_bui_arena, sn, "value", lstr);
+                                                deck_release(lv);
+                                            }
+                                        } else if (slabel) {
+                                            deck_dvc_set_str(&s_bui_arena, sn, "value", slabel);
+                                        }
+                                    }
+                                } else if (sk && strcmp(sk, "raw") == 0 && sact) {
+                                    deck_value_t *lv = content_eval_expr(c, item_env, sact);
+                                    if (lv) {
+                                        sn = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                                        if (sn) {
+                                            lstr = content_value_as_str(lv, lbuf, sizeof(lbuf));
+                                            if (lstr) deck_dvc_set_str(&s_bui_arena, sn, "value", lstr);
+                                        }
+                                        deck_release(lv);
+                                    }
+                                }
+                                if (sn) deck_dvc_add_child(&s_bui_arena, item_row, sn);
+                            }
+                            deck_dvc_add_child(&s_bui_arena, node, item_row);
+                            deck_env_release(item_env);
+                        } else {
+                            deck_dvc_node_t *row = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                            if (!row) break;
+                            char buf[128];
+                            const char *s = content_value_as_str(elem, buf, sizeof(buf));
+                            if (s) deck_dvc_set_str(&s_bui_arena, row, "value", s);
+                            deck_dvc_add_child(&s_bui_arena, node, row);
+                        }
                     }
                 }
                 if (v) deck_release(v);

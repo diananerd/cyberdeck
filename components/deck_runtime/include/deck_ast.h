@@ -260,12 +260,19 @@ struct ast_node {
          * user-visible string (for trigger/navigate), NULL otherwise.
          * `action_expr` is the fn call bound to interaction (NULL for
          * passive nodes like label). `data_expr` is the iterable / value
-         * for list/media/markdown etc. */
+         * for list/media/markdown etc.
+         * Concept #49 — `item_binder` + `item_body` hold the per-element
+         * template for `list xs \n item x -> …`. `item_binder` is the
+         * identifier introduced (e.g. "x"); `item_body.items` is the list
+         * of AST_CONTENT_ITEM that render once per list element with the
+         * binder in scope. Both NULL/empty when the list has no template. */
         struct {
             const char *kind;
             const char *label;
             ast_node_t *action_expr;
             ast_node_t *data_expr;
+            const char *item_binder;
+            ast_list_t  item_body;
         } content_item;
 
         struct { ast_list_t items; }                 module;

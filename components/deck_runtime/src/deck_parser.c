@@ -1619,6 +1619,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         ci->as.content_item.label = NULL;
                         ci->as.content_item.action_expr = NULL;
                         ci->as.content_item.data_expr = NULL;
+                        ci->as.content_item.item_binder = NULL;
+                        ast_list_init(&ci->as.content_item.item_body);
                         /* Kind — first token on the line, if it's an ident/atom. */
                         if (at(p, TOK_IDENT)) {
                             ci->as.content_item.kind = p->cur.text;
@@ -1658,18 +1660,95 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
                             advance(p);
                         while (at(p, TOK_NEWLINE)) advance(p);
-                        /* If this item has a nested indent block (list body,
-                         * form body, etc.) absorb the whole span into data_expr
-                         * by keeping the inner tokens around — simplest: skip
-                         * the inner block without capturing (concept #46 will
-                         * revisit). */
+                        /* Concept #49 — if this is a list and it has a
+                         * nested indent block starting with `item IDENT ->`,
+                         * parse the per-item template. Other kinds' nested
+                         * blocks are still absorbed without unpacking. */
                         if (at(p, TOK_INDENT)) {
                             advance(p);
-                            uint32_t depth = 1;
-                            while (depth > 0 && !at(p, TOK_EOF)) {
-                                if (at(p, TOK_INDENT))      { depth++; advance(p); }
-                                else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
-                                else                        { advance(p); }
+                            bool is_list_template =
+                                ci->as.content_item.kind &&
+                                strcmp(ci->as.content_item.kind, "list") == 0 &&
+                                at(p, TOK_IDENT) && p->cur.text &&
+                                strcmp(p->cur.text, "item") == 0;
+                            if (is_list_template) {
+                                ast_list_init(&ci->as.content_item.item_body);
+                                advance(p); /* item */
+                                if (at(p, TOK_IDENT)) {
+                                    ci->as.content_item.item_binder = p->cur.text;
+                                    advance(p);
+                                }
+                                if (at(p, TOK_ARROW)) advance(p);
+                                while (at(p, TOK_NEWLINE)) advance(p);
+                                /* Body may be on the same line (single item)
+                                 * or an indented suite of items. */
+                                if (at(p, TOK_INDENT)) {
+                                    advance(p);
+                                    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                                        if (at(p, TOK_NEWLINE)) { advance(p); continue; }
+                                        ast_node_t *sub = mknode(p, AST_CONTENT_ITEM);
+                                        if (!sub) return NULL;
+                                        sub->as.content_item.kind = NULL;
+                                        sub->as.content_item.label = NULL;
+                                        sub->as.content_item.action_expr = NULL;
+                                        sub->as.content_item.data_expr = NULL;
+                                        sub->as.content_item.item_binder = NULL;
+                                        ast_list_init(&sub->as.content_item.item_body);
+                                        if (at(p, TOK_IDENT)) {
+                                            sub->as.content_item.kind = p->cur.text;
+                                            advance(p);
+                                        } else if (at(p, TOK_ATOM)) {
+                                            sub->as.content_item.kind = p->cur.text;
+                                            advance(p);
+                                        } else {
+                                            sub->as.content_item.kind = "raw";
+                                        }
+                                        if (at(p, TOK_STRING)) {
+                                            sub->as.content_item.label = p->cur.text;
+                                            advance(p);
+                                        }
+                                        if (at(p, TOK_ARROW)) {
+                                            advance(p);
+                                            ast_node_t *action = parse_expr_prec(p, 0);
+                                            if (action) sub->as.content_item.action_expr = action;
+                                        }
+                                        if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                                            ast_node_t *d = parse_expr_prec(p, 0);
+                                            if (d) {
+                                                if (!sub->as.content_item.action_expr)
+                                                    sub->as.content_item.action_expr = d;
+                                                else
+                                                    sub->as.content_item.data_expr = d;
+                                            }
+                                        }
+                                        while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF))
+                                            advance(p);
+                                        while (at(p, TOK_NEWLINE)) advance(p);
+                                        ast_list_push(p->arena, &ci->as.content_item.item_body, sub);
+                                    }
+                                    if (at(p, TOK_DEDENT)) advance(p);
+                                } else {
+                                    /* Inline item body on the same line. */
+                                    while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
+                                        advance(p);
+                                    while (at(p, TOK_NEWLINE)) advance(p);
+                                }
+                                /* Consume trailing tokens + any still-open
+                                 * outer depth of the list's indent block. */
+                                uint32_t depth = 1;
+                                while (depth > 0 && !at(p, TOK_EOF)) {
+                                    if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                                    else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+                                    else                        { advance(p); }
+                                }
+                            } else {
+                                /* Non-list / non-template: absorb + skip. */
+                                uint32_t depth = 1;
+                                while (depth > 0 && !at(p, TOK_EOF)) {
+                                    if (at(p, TOK_INDENT))      { depth++; advance(p); }
+                                    else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
+                                    else                        { advance(p); }
+                                }
                             }
                         }
                         ast_list_push(p->arena, &cb->as.content_block.items, ci);
@@ -1683,6 +1762,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                 ci->as.content_item.kind = "raw";
                 ci->as.content_item.label = NULL;
                 ci->as.content_item.data_expr = NULL;
+                ci->as.content_item.item_binder = NULL;
+                ast_list_init(&ci->as.content_item.item_body);
                 ast_node_t *expr = parse_expr_prec(p, 0);
                 ci->as.content_item.action_expr = expr;
                 ast_list_push(p->arena, &cb->as.content_block.items, ci);
