@@ -45,8 +45,10 @@ fn length_acc (xs, acc) =
   let ok_mu  = is_even(2000) and is_odd(1999)
            and is_even(3000) and (not is_odd(3000))
 
-  -- List walk: a 1000-element list.
-  let big    = list.map(0..1000, n -> n)
+  -- List walk: a 1000-element list. Uses list.tabulate (spec §11.2)
+  -- rather than `0..1000` — spec §2.9 ranges are pattern/@config
+  -- primitives, not iterables (concept #64).
+  let big    = list.tabulate(1000, n -> n)
   let ok_len = length_acc(big, 0) == 1000
 
   let ok = ok_cd and ok_st and ok_mu and ok_len

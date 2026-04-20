@@ -1217,6 +1217,40 @@ static deck_value_t *b_list_partition(deck_value_t **args, uint32_t n, deck_inte
     return t;
 }
 
+/* Spec §11.2: list.tabulate(n, fn: int -> T) -> [T]. Builds a list by
+ * calling `fn(i)` for `i` in `0..n-1`. Common pattern for "give me a
+ * list of N things" without abusing the spec §2.9 range literal as a
+ * collection (ranges are pattern-guard / @config primitives, not
+ * iterables — concept #64). */
+static deck_value_t *b_list_tabulate(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT ||
+        !args[1] || args[1]->type != DECK_T_FN) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "list.tabulate(n, fn)"); return NULL;
+    }
+    int64_t L = args[0]->as.i;
+    if (L < 0) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "list.tabulate: negative count"); return NULL;
+    }
+    if (L > 65536) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "list.tabulate: count > 65536"); return NULL;
+    }
+    deck_value_t *out = deck_new_list((uint32_t)L);
+    if (!out) return NULL;
+    for (int64_t i = 0; i < L; i++) {
+        deck_value_t *iv = deck_new_int(i);
+        if (!iv) { deck_release(out); return NULL; }
+        deck_value_t *callargs[1] = { iv };
+        deck_value_t *r = call_fn_value_c(c, args[1], callargs, 1);
+        deck_release(iv);
+        if (!r) { deck_release(out); return NULL; }
+        deck_list_push(out, r);
+        deck_release(r);
+    }
+    return out;
+}
+
 /* list.unique — returns [T] with duplicates removed (first occurrence wins).
  * O(n²) via values_equal; fine for small lists. */
 static deck_value_t *b_list_unique(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -4996,6 +5030,7 @@ static const builtin_t BUILTINS[] = {
     { "list.flat_map",          b_list_flat_map,     2, 2 },
     { "list.partition",         b_list_partition,    2, 2 },
     { "list.unique",            b_list_unique,       1, 1 },
+    { "list.tabulate",          b_list_tabulate,     2, 2 },
     { "list.sort",              b_list_sort,         1, 1 },
     { "list.min_by",            b_list_min_by,       2, 2 },
     { "list.max_by",            b_list_max_by,       2, 2 },

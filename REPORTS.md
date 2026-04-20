@@ -1922,3 +1922,29 @@ A→B shape: scalars compare correctly → "equality works" → assumption break
 - Any annex that compares records, lists, or option-returning calls against literals.
 
 **Why this matters (Deck minimalism + spec-honoring)**: equality is the most fundamental observable. Having `==` lie about compound values for years would erode every higher-order assertion — list filtering (`list.contains`), map lookup matching, pattern-match guards, every `if/then/else` branch on a structural comparison. The Optional↔tuple bridge in particular embodies the user's "follow the spirit of the spec" rule: spec §3.7 says `:some v` is a value, concept #11 made the literal syntax produce a tuple, so the runtime's older Optional repr must transparently compare equal — anything else creates a Schrödinger's value where the source of the construction (literal vs builtin) determines equality semantics.
+
+### Concept #64 — `list.tabulate` impl + spec §2.9 ranges aren't iterables
+
+**Drift on two axes**:
+
+1. **`list.tabulate(n, fn)`** is declared in spec §11.2 line 842 but was missing from the runtime BUILTINS table — listed as deferred at concept #43 close-out. Common pattern for "build a list of N things" without abusing other primitives.
+
+2. **`lang_tco_deep.deck:49`** used `list.map(0..1000, n -> n)` to build a 1000-element list. But spec §2.9 line 121 explicitly says: *"Range literals are valid only in `@config range:` and pattern guards. Not a collection type."* So the fixture invented an iteration semantics for ranges that the spec doesn't grant — and the lexer doesn't support `..` as an operator anyway (lexes as `INT DOT DOT INT`, parser fails at the second DOT). Triple gap: spec doesn't allow it, lexer can't tokenize it, runtime wouldn't iterate it.
+
+The fixture's intent (`length_acc` walking a 1000-element list to test TCO) is sound; only the construction was non-spec. Per standing rules: spec wins; rewrite the fixture to use the spec-canonical builder.
+
+**Fix applied**:
+
+- 2026-04-20 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c`:
+  * `b_list_tabulate(n, fn)` — int+fn type-checked args; iterates `i` from `0` to `n-1`, calls `fn(i)`, pushes result. Cap at 65 536 elements to bound runaway allocations (consistent with text/bytes ceilings from concepts #26+).
+  * Registered `{ "list.tabulate", b_list_tabulate, 2, 2 }` in the BUILTINS table.
+- 2026-04-20 · layer 6 fixture · `apps/conformance/lang_tco_deep.deck:49` — `list.map(0..1000, n -> n)` → `list.tabulate(1000, n -> n)` with an inline comment pointing at spec §2.9 to record the rationale.
+
+**Verification**: `idf.py build` succeeds. The fixture now exercises TCO via list-walk on a properly-constructed list; if `length_acc(big, 0) == 1000` it confirms both list construction and the cons-pattern + tail-recursion path together.
+
+**What this still leaves open** (separate future concept):
+
+- A range literal `n..m` could be added as proper syntax later. If/when added, spec §2.9 should be updated to allow ranges as iterables (iterating produces an integer sequence) — that's a spec design decision, not a runtime gap. Current direction (per Deck minimalism): keep ranges as pattern/config primitives and use `list.tabulate` / explicit list literals for iteration.
+- `list.scan` (concept #61) and `list.tabulate` (this concept) both still lack fixture coverage — `lang_list_basic.deck` should be deepened in a future session.
+
+**Why this matters (A→B)**: this is the inverse of the usual pattern — instead of "fixture asserts spec-canonical, runtime missing", here the fixture *invented* a non-spec semantic and the runtime didn't support it (correctly). The fix is to teach the fixture that the spec is authoritative, not extend the runtime to humor an off-spec test. Same combinatorial-audit rule, applied in the opposite direction.
