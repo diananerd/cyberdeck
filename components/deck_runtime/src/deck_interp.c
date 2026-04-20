@@ -5421,6 +5421,20 @@ static bool match_pattern(deck_arena_t *a, deck_env_t *env,
             if (strcmp(ctor, "[]") == 0 && pat->as.pat_variant.n_subs == 0) {
                 return val->type == DECK_T_LIST && val->as.list.len == 0;
             }
+            /* Spec §8.2 tuple pattern: `(p1, …, pN)` matches DECK_T_TUPLE
+             * of exact arity N, binding each sub-pattern to the
+             * corresponding element. Arity mismatch is a non-match, not
+             * an error — a later arm (or `_`) may still cover the value. */
+            if (strcmp(ctor, "(,)") == 0) {
+                if (val->type != DECK_T_TUPLE) return false;
+                if (val->as.tuple.arity != pat->as.pat_variant.n_subs) return false;
+                for (uint32_t i = 0; i < pat->as.pat_variant.n_subs; i++) {
+                    if (!match_pattern(a, env, pat->as.pat_variant.subs[i],
+                                       val->as.tuple.items[i]))
+                        return false;
+                }
+                return true;
+            }
             /* Spec §8 cons pattern: `head :: tail` */
             if (strcmp(ctor, "::") == 0 && pat->as.pat_variant.n_subs == 2 &&
                 val->type == DECK_T_LIST && val->as.list.len > 0) {

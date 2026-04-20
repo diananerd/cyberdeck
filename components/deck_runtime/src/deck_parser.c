@@ -892,6 +892,45 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             wrap->as.pat_lit = atom_lit;
             return wrap;
         }
+        case TOK_LPAREN: {
+            /* Spec §8.2 — tuple pattern `(p1, p2, …, pN)`. Encoded as a
+             * variant pattern with ctor "(,)" and one sub per element;
+             * matcher (interp) checks arity against DECK_T_TUPLE. A lone
+             * `(pat)` is a parenthesised pattern (returns the inner),
+             * and `()` is the unit pattern (matches DECK_T_UNIT). */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            advance(p); /* ( */
+            if (at(p, TOK_RPAREN)) {
+                advance(p);
+                ast_node_t *atom_lit = ast_new(p->arena, AST_LIT_UNIT, ln, co);
+                if (!atom_lit) return NULL;
+                ast_node_t *wrap = ast_new(p->arena, AST_PAT_LIT, ln, co);
+                if (!wrap) return NULL;
+                wrap->as.pat_lit = atom_lit;
+                return wrap;
+            }
+            ast_node_t *subs[16];
+            uint32_t n_subs = 0;
+            for (;;) {
+                if (n_subs >= 16) {
+                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                            "tuple pattern: too many elements (max 16)");
+                    return NULL;
+                }
+                ast_node_t *s = parse_pattern(p); if (!s) return NULL;
+                subs[n_subs++] = s;
+                if (!at(p, TOK_COMMA)) break;
+                advance(p);
+            }
+            if (!expect(p, TOK_RPAREN, "expected ')' in tuple pattern")) return NULL;
+            if (n_subs == 1) return subs[0];   /* parenthesised pattern */
+            ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+            if (!n) return NULL;
+            n->as.pat_variant.ctor   = deck_intern_cstr("(,)");
+            n->as.pat_variant.subs   = deck_arena_memdup(p->arena, subs, n_subs * sizeof(ast_node_t *));
+            n->as.pat_variant.n_subs = n_subs;
+            return n;
+        }
         default:
             set_err(p, DECK_LOAD_PARSE_ERROR, "expected pattern");
             return NULL;
