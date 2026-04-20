@@ -201,6 +201,91 @@ static deck_value_t *b_info_free_heap(deck_value_t **a, uint32_t n, deck_interp_
 { (void)a; (void)n; (void)c; return deck_new_int((int64_t)deck_sdi_info_free_heap()); }
 static deck_value_t *b_info_deck_level(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 { (void)a; (void)n; (void)c; return deck_new_int(deck_sdi_info_deck_level()); }
+
+/* Concept #39 — system.info completeness (spec §3).
+ * device_model / os_name / os_version are platform-identity constants —
+ * hardcoded here until the SDI vtable grows them (future concept). The
+ * Waveshare ESP32-S3-Touch-LCD-4.3 is the only supported board today. */
+static deck_value_t *b_info_device_model(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{ (void)a; (void)n; (void)c; return deck_new_str_cstr("ESP32-S3-Touch-LCD-4.3"); }
+static deck_value_t *b_info_os_name(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{ (void)a; (void)n; (void)c; return deck_new_str_cstr("CyberDeck"); }
+static deck_value_t *b_info_os_version(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    const char *v = deck_sdi_info_runtime_version();
+    return deck_new_str_cstr(v ? v : "0.0.0");
+}
+
+/* Walk the current module for @app.<field>. Used by app_id/app_version. */
+static const char *info_app_field(deck_interp_ctx_t *c, const char *field)
+{
+    if (!c || !c->module || c->module->kind != AST_MODULE) return NULL;
+    for (uint32_t i = 0; i < c->module->as.module.items.len; i++) {
+        const ast_node_t *it = c->module->as.module.items.items[i];
+        if (!it || it->kind != AST_APP) continue;
+        for (uint32_t f = 0; f < it->as.app.n_fields; f++) {
+            const ast_app_field_t *fld = &it->as.app.fields[f];
+            if (fld->name && strcmp(fld->name, field) == 0 &&
+                fld->value && fld->value->kind == AST_LIT_STR) {
+                return fld->value->as.s;
+            }
+        }
+        break;
+    }
+    return NULL;
+}
+
+static deck_value_t *b_info_app_id(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n;
+    const char *id = info_app_field(c, "id");
+    if (!id) id = deck_sdi_info_current_app_id();
+    return deck_new_str_cstr(id ? id : "");
+}
+
+static deck_value_t *b_info_app_version(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n;
+    const char *v = info_app_field(c, "version");
+    return deck_new_str_cstr(v ? v : "0.0.0");
+}
+
+static deck_value_t *b_info_uptime(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* Duration is in seconds per concept #32's canonical unit. */
+    return deck_new_int(deck_sdi_time_monotonic_us() / 1000000);
+}
+
+static deck_value_t *b_info_cpu_freq(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* ESP32-S3 default is 240 MHz; runtime menuconfig may lower it to 160/80.
+     * Using rtc_clk_cpu_freq_get() would need another include — keep simple. */
+    return deck_new_int(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+}
+
+/* Versions record — aggregate envelope per spec §15 @type Versions. */
+static deck_value_t *b_info_versions(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n;
+    deck_value_t *m = deck_new_map(16);
+    if (!m) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "system.info.versions alloc"); return NULL; }
+    #define PUT_I(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = deck_new_int(v); deck_map_put(m, kk, vv); deck_release(kk); deck_release(vv); } while (0)
+    #define PUT_S(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = deck_new_str_cstr(v ? v : ""); deck_map_put(m, kk, vv); deck_release(kk); deck_release(vv); } while (0)
+    PUT_I("edition_current", deck_sdi_info_edition());
+    PUT_I("deck_os",         deck_sdi_info_deck_os());
+    PUT_S("runtime",         deck_sdi_info_runtime_version());
+    PUT_S("runtime_build",   "dev");
+    PUT_I("sdi_major",       1);
+    PUT_I("sdi_minor",       0);
+    PUT_S("app_id",          info_app_field(c, "id"));
+    PUT_S("app_version",     info_app_field(c, "version"));
+    #undef PUT_I
+    #undef PUT_S
+    return m;
+}
 static deck_value_t *b_text_upper(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -3213,9 +3298,18 @@ static const builtin_t BUILTINS[] = {
     { "time.ago",               b_time_ago,          1, 1 },
 
     /* system.info */
-    { "system.info.device_id",  b_info_device_id,    0, 0 },
-    { "system.info.free_heap",  b_info_free_heap,    0, 0 },
-    { "system.info.deck_level", b_info_deck_level,   0, 0 },
+    { "system.info.device_id",    b_info_device_id,    0, 0 },
+    { "system.info.free_heap",    b_info_free_heap,    0, 0 },
+    { "system.info.deck_level",   b_info_deck_level,   0, 0 },
+    /* Concept #39 — rest of §3 system.info surface. */
+    { "system.info.device_model", b_info_device_model, 0, 0 },
+    { "system.info.os_name",      b_info_os_name,      0, 0 },
+    { "system.info.os_version",   b_info_os_version,   0, 0 },
+    { "system.info.app_id",       b_info_app_id,       0, 0 },
+    { "system.info.app_version",  b_info_app_version,  0, 0 },
+    { "system.info.uptime",       b_info_uptime,       0, 0 },
+    { "system.info.cpu_freq_mhz", b_info_cpu_freq,     0, 0 },
+    { "system.info.versions",     b_info_versions,     0, 0 },
 
     /* text — spec 03-deck-os §3 (post-#15a unification on `len`).
      * `len` / `starts` / `ends` match §11.2's list.len convention;

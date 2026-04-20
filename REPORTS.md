@@ -1279,3 +1279,21 @@ Adjacent complication: `time.date_parts` used string keys (matching the JSON/que
 **Why keep the parameter as `deck_value_t *` instead of `const deck_value_t *`**: the map is temporarily bound into the handler env; `deck_map_get` / `deck_env_bind` don't accept `const`-qualified values. No mutation happens, but the retain/release refcount path needs the mutable pointer.
 
 **A→B note**: this is a case where the parser was taught a shape the runtime couldn't deliver. Concept #13 said explicitly "runtime dispatch is now the only remaining hurdle"; concept #38 closes that hurdle. Every future session that adds `@on` handlers in an annex or app now has working end-to-end plumbing.
+
+### Concept #39 — system.info completeness (spec §3)
+
+**Drift**: runtime had 3 `system.info.*` builtins; spec declares 11 (plus the `Versions` record return type). `os_info.deck` tests `device_model / os_name / os_version / app_id / app_version / uptime / cpu_freq_mhz / versions()` — all silent-misses.
+
+**Fix applied (layer 4 runtime)**:
+
+- 2026-04-19 · layer 4 edit · `src/deck_interp.c` — eight new 0-arity builtins. AST_DOT's cap-dispatch path auto-calls them, so `system.info.uptime` evaluates as a value rather than needing `()` call syntax.
+  * `device_model` / `os_name` — hardcoded platform identity (`"ESP32-S3-Touch-LCD-4.3"` / `"CyberDeck"`). Future concept moves them to SDI so alternative boards get their own strings.
+  * `os_version` — delegates to SDI `runtime_version`.
+  * `app_id` / `app_version` — walks the current module's `@app` fields (helper `info_app_field`). Falls back to SDI's `current_app_id` if no module context.
+  * `uptime` — `monotonic_us / 1_000_000` in canonical Duration seconds (concept #32 unit).
+  * `cpu_freq_mhz` — reads `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ` menuconfig symbol (240 on ESP32-S3 default). Dynamic CPU freq via `rtc_clk_cpu_freq_get_config()` is a future refinement.
+  * `versions()` — returns a `{str: any}` record matching spec §15 `@type Versions` (edition_current, deck_os, runtime, runtime_build, sdi_major, sdi_minor, app_id, app_version). Fields accessed via concept #33 dot-lookup.
+
+**Why no SDI extension for device_model/os_name**: kept the concept focused. A future platform port (alternative ESP32 board, emulator) would need these as SDI vtable entries — flagged for that concept, not this one.
+
+**Running tally**: `system.info.*` now at 11/11 (minus `versions().drivers/extensions` rich sub-lists, which need Driver registry iteration — separate concept). Six capabilities complete: text, time, nvs, fs, math, system.info.
