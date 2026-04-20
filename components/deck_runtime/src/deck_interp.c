@@ -4455,6 +4455,53 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
             node = deck_dvc_node_new(&s_bui_arena, DVC_DIVIDER);
         } else if (kind && strcmp(kind, "spacer") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_SPACER);
+        } else if (kind && (strcmp(kind, "toggle") == 0 ||
+                             strcmp(kind, "range") == 0 ||
+                             strcmp(kind, "choice") == 0 ||
+                             strcmp(kind, "multiselect") == 0 ||
+                             strcmp(kind, "text") == 0 ||
+                             strcmp(kind, "password") == 0 ||
+                             strcmp(kind, "pin") == 0 ||
+                             strcmp(kind, "date") == 0 ||
+                             strcmp(kind, "search") == 0 ||
+                             strcmp(kind, "confirm") == 0 ||
+                             strcmp(kind, "share") == 0 ||
+                             strcmp(kind, "create") == 0)) {
+            /* Concept #55 — input intents (§12.4). Minimal pass-1 renderers:
+             * map to the spec-canonical DVC type with a label string and, if
+             * the action is Machine.send(:evt), bind an intent. Detailed
+             * per-widget config (options/min/max/placeholder/etc.) is a
+             * future concept — the bridge will see the right node type and
+             * can infer a default-styled widget. */
+            deck_dvc_type_t t = DVC_LABEL;
+            if      (strcmp(kind, "toggle")      == 0) t = DVC_TOGGLE;
+            else if (strcmp(kind, "range")       == 0) t = DVC_SLIDER;
+            else if (strcmp(kind, "choice")      == 0) t = DVC_CHOICE;
+            else if (strcmp(kind, "multiselect") == 0) t = DVC_CHOICE;
+            else if (strcmp(kind, "text")        == 0) t = DVC_TEXT;
+            else if (strcmp(kind, "password")    == 0) t = DVC_PASSWORD;
+            else if (strcmp(kind, "pin")         == 0) t = DVC_PIN;
+            else if (strcmp(kind, "date")        == 0) t = DVC_DATE_PICKER;
+            else if (strcmp(kind, "search")      == 0) t = DVC_TEXT;
+            else if (strcmp(kind, "confirm")     == 0) t = DVC_CONFIRM;
+            else if (strcmp(kind, "share")       == 0) t = DVC_SHARE;
+            else if (strcmp(kind, "create")      == 0) t = DVC_TRIGGER;
+            node = deck_dvc_node_new(&s_bui_arena, t);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            if (node && app && action) {
+                const char *ev = content_extract_event(action);
+                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
+                    uint32_t id = app->next_intent_id++;
+                    app->intents[id].id = id;
+                    app->intents[id].event = ev;
+                    ast_node_t *pe = content_extract_payload_expr(action);
+                    if (pe) {
+                        deck_value_t *pv = content_eval_expr(c, env, pe);
+                        if (pv) app->intents[id].payload = pv;
+                    }
+                    node->intent_id = id;
+                }
+            }
         } else if (kind && strcmp(kind, "loading") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
         } else if (kind && strcmp(kind, "label") == 0) {

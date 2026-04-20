@@ -1628,3 +1628,56 @@ The launcher annex example — tap app → open the app — is now expressible a
 - **Rich `status` with the `progress`-shape binding** — spec §12 allows `status expr label: str`, which maps to a label+value+badge triple.
 
 Together these cover the most common annex content shapes. Combined with concepts #45–#51, declarative content pipeline handles: list scalars, list templates with per-item triggers + payload, form shells, markdown/media/progress/status/divider/spacer, label, rich_text, trigger, navigate, loading, error, group. Missing by design: toggle/range/choice/multiselect/pin/text/password/date/confirm/create/search/share intents (each needs specific bridge wiring for input widgets) — those track as concept #58+.
+
+### Concept #55 — input intents in walker (toggle / range / text / password / pin / date / choice / multiselect / confirm / share / create / search)
+
+**Drift**: spec §12.4 declares 12+ input intent primitives for user-facing widgets. The walker knew about `trigger` and `navigate` but dropped every other intent silently. `search`, `text`, `password`, `toggle`, `choice`, `confirm` — every form-shaped annex surface rendered blank.
+
+**Fix applied (walker only)**:
+
+- 2026-04-19 · layer 4 walker · `src/deck_interp.c` — one unified branch for all input intents. Maps each `kind` to its spec-canonical DVC type:
+
+| kind | DVC type |
+|---|---|
+| `toggle` | `DVC_TOGGLE` |
+| `range` | `DVC_SLIDER` |
+| `choice` | `DVC_CHOICE` |
+| `multiselect` | `DVC_CHOICE` (flags would distinguish in DL3) |
+| `text` / `search` | `DVC_TEXT` |
+| `password` | `DVC_PASSWORD` |
+| `pin` | `DVC_PIN` |
+| `date` | `DVC_DATE_PICKER` |
+| `confirm` | `DVC_CONFIRM` |
+| `share` | `DVC_SHARE` |
+| `create` | `DVC_TRIGGER` (button surface) |
+
+Each picks up `label` from the string literal, optional `on -> Machine.send(:evt, payload)` action → intent binding (re-using concept #47 + #51 infra).
+
+**Deferred**:
+- **Per-widget attrs**: `options: [...]`, `min: N max: M`, `placeholder: "..."`, `value: expr`, `state: bool`, `mask: "..."` — the parser captures them as raw tokens; the walker doesn't split them out yet. Each widget will render, but without its specific config (options list, bounds, etc.). Follow-up concept to enrich the item AST with option-bag fields.
+- **Bidirectional value binding**: spec expects `toggle :name state: x` to reflect a value in the app state and update it on interaction. Today the value round-trip is one-way (action → event). Reactive state sync needs streams (#56+).
+- **Field aggregation inside `form`**: fields are independent intents today; a `form on submit` shell gathers no payload. Requires a session-scoped field-value table + submit dispatch that packages the map. Defer.
+
+### Concept #56 — @stream / @task accepted at parse, no-op at runtime (pragmatic close-out)
+
+**Drift**: concept #21 already parse-and-discards top-level `@stream` and `@task` declarations. Full reactive-stream execution + task scheduling is each a major runtime subsystem (dependency tracking for streams; FreeRTOS task spawning + lifecycle for tasks). Neither is essential for a user-interactive annex demo — apps can declare streams/tasks and the runtime accepts the declaration without implementing side effects.
+
+**Fix**: no code change — confirmation that pass-1 gap is closed at the parser level and runtime treats these as no-ops without erroring. Future concepts (#59+) will implement actual execution when the reactive framework lands.
+
+### Session-wide gap-closing summary
+
+Of the deferred items flagged at concept #51 close-out:
+
+| Gap | Concept | Status |
+|---|---|---|
+| `empty ->` list fallback | #52 | ✅ closed |
+| `has_more:` pagination | — | deferred — needs reactive / cursor model |
+| form/field aggregation (shell) | #53 | ✅ shell renders; per-field aggregation deferred |
+| markdown/media/progress/status/divider/spacer | #54 | ✅ closed |
+| input intents (toggle/range/choice/text/etc.) | #55 | ✅ closed (minimal) |
+| @stream runtime | #56 | declared-no-op; full runtime deferred |
+| @task runtime | #56 | declared-no-op; full runtime deferred |
+| non-Machine.send actions | — | deferred — needs captured-action snapshotting |
+| lazy payload eval | — | deferred — edge case, render-time eval fine for most |
+
+Annex apps can now exercise the full content primitive catalog at coarse level: render every spec §12 primitive, iterate over lists with per-item templates + payload-bearing triggers, emit form shells with submit intents, and declare @stream / @task without errors. What's left is depth (bidirectional binding, field aggregation, reactive streams, task scheduling) rather than breadth.
