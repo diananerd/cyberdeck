@@ -312,6 +312,46 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
 static bool scan_string(deck_lexer_t *lx, deck_token_t *out)
 {
     uint32_t line = lx->line, col = lx->col;
+    /* Spec §2.7 — `"""..."""` multi-line raw string. Opening triple
+     * quote is matched by a closing triple quote anywhere in the source;
+     * newlines and embedded single `"` are preserved verbatim. No escape
+     * processing and no interpolation (§2.6 restricts interpolation to
+     * single-quoted strings). */
+    if (lx->pos + 2 < lx->len &&
+        lx->src[lx->pos] == '"' &&
+        lx->src[lx->pos + 1] == '"' &&
+        lx->src[lx->pos + 2] == '"') {
+        advance(lx); advance(lx); advance(lx); /* opening """ */
+        char cooked[2048]; uint32_t k = 0;
+        for (;;) {
+            if (lx->pos >= lx->len) {
+                set_error(lx, "unterminated triple-quoted string");
+                emit(out, TOK_ERROR, line, col);
+                return true;
+            }
+            if (lx->pos + 2 < lx->len &&
+                lx->src[lx->pos] == '"' &&
+                lx->src[lx->pos + 1] == '"' &&
+                lx->src[lx->pos + 2] == '"') {
+                advance(lx); advance(lx); advance(lx); /* closing """ */
+                break;
+            }
+            int ch = peek(lx);
+            if (k + 1 >= sizeof(cooked)) {
+                set_error(lx, "triple-quoted string too long");
+                emit(out, TOK_ERROR, line, col);
+                return true;
+            }
+            if (ch == '\n') {
+                lx->line++; lx->col = 0;
+            }
+            cooked[k++] = (char)advance(lx);
+        }
+        emit(out, TOK_STRING, line, col);
+        out->text     = deck_intern(cooked, k);
+        out->text_len = k;
+        return true;
+    }
     advance(lx); /* opening " */
 
     /* Two scratch buffers: cooked (escapes processed) for plain strings,
