@@ -629,6 +629,19 @@ static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec)
     ast_node_t *lhs = parse_primary(p);
     if (!lhs) return NULL;
     for (;;) {
+        /* Indent-continuation: `let X = A\n   && B` — the lexer leaves
+         * only a bare NEWLINE before the binop (INDENT suppressed by
+         * handle_line_start continuation detection). Peek across the
+         * newline; if the next token is a binop we continue the chain. */
+        if (at(p, TOK_NEWLINE)) {
+            binop_info_t peek_info;
+            if (binop_for(peek_next_tok(p), &peek_info) &&
+                peek_info.prec >= min_prec) {
+                advance(p);   /* consume the NEWLINE */
+            } else {
+                break;
+            }
+        }
         binop_info_t info;
         if (!binop_for(p->cur.type, &info) || info.prec < min_prec) break;
         int next_min = info.right_assoc ? info.prec : info.prec + 1;

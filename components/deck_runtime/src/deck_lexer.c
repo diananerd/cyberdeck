@@ -476,6 +476,38 @@ static bool handle_line_start(deck_lexer_t *lx, deck_token_t *out)
         return false;
     }
 
+    /* Continuation lines: a line whose first non-space token is a binary
+     * operator suffix (`&&`, `||`, `++`, `|>`, `and`, `or`, `|>?`) is a
+     * continuation of the previous line's expression. Suppress the
+     * NEWLINE/INDENT/DEDENT dance so the parser's binop loop sees the
+     * operator directly. Matches what annotated fixtures authored, and
+     * Python's behavior inside paren groups. */
+    {
+        const char *s = &lx->src[lx->pos];
+        size_t remain = lx->len - lx->pos;
+        bool is_cont = false;
+        if (remain >= 2 && (s[0] == '&' && s[1] == '&')) is_cont = true;
+        else if (remain >= 2 && (s[0] == '|' && s[1] == '|')) is_cont = true;
+        else if (remain >= 2 && (s[0] == '+' && s[1] == '+')) is_cont = true;
+        else if (remain >= 2 && (s[0] == '|' && s[1] == '>')) is_cont = true;
+        else if (remain >= 3 && strncmp(s, "and", 3) == 0 &&
+                 (remain == 3 || !((s[3] >= 'a' && s[3] <= 'z') ||
+                                    (s[3] >= 'A' && s[3] <= 'Z') ||
+                                    (s[3] >= '0' && s[3] <= '9') || s[3] == '_')))
+            is_cont = true;
+        else if (remain >= 2 && strncmp(s, "or", 2) == 0 &&
+                 (remain == 2 || !((s[2] >= 'a' && s[2] <= 'z') ||
+                                    (s[2] >= 'A' && s[2] <= 'Z') ||
+                                    (s[2] >= '0' && s[2] <= '9') || s[2] == '_')))
+            is_cont = true;
+        if (is_cont) {
+            /* Suppress the prior NEWLINE by signalling "no indent event":
+             * the main driver reads the binop token in the next cycle. */
+            lx->at_line_start = false;
+            return false;
+        }
+    }
+
     uint32_t cur = lx->indent_stack[lx->indent_top];
     if (spaces > cur) {
         if (lx->indent_top + 1 >= DECK_LEXER_MAX_INDENT) {
