@@ -54,6 +54,7 @@ typedef enum {
     TOK_ASSIGN, TOK_ARROW, TOK_FAT_ARROW,
     TOK_PIPE, TOK_PIPE_OPT, TOK_CONCAT,
     TOK_BAR,   /* Spec 01-deck-lang §8 — standalone `|` at start of match arm */
+    TOK_CONS,  /* Spec 01-deck-lang §8 — `::` list-cons pattern */
 
     /* Punctuation */
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACKET, TOK_RBRACKET,

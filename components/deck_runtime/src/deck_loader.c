@@ -404,6 +404,7 @@ static bool match_has_wildcard(const ast_node_t *m)
     bool has_some_with_binder = false, has_none = false;
     bool has_ok = false, has_err = false;
     bool has_true = false, has_false = false;
+    bool has_nil = false, has_cons = false;
     for (uint32_t i = 0; i < m->as.match.n_arms; i++) {
         const ast_node_t *pat = m->as.match.arms[i].pattern;
         const ast_node_t *guard = m->as.match.arms[i].guard;
@@ -414,12 +415,15 @@ static bool match_has_wildcard(const ast_node_t *m)
             if (pat->kind == AST_PAT_IDENT) return true;
         }
         /* Spec §8 — Optional `:some x` + `:none`, Result `:ok x` + `:err x`,
-         * and full `true`/`false` coverage are exhaustive without wildcard. */
+         * full `true`/`false` coverage, and list `[]` + `H :: T` are
+         * exhaustive without wildcard. */
         if (pat->kind == AST_PAT_VARIANT && pat->as.pat_variant.ctor) {
             const char *c = pat->as.pat_variant.ctor;
             if (strcmp(c, "some") == 0) has_some_with_binder = true;
             else if (strcmp(c, "ok") == 0) has_ok = true;
             else if (strcmp(c, "err") == 0) has_err = true;
+            else if (strcmp(c, "::") == 0) has_cons = true;
+            else if (strcmp(c, "[]") == 0) has_nil = true;
         }
         if (pat->kind == AST_PAT_LIT && pat->as.pat_lit) {
             const ast_node_t *lit = pat->as.pat_lit;
@@ -434,6 +438,7 @@ static bool match_has_wildcard(const ast_node_t *m)
     if (has_some_with_binder && has_none) return true;
     if (has_ok && has_err) return true;
     if (has_true && has_false) return true;
+    if (has_nil && has_cons) return true;
     return false;
 }
 

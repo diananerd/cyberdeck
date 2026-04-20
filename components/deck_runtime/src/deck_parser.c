@@ -695,7 +695,34 @@ ast_node_t *deck_parser_parse_expr(deck_parser_t *p)
  * Patterns + match / if
  * ================================================================ */
 
+static ast_node_t *parse_pattern_primary(deck_parser_t *p);
+
 static ast_node_t *parse_pattern(deck_parser_t *p)
+{
+    ast_node_t *head = parse_pattern_primary(p);
+    if (!head) return NULL;
+    /* Spec §8 — right-associative cons pattern `H :: T` destructures a
+     * non-empty list. Desugars to a variant pattern with ctor "::" and
+     * two sub-patterns so the matcher can handle it uniformly. */
+    if (at(p, TOK_CONS)) {
+        uint32_t ln = p->cur.line, co = p->cur.col;
+        advance(p);
+        ast_node_t *tail = parse_pattern(p);
+        if (!tail) return NULL;
+        ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+        if (!n) return NULL;
+        ast_node_t **subs = deck_arena_alloc(p->arena, sizeof(ast_node_t *) * 2);
+        if (!subs) return NULL;
+        subs[0] = head; subs[1] = tail;
+        n->as.pat_variant.ctor   = deck_intern_cstr("::");
+        n->as.pat_variant.subs   = subs;
+        n->as.pat_variant.n_subs = 2;
+        return n;
+    }
+    return head;
+}
+
+static ast_node_t *parse_pattern_primary(deck_parser_t *p)
 {
     /* DL2 F22 — variant patterns `some(x)`, `ok(v)`, etc. detected by
      * IDENT-or-KW-some followed by `(`. Treat TOK_KW_SOME as an ident
@@ -746,6 +773,20 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
             ast_node_t *wrap = mknode(p, AST_PAT_LIT); if (!wrap) return NULL;
             wrap->as.pat_lit = parse_primary(p);
             return wrap;
+        }
+        case TOK_LBRACKET: {
+            /* Spec §8 — empty-list pattern `[]`. Represent as a variant
+             * pattern with ctor "[]" and no sub-patterns; the matcher
+             * checks for an empty DECK_T_LIST. */
+            uint32_t ln = p->cur.line, co = p->cur.col;
+            advance(p);
+            if (!expect(p, TOK_RBRACKET, "expected ']' — only `[]` empty-list pattern supported at this layer")) return NULL;
+            ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+            if (!n) return NULL;
+            n->as.pat_variant.ctor   = deck_intern_cstr("[]");
+            n->as.pat_variant.subs   = NULL;
+            n->as.pat_variant.n_subs = 0;
+            return n;
         }
         case TOK_ATOM: {
             /* Spec 01-deck-lang §8 — atom variant pattern `:name binder`.

@@ -5295,10 +5295,31 @@ static bool match_pattern(deck_arena_t *a, deck_env_t *env,
              *                       constructor expression.
              *   :ctor x   (generic):  2-tuple (:ctor, payload). `ok`, `err`,
              *                       and every user-declared variant go here.
+             *   head :: tail:        ctor="::" — matches a non-empty list;
+             *                       binds head to list[0] and tail to
+             *                       list[1..] (spec §8 cons pattern).
              */
             if (!val) return false;
             const char *ctor = pat->as.pat_variant.ctor;
             if (!ctor) return false;
+            /* Spec §8 empty-list pattern: `[]` matches an empty list. */
+            if (strcmp(ctor, "[]") == 0 && pat->as.pat_variant.n_subs == 0) {
+                return val->type == DECK_T_LIST && val->as.list.len == 0;
+            }
+            /* Spec §8 cons pattern: `head :: tail` */
+            if (strcmp(ctor, "::") == 0 && pat->as.pat_variant.n_subs == 2 &&
+                val->type == DECK_T_LIST && val->as.list.len > 0) {
+                deck_value_t *head = val->as.list.items[0];
+                uint32_t tail_n = val->as.list.len - 1;
+                deck_value_t *tail = deck_new_list(tail_n);
+                if (!tail) return false;
+                for (uint32_t i = 0; i < tail_n; i++)
+                    deck_list_push(tail, val->as.list.items[i + 1]);
+                bool ok = match_pattern(a, env, pat->as.pat_variant.subs[0], head) &&
+                          match_pattern(a, env, pat->as.pat_variant.subs[1], tail);
+                deck_release(tail);
+                return ok;
+            }
             if (pat->as.pat_variant.n_subs != 1) return false;
             if (strcmp(ctor, "some") == 0 &&
                 val->type == DECK_T_OPTIONAL && val->as.opt.inner != NULL) {

@@ -69,6 +69,7 @@ static const char *const s_tok_names[TOK_COUNT] = {
     [TOK_PIPE_OPT]     = "|>?",
     [TOK_CONCAT]       = "++",
     [TOK_BAR]          = "|",
+    [TOK_CONS]         = "::",
     [TOK_LPAREN]       = "(",
     [TOK_RPAREN]       = ")",
     [TOK_LBRACKET]     = "[",
@@ -748,7 +749,12 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
         case '.': advance(lx); emit(out, TOK_DOT,      lx->line, lx->col); return true;
         case '?': advance(lx); emit(out, TOK_QUESTION, lx->line, lx->col); return true;
         case ':':
-            /* atom vs standalone colon */
+            /* `::` cons, `:ident` atom, else standalone `:`. */
+            if (peek_at(lx, 1) == ':') {
+                advance(lx); advance(lx);
+                emit(out, TOK_CONS, lx->line, lx->col);
+                return true;
+            }
             if (is_ident_start(peek_at(lx, 1))) return scan_atom(lx, out);
             advance(lx); emit(out, TOK_COLON, lx->line, lx->col); return true;
         default: break;
