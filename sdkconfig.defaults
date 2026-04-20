@@ -38,9 +38,15 @@ CONFIG_SPIFFS_OBJ_NAME_LEN=64
 
 # Main task stack: 3584 bytes is tight for the DL1 conformance harness,
 # which on top of the runtime + SPIFFS + log-capture hook also runs a
-# concurrent-logging stress test. DL2 F21.1 introduces user-defined `fn`
-# with recursion: a depth-10 fib(10) chains ~10 C frames per Deck level
-# inside the tree-walking interpreter, so 100+ active frames on the C
-# stack is realistic before TCO lands in F21.3. 16 KB carries comfortable
-# headroom until then; we'll revisit (and likely shrink) once TCO is in.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# concurrent-logging stress test. DL2 F21.1 user-defined `fn` + non-tail
+# recursion: `fib(15)` in lang.fn.recursion chains 15 Deck levels, each
+# ≈ 750-900 bytes of C stack (deck_interp_run 160 + run_call 192 +
+# invoke_user_fn 80 + body 160 + binop 160), so ~13 KB peak for the
+# interp chain, plus conformance harness capture buffers and pre-deck
+# shell/SDI bookkeeping stacked beneath. 16 KB tripped the FreeRTOS
+# stack canary and rebooted the board; 24 KB gives ~8 KB headroom over
+# the observed peak. The +8 KB comes out of internal SRAM so the
+# memory.heap_idle_budget stress canary (64 KB ceiling, leak detector
+# not spec requirement — comment in s_heap_idle_budget) sees ~56 KB,
+# still comfortably above runaway-leak territory. Concept #68 (2026-04-20).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=24576

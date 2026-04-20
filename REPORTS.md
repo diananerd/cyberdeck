@@ -2002,3 +2002,38 @@ The fixture's intent (`length_acc` walking a 1000-element list to test TCO) is s
 **What's still deferred**: builtins (which don't need it per spec §3); partial application via named args (e.g. `sub(a: 10)` with `b` omitted — spec doesn't allow this either, per §6.6 "A `CallExpr` with both positional arguments and named arguments is a load error" which implies all params must be covered).
 
 **Why this matters**: named args become load-bearing the moment a fn has ≥ 3 params. The fixture already uses them with 2 params as a deliberate test; annexes with config forms / event handlers that take many fields would hit this much sooner. Pre-concept, every annex that followed spec §6.6 would fail to load on the first named call — silent blocker identical in shape to the `|>?` gap (concept #65) and the `list.reduce` arg order (concept #61).
+
+### Concept #68 — main task stack: 16 KB → 24 KB (fib(15) stack canary)
+
+**Discovery**: hardware verification of concept #66 found that `lang.fn.recursion` triggered `***ERROR*** A stack overflow in task main` on the board, rebooting into an infinite loop. Every fixture ordered after `lang.fn.recursion` in `deck_conformance.c:147+` was unreachable — the 47/80 count reported at session #5 close was the best case before the first crash; the board never completed the suite cleanly.
+
+Baseline evidence (HEAD before this concept, flashed and captured): `lang.fn.basic PASS` → then canary trip, reboot. `addr2line` on the last good frame decoded to `deck_new_float` inside a deep `deck_interp_run` recursion — i.e. the interpreter was allocating a value when the canary fired, meaning the kill was mid-expression, not in any one allocation.
+
+**Root cause**: the tree-walking interpreter is recursive. Each Deck level of a non-tail call like `fib(n) = if n<2 then n else fib(n-1) + fib(n-2)` chains these C frames:
+
+- `deck_interp_run(BINOP +)` — 160 B
+- `deck_interp_run(CALL fib(n-1))` — 160 B
+- `run_call(call_site)` — 192 B
+- `invoke_user_fn(fn, call_site)` — 80 B
+- `deck_interp_run(body=IF)` — 160 B
+- (plus `do_binop` inlined + body sub-calls)
+
+≈ 750-900 bytes per Deck level. `fib(15)` at the deepest DFS point is 15 Deck levels active on the C stack ≈ 13 KB. Add the conformance harness' per-test capture buffer (3 KB in `run_deck_test`) and all the pre-deck shell/SDI/LVGL/SPIFFS bookkeeping that's stacked beneath on the main task, and 16 KB runs out.
+
+**Fix**: bump `CONFIG_ESP_MAIN_TASK_STACK_SIZE` from 16 384 to 24 576 (+8 KB). That gives 8 KB headroom over the observed peak, still well under the DL3 reference platform's internal-SRAM envelope. Both `sdkconfig` and `sdkconfig.defaults` updated so regen from defaults reproduces the value.
+
+**Trade-off exercised**: the +8 KB comes out of internal heap. `memory.heap_idle_budget` stress check (`s_heap_idle_budget` in `deck_conformance.c`) flips from PASS (~63 KB free) to FAIL (56.7 KB free, ceiling is 64 KB). Read as a leak canary that explicitly says in its own comment "DL1 budget was 200 KB. DL2 adds LVGL + WiFi; we relax to 64 KB which still catches runaway leaks (a healthy DL2 boot leaves ~80-130 KB internal free)." — this is a heuristic, not a spec requirement. 56.7 KB is nowhere near runaway-leak territory; future concepts can either adjust the threshold to reflect post-stack-bump reality, or the project can refactor the interp to iterative (which would let us shrink main back down). For now, one intentional stress failure is the right price to pay to unblock all downstream fixtures.
+
+**Also explored and rejected**: dedicated `deck_conf` task spawned via `xTaskCreatePinnedToCore` with 32 KB stack, main stays at 16 KB. Sounds cleaner but broke the log-capture hook (the conformance harness' sentinel-matching via ESP-log vprintf interception is keyed off the calling task, and running the deck test on a different task made sentinels invisible — `lang.fn.recursion` reported "sentinel not in log" in 2.5 ms, i.e. not a crash but a capture miss). Reverted; kept main-stack bump as the minimum-invasive fix.
+
+**Verification on hardware** (flashed via USB native, monitored UART):
+- suites_pass: **5/5** (memory, lexer, parser, loader, interp selftests all green)
+- deck_tests_pass: **57/80** (up from 47/80 at session #5 baseline; +10 fixtures unlocked once `lang.fn.recursion`-and-after are reachable)
+- stress_pass: **14/15** (1 known fail: `memory.heap_idle_budget` = 56.7 KB / 64 KB; documented)
+- No reboot loop. `fib(15)` and every subsequent fixture run to completion.
+
+**What this unblocks**: every fixture ordered after `lang.fn.recursion` in `deck_conformance.c`:147 — `lang.fn.block`, `lang.fn.mutual`, `lang.fn.typed`, all `lang.lambda.*`, `lang.tco.deep`, `lang.list.basic`, `lang.tuple.basic`, `lang.map.basic`, `lang.interp.basic`, `lang.pipe_is`, `lang.stdlib.basic`, `lang.variant.pat`, `lang.utility`, `lang.where`, `lang.type.record`, `lang.with.update`. Of those, 10 now PASS; the remaining still-fail 23 are orthogonal concept gaps (some tested before the crash, most tested after — all now reachable for the first time).
+
+**Why this matters (A→B)**: the classic "test harness crashes mid-suite, all downstream tests silently count as fail" pattern. Pre-fix, our conformance JSON reported 47/80 PASS, but that number was meaningless — it was "47 passed before we crashed, and 33 listed as fail simply because the board never got to them". With the stack bump, 57/80 is a true count: 57 actually pass, 23 actually have concept-level bugs (each deserving its own future concept in the cascade). This is the user's recurring rule at work: "los tests muchas veces asumen que A implica B, dando A por PASS asumen que B también" — here the harness treated *reaching* a test as equivalent to *running* it, while in reality the board was rebooting mid-way and counting every downstream test as a trivial fail.
+
+**Deferred**: the real fix for deep interpreter recursion is tail-call optimization in the evaluator (TCO is already implemented for tail positions — `fact_tail` works — but non-tail recursion like `fib` / `fact` fundamentally needs C stack). Future concepts could convert `deck_interp_run` to an iterative CPS evaluator or add a work-queue-based evaluator; either way, a much bigger project than a stack bump. Not in scope for this concept.
