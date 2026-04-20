@@ -1621,6 +1621,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                         ci->as.content_item.data_expr = NULL;
                         ci->as.content_item.item_binder = NULL;
                         ast_list_init(&ci->as.content_item.item_body);
+                        ast_list_init(&ci->as.content_item.empty_body);
+                        ci->as.content_item.on_submit = NULL;
                         /* Kind — first token on the line, if it's an ident/atom. */
                         if (at(p, TOK_IDENT)) {
                             ci->as.content_item.kind = p->cur.text;
@@ -1666,6 +1668,32 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                          * blocks are still absorbed without unpacking. */
                         if (at(p, TOK_INDENT)) {
                             advance(p);
+                            /* Concept #52 — optional `empty -> body` clause
+                             * consumed before the `item` template. The body
+                             * renders when the iterable is empty. */
+                            if (ci->as.content_item.kind &&
+                                strcmp(ci->as.content_item.kind, "list") == 0 &&
+                                at(p, TOK_IDENT) && p->cur.text &&
+                                strcmp(p->cur.text, "empty") == 0) {
+                                advance(p);
+                                if (at(p, TOK_ARROW)) advance(p);
+                                /* Simple case: single inline expression. */
+                                if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                                    ast_node_t *sub = mknode(p, AST_CONTENT_ITEM);
+                                    if (sub) {
+                                        sub->as.content_item.kind = "raw";
+                                        sub->as.content_item.label = NULL;
+                                        sub->as.content_item.data_expr = NULL;
+                                        sub->as.content_item.item_binder = NULL;
+                                        ast_list_init(&sub->as.content_item.item_body);
+                                        ast_list_init(&sub->as.content_item.empty_body);
+                                        sub->as.content_item.on_submit = NULL;
+                                        sub->as.content_item.action_expr = parse_expr_prec(p, 0);
+                                        ast_list_push(p->arena, &ci->as.content_item.empty_body, sub);
+                                    }
+                                }
+                                while (at(p, TOK_NEWLINE)) advance(p);
+                            }
                             bool is_list_template =
                                 ci->as.content_item.kind &&
                                 strcmp(ci->as.content_item.kind, "list") == 0 &&
@@ -1694,6 +1722,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                                         sub->as.content_item.data_expr = NULL;
                                         sub->as.content_item.item_binder = NULL;
                                         ast_list_init(&sub->as.content_item.item_body);
+                                        ast_list_init(&sub->as.content_item.empty_body);
+                                        sub->as.content_item.on_submit = NULL;
                                         if (at(p, TOK_IDENT)) {
                                             sub->as.content_item.kind = p->cur.text;
                                             advance(p);
@@ -1764,6 +1794,8 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
                 ci->as.content_item.data_expr = NULL;
                 ci->as.content_item.item_binder = NULL;
                 ast_list_init(&ci->as.content_item.item_body);
+                ast_list_init(&ci->as.content_item.empty_body);
+                ci->as.content_item.on_submit = NULL;
                 ast_node_t *expr = parse_expr_prec(p, 0);
                 ci->as.content_item.action_expr = expr;
                 ast_list_push(p->arena, &cb->as.content_block.items, ci);

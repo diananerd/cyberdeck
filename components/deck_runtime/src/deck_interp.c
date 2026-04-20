@@ -4231,6 +4231,26 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
                 if (v && v->type == DECK_T_LIST) {
                     bool has_template = ci->as.content_item.item_binder != NULL &&
                                         ci->as.content_item.item_body.len > 0;
+                    /* Concept #52 — if the list is empty and an `empty ->`
+                     * fallback body was parsed, render each fallback item as
+                     * a child of the list node. */
+                    if (v->as.list.len == 0 && ci->as.content_item.empty_body.len > 0) {
+                        for (uint32_t k = 0; k < ci->as.content_item.empty_body.len; k++) {
+                            const ast_node_t *sub = ci->as.content_item.empty_body.items[k];
+                            if (!sub || sub->kind != AST_CONTENT_ITEM || !sub->as.content_item.action_expr) continue;
+                            deck_value_t *lv = content_eval_expr(c, env, sub->as.content_item.action_expr);
+                            if (lv) {
+                                deck_dvc_node_t *emptylbl = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+                                if (emptylbl) {
+                                    char buf[128];
+                                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                                    if (s) deck_dvc_set_str(&s_bui_arena, emptylbl, "value", s);
+                                    deck_dvc_add_child(&s_bui_arena, node, emptylbl);
+                                }
+                                deck_release(lv);
+                            }
+                        }
+                    }
                     for (uint32_t j = 0; j < v->as.list.len; j++) {
                         deck_value_t *elem = v->as.list.items[j];
                         if (!elem) continue;
@@ -4364,6 +4384,77 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
              * empty group header. */
             node = deck_dvc_node_new(&s_bui_arena, DVC_GROUP);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+        } else if (kind && strcmp(kind, "form") == 0) {
+            /* Concept #53 — `form` primitive. Today renders an empty
+             * DVC_FORM shell. Full field aggregation + on-submit binding
+             * is spec §12.1 footprint; currently apps can emit the form
+             * wrapper and inline fields via other triggers. */
+            node = deck_dvc_node_new(&s_bui_arena, DVC_FORM);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            /* Bind submit intent if action is Machine.send(:evt). */
+            if (node && app && action) {
+                const char *ev = content_extract_event(action);
+                if (ev && app->next_intent_id < DECK_RUNTIME_MAX_INTENTS) {
+                    uint32_t id = app->next_intent_id++;
+                    app->intents[id].id = id;
+                    app->intents[id].event = ev;
+                    node->intent_id = id;
+                }
+            }
+        } else if (kind && strcmp(kind, "markdown") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_MARKDOWN);
+            if (node && (data || action)) {
+                ast_node_t *expr = data ? data : action;
+                deck_value_t *lv = content_eval_expr(c, env, expr);
+                if (lv) {
+                    char buf[512];
+                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                    if (s && *s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+                    deck_release(lv);
+                }
+            }
+        } else if (kind && strcmp(kind, "media") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_MEDIA);
+            if (node && (data || action)) {
+                ast_node_t *expr = data ? data : action;
+                deck_value_t *lv = content_eval_expr(c, env, expr);
+                if (lv) {
+                    char buf[256];
+                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                    if (s) deck_dvc_set_str(&s_bui_arena, node, "src", s);
+                    deck_release(lv);
+                }
+            }
+        } else if (kind && strcmp(kind, "progress") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_PROGRESS);
+            if (node && (data || action)) {
+                ast_node_t *expr = data ? data : action;
+                deck_value_t *lv = content_eval_expr(c, env, expr);
+                if (lv) {
+                    if (lv->type == DECK_T_FLOAT)
+                        deck_dvc_set_f64(&s_bui_arena, node, "value", lv->as.f);
+                    else if (lv->type == DECK_T_INT)
+                        deck_dvc_set_i64(&s_bui_arena, node, "value", lv->as.i);
+                    deck_release(lv);
+                }
+            }
+        } else if (kind && strcmp(kind, "status") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+            if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            if (node && (data || action)) {
+                ast_node_t *expr = data ? data : action;
+                deck_value_t *lv = content_eval_expr(c, env, expr);
+                if (lv) {
+                    char buf[128];
+                    const char *s = content_value_as_str(lv, buf, sizeof(buf));
+                    if (s) deck_dvc_set_str(&s_bui_arena, node, "value", s);
+                    deck_release(lv);
+                }
+            }
+        } else if (kind && strcmp(kind, "divider") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_DIVIDER);
+        } else if (kind && strcmp(kind, "spacer") == 0) {
+            node = deck_dvc_node_new(&s_bui_arena, DVC_SPACER);
         } else if (kind && strcmp(kind, "loading") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LOADING);
         } else if (kind && strcmp(kind, "label") == 0) {

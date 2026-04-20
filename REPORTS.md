@@ -1605,3 +1605,26 @@ render: dest state content walked + pushed to bridge
 ```
 
 The launcher annex example — tap app → open the app — is now expressible and runnable.
+
+### Concepts #52 + #53 + #54 — list.empty + form / markdown / media / progress / status / divider / spacer
+
+**Drift**: concept #46's walker had a handful of kinds; spec §12 declares over 20. Every missing kind rendered as nothing. Also `list xs \n empty -> "..."` had no fallback path for empty iterables, and `form on submit -> …` (the primary user-input aggregate primitive) had no mapping at all.
+
+**Fix applied (one combined commit)**:
+
+- 2026-04-19 · layer 4 AST · `content_item` gained `empty_body` (list for `empty ->` fallback) and `on_submit` (reserved for concept #55 when fields aggregate).
+- 2026-04-19 · layer 4 parser · list branch reads an optional `empty -> body` clause before the `item` template. Single-expression inline form captured as a `raw` sub-item.
+- 2026-04-19 · layer 4 walker · list path: when iterable is empty AND `empty_body` is populated, emit each fallback item as a child of the DVC_LIST. Otherwise proceed with per-item template or scalar rendering.
+- 2026-04-19 · layer 4 walker · new kind handlers:
+  * `form` → `DVC_FORM` with optional label; `-> Machine.send(:evt)` action registers a submit intent via the same intent table.
+  * `markdown` → `DVC_MARKDOWN` with `value` attr from the data expression.
+  * `media` → `DVC_MEDIA` with `src` attr.
+  * `progress` → `DVC_PROGRESS` with numeric `value`.
+  * `status` → `DVC_LABEL` with `label` + `value` pair.
+  * `divider` / `spacer` → `DVC_DIVIDER` / `DVC_SPACER` (no attrs).
+
+**Deferred**:
+- **Per-field aggregation inside `form`** — each `text :name` / `toggle :name` inside a form should contribute to a `{str: any}` payload that the submit handler receives. Today `form` renders its shell; fields still need individual intents. Will land with a proper field dispatcher.
+- **Rich `status` with the `progress`-shape binding** — spec §12 allows `status expr label: str`, which maps to a label+value+badge triple.
+
+Together these cover the most common annex content shapes. Combined with concepts #45–#51, declarative content pipeline handles: list scalars, list templates with per-item triggers + payload, form shells, markdown/media/progress/status/divider/spacer, label, rich_text, trigger, navigate, loading, error, group. Missing by design: toggle/range/choice/multiselect/pin/text/password/date/confirm/create/search/share intents (each needs specific bridge wiring for input widgets) — those track as concept #58+.

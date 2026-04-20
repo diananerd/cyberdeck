@@ -273,6 +273,10 @@ struct ast_node {
             ast_node_t *data_expr;
             const char *item_binder;
             ast_list_t  item_body;
+            /* Concept #52 — `list xs \n empty -> "no items"` fallback body. */
+            ast_list_t  empty_body;
+            /* Concept #53 — form on submit handler (AST for the action expr). */
+            ast_node_t *on_submit;
         } content_item;
 
         struct { ast_list_t items; }                 module;
