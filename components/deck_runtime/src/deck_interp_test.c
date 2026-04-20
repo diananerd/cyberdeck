@@ -320,11 +320,11 @@ static bool t_app_dispatch(const char *name)
 #include "drivers/deck_sdi_nvs.h"
 static bool t_migration(const char *name)
 {
-    /* Reset state so the test is idempotent across boots. "mig.test" is
-     * a fixed app_id; the migration tracking key is stable as
-     * "v_" + FNV32("mig.test") = "v_a829200e" (precomputed so we don't
-     * duplicate the hash function across interp.c and this test). */
-    (void)deck_sdi_nvs_del("conf.mig", "ran");
+    /* Reset state so the test is idempotent across boots. The app's NVS
+     * namespace is its `id` field (nvs_app_ns in deck_interp.c). The
+     * migration tracker key is "v_" + FNV32(app_id) = "v_a829200e" for
+     * "mig.test" — precomputed so we don't duplicate the hash fn. */
+    (void)deck_sdi_nvs_del("mig.test", "ran");
     (void)deck_sdi_nvs_del("deck.mig", "v_a829200e");
 
     const char *src =
@@ -338,7 +338,7 @@ static bool t_migration(const char *name)
         "\n"
         "@migration\n"
         "  from 0:\n"
-        "    nvs.set(\"conf.mig\", \"ran\", \"v0\")\n"
+        "    nvs.set(\"ran\", \"v0\")\n"
         "\n"
         "@on launch:\n"
         "  log.info(\"mig.test launched\")\n";
@@ -349,7 +349,7 @@ static bool t_migration(const char *name)
     CHECK(rc == DECK_RT_OK && app != NULL, "app_load first");
 
     char val[16] = {0};
-    deck_sdi_err_t gr = deck_sdi_nvs_get_str("conf.mig", "ran", val, sizeof(val));
+    deck_sdi_err_t gr = deck_sdi_nvs_get_str("mig.test", "ran", val, sizeof(val));
     CHECK(gr == DECK_SDI_OK, "migration effect not in nvs");
     CHECK(strcmp(val, "v0") == 0, "migration wrote wrong value");
 
@@ -358,13 +358,13 @@ static bool t_migration(const char *name)
     /* Second load: stored version is now 1, from=0 should NOT re-run.
      * We prove this by clearing the effect key and reloading; if the
      * migration re-ran, the effect key would re-appear. */
-    (void)deck_sdi_nvs_del("conf.mig", "ran");
+    (void)deck_sdi_nvs_del("mig.test", "ran");
     app = NULL;
     rc = deck_runtime_app_load(src, (uint32_t)strlen(src), &app);
     CHECK(rc == DECK_RT_OK && app != NULL, "app_load second");
 
     val[0] = 0;
-    gr = deck_sdi_nvs_get_str("conf.mig", "ran", val, sizeof(val));
+    gr = deck_sdi_nvs_get_str("mig.test", "ran", val, sizeof(val));
     CHECK(gr == DECK_SDI_ERR_NOT_FOUND, "migration re-ran when it shouldn't");
 
     deck_runtime_app_unload(app);
