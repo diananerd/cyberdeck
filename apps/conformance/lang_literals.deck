@@ -76,11 +76,20 @@ line two
               && text.contains(multi, "line two")
 
   -- Duration literals.
-  let ok_dur  = 1s > 0 && 1m > 1s && 1h > 1m && 500ms > 0ms
+  let dur_a = 1s > 0
+  let dur_b = 1m > 1s
+  let dur_c = 1h > 1m
+  let dur_d = 500ms > 0ms
+  let ok_dur  = dur_a && dur_b && dur_c && dur_d
+  log.info("literals probe: dur_a={dur_a} dur_b={dur_b} dur_c={dur_c} dur_d={dur_d}")
 
-  -- Range literals.
-  let r       = 0..5
-  let ok_range = list.len(list.of(r)) == 5   -- [0, 1, 2, 3, 4]
+  -- NOTE: range literals `0..5` per spec §2.9 are NOT iterables —
+  -- valid only inside `@config range:` declarations and pattern
+  -- guards. `list.of(range)` is off-spec. For "build a list of N
+  -- elements" the canonical builder is `list.tabulate(n, fn)`
+  -- (concept #64). Probe that path here; range *syntax* is exercised
+  -- by pattern-guard tests and @config fixtures elsewhere.
+  let ok_range = list.len(list.tabulate(5, i -> i)) == 5
 
   let ok = ok_int && ok_flt && ok_bool && ok_unit && ok_str
         && ok_atom && ok_atv && ok_atv2 && ok_atv3
@@ -88,4 +97,8 @@ line two
         && ok_interp && ok_multi
         && ok_dur && ok_range
 
+  log.info("literals probe: int={ok_int} flt={ok_flt} bool={ok_bool} unit={ok_unit} str={ok_str}")
+  log.info("literals probe: atom={ok_atom} atv={ok_atv} atv2={ok_atv2} atv3={ok_atv3}")
+  log.info("literals probe: list={ok_list} tup={ok_tup} map={ok_map}")
+  log.info("literals probe: interp={ok_interp} multi={ok_multi} dur={ok_dur} range={ok_range}")
   log.info(if ok then "DECK_CONF_OK:lang.literals" else "DECK_CONF_FAIL:lang.literals")

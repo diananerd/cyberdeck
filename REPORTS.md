@@ -2149,3 +2149,59 @@ User directive opening this pass: *"mientras podamos hacer operar el sistema, 10
 - `os.fs.list` (sentinel miss — driver behavior).
 
 **Why this matters (concept #67 deferred block closed)**: concept #67 explicitly deferred tuple+list patterns citing the memory-fragility cascade. This concept addresses the *cause* of that cascade (allocators never using PSRAM) and then ships the deferred features on top. Binary size still within OTA budget (1.42 MB < 1.54 MB guard, 60% headroom in the 3.5 MB app partition). System operates cleanly with apps from SD card; `stress.rerun_sanity_x100` now shows delta 0 across 100 iterations (the definitive anti-leak signal), which is the real-world operating guarantee the user asked for.
+
+### Concept #71 — Duration canonical unit: seconds → **milliseconds** (spec §2.8)
+
+**Drift**: `apps/conformance/lang_literals.deck` line 79 asserts `ok_dur = 1s > 0 && 1m > 1s && 1h > 1m && 500ms > 0ms`. On hardware the whole expression evaluated to `false`. Sub-probe breakdown (inserted `log.info` at each subclause) pinpointed `500ms > 0ms` as the sole failing comparison — the other three were `true`.
+
+Root cause at lexer layer: `components/deck_runtime/src/deck_lexer.c:scan_number` (pre-concept-#71 lines 280–315) defined **seconds** as the canonical unit and collapsed the `ms` suffix with `out->as.i = v / 1000`. So `500ms → 500 / 1000 = 0` and `0ms → 0 / 1000 = 0`, making **every sub-second duration indistinguishable from zero**. `1s > 0` still passed because `1s → 1`, but any literal below 1000 ms truncated to 0.
+
+Spec §2.8 defines `Duration` as opaque with literals `500ms 1s 30s 5m 1h 12h 1d`. The integer representation is implementation-defined. The seconds choice made `500ms` unrepresentable — a silent information-loss bug, not just a comparison edge case. Any app that timed a sub-second interval (UI debounce, sensor sample rate, animation frame) was reading 0 and treating it as "no delay at all".
+
+**Fix applied — Duration and Timestamp both switch to milliseconds end-to-end**:
+
+- 2026-04-22 · layer 0 lexer · `components/deck_runtime/src/deck_lexer.c:scan_number` — suffix multipliers: `ms` = identity, `s` = `*1000`, `m` = `*60000`, `h` = `*3600000`, `d` = `*86400000`. All fit in int64 for decades of absolute timestamps and millions of years of durations. Comment updated to record the canonical unit decision.
+- 2026-04-22 · layer 4 runtime · `components/deck_runtime/src/deck_interp.c`:
+  * `b_time_now` — returns `w * 1000` when wall-clock set; `monotonic_us / 1000` fallback. Timestamp is now epoch-ms.
+  * New helper `now_ms_or_mono()` consolidates the three prior inline copies (`time.since`, `time.until`, `time.ago`).
+  * `b_time_since` / `b_time_until` — simple subtraction, units now consistent (ms−ms=ms Duration).
+  * `b_time_to_iso` / `b_time_day_of_week` — divide input by 1000 before handing to `gmtime_r` (POSIX `time_t` is seconds).
+  * `b_time_start_of_day` — `(t / 86400000) * 86400000`.
+  * `b_time_duration_parts` — base 86400000/3600000/60000/1000; added `"millis"` key to returned map so sub-second precision is reachable from app code (spec §3 `duration_parts(d) -> {str: int}` doesn't enumerate keys, so this is additive).
+  * `b_time_duration_str` — new sub-second branch renders `"500ms"`; seconds branch kept for ≥1s and <1m.
+  * `b_time_ago` — divides ms diff by 1000 for human-readable output (`5s ago`, `3m ago`), unchanged on the display side.
+  * `b_info_uptime` — returns `monotonic_us / 1000` (was `/1000000`).
+  * Comment block above `time.*` section updated to document new canonical units (concept #32+#71).
+- `time.now_us` (monotonic microseconds) intentionally left alone — it's a separate API, unit-independent.
+
+**What stays coherent**: `time.add(ts, dur)` / `time.sub(ts, dur)` are plain arithmetic that didn't depend on the old unit and don't need changes — both sides now ms. `time.before` / `time.after` are ordering comparisons, unit-agnostic.
+
+**Verification on hardware**:
+
+| Metric | Before (#70) | After (#71) | Delta |
+|---|---|---|---|
+| suites_pass | 5/5 | 5/5 | — |
+| deck_tests_pass | 64/80 | **65/80** | **+1** |
+| stress_pass | 15/15 | 15/15 | — |
+| binary_size | 1.42 MB | 1.42 MB | unchanged (OTA viable) |
+| heap_idle_internal | 42 KB | 42 KB | — |
+| deck_alloc_live | 1790 | 1790 | — |
+
+**Newly passing**: `lang.literals` — all sub-probes true, including `500ms > 0ms`. `lang.utility` stays PASS; its asserts `1000ms == 1s` (`1000 == 1000`) and `60s == 1m` (`60000 == 60000`) remain numerically identical across the unit change, and `elapsed < 1s` (`< 1000`) still holds because two back-to-back `time.now()` calls differ by well under 1 000 ms on hardware.
+
+**Sub-probe diagnostic left in fixture**: `lang_literals.deck` now emits per-clause `log.info` lines (`int=true flt=true …`) before the sentinel. Cost is tiny (5 log calls at one-shot) and the payoff is exactly this kind of cross-layer drift becoming self-diagnosing: the next time a literals probe flips false, the offender's name prints right next to it, no unit test to author. Pattern to replicate in other `lang.*` fixtures whose ok-aggregation masks individual regressions.
+
+**Why this matters (A→B)**: canonical units are a foundational invariant, not a tuning knob — once `500ms → 0`, every downstream API that consumes a Duration has a silent semantic mismatch with what the source code reads. The A-side ("tests pass because ok_dur happens to align with the same wrong unit") was wallpapered over because `lang.utility`'s Duration asserts all happen to cancel the units: `1000ms == 1s` works in both seconds and ms. The B-side (apps would time sub-second intervals and get zero) would never surface in the conformance suite — only in live app behavior on SD card, silently missing sampling deadlines. This is the combinatorial-audit shape in its purest form: a sub-probe expansion turned a pass-but-wrong literals test into a specific cross-layer bug ticket.
+
+**WIP in working tree, not part of this concept**: `deck_parser.c:parse_primary` gained a draft path to parse spec §3.7 named-field atom variants `:active (temp: 25.0, max: 30.0)` as a `(:ctor, {field_map})` 2-tuple. Left uncommitted pending a fixture that actually constructs one — the three candidate fixtures (`lang.variant.pat`, `lang.type.record`, `lang.literals`) either don't yet use the syntax or fail earlier for unrelated reasons, so shipping the parser code alone would add surface without observable effect. Separate concept when a dependent fixture emerges.
+
+**What this still leaves open** (toward DL2 close): 15 fails remain, down from 16. Unchanged blockers since concept #70:
+- Named-field atom variant `:active (temp: 25.0, …)` — parser drafted, awaiting fixture.
+- `lang.if` / `lang.match` — multi-line nested indent tolerance.
+- `lang.lambda.anon` / `lang.lambda.inline` — multi-line fn body + IIFE.
+- `lang.fn.typed` — pattern_failed (runtime semantic).
+- `lang.tco.deep` / `lang.interp.basic` / `lang.stdlib.basic` / `lang.with.update` — semantic gaps (each deserves its own concept).
+- `os.text` — mid-expression comment between binop continuation lines.
+- `os.fs` / `os.fs.list` / `os.time` — driver / SDI semantic diffs.
+
+Each is a separate A→B leaf; next session picks the one with the widest unblocking fanout.

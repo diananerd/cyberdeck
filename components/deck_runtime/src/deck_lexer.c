@@ -278,10 +278,11 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
     }
 
     /* Duration suffix (spec §01 §3 literals `500ms 1s 5m 1h 1d`).
-     * Canonical unit is seconds — ms divides by 1000 (truncated).
-     * Only runs on integer literals; `1.5s` is rejected as ambiguous.
-     * A suffix is only consumed when the next char after it is not another
-     * ident char, so `1slice` stays as `1` + IDENT `slice`. */
+     * Canonical unit is milliseconds — the smallest literal `1ms` maps
+     * to 1. Seconds are preserved as a multiple of 1000. Only runs on
+     * integer literals; `1.5s` is rejected as ambiguous. A suffix is only
+     * consumed when the next char after it is not another ident char,
+     * so `1slice` stays as `1` + IDENT `slice`. */
     if (!seen_dot && lx->pos < lx->len) {
         int c0 = peek(lx);
         int c1 = peek_at(lx, 1);
@@ -292,23 +293,23 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
     } } while (0)
         if (c0 == 'm' && c1 == 's') {
             NEXT_OK(2);
-            out->as.i = v / 1000;
+            /* milliseconds — canonical unit, no multiplication */
             advance(lx); advance(lx);
         } else if (c0 == 's') {
             NEXT_OK(1);
-            /* seconds — canonical unit, no multiplication */
+            out->as.i = v * 1000LL;
             advance(lx);
         } else if (c0 == 'm') {
             NEXT_OK(1);
-            out->as.i = v * 60;
+            out->as.i = v * 60000LL;
             advance(lx);
         } else if (c0 == 'h') {
             NEXT_OK(1);
-            out->as.i = v * 3600;
+            out->as.i = v * 3600000LL;
             advance(lx);
         } else if (c0 == 'd') {
             NEXT_OK(1);
-            out->as.i = v * 86400;
+            out->as.i = v * 86400000LL;
             advance(lx);
         }
 #undef NEXT_OK

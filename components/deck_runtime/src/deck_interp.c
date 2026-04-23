@@ -222,15 +222,17 @@ static deck_value_t *b_log_debug(deck_value_t **args, uint32_t n, deck_interp_ct
         ESP_LOGD("deck.app", "%.*s", (int)args[0]->as.s.len, args[0]->as.s.ptr);
     return deck_retain(deck_unit());
 }
-/* Spec §3: time.now() -> Timestamp (epoch seconds). Uses wall clock when
- * set; falls back to monotonic seconds since boot so ordering still holds
- * on hardware without an RTC and before SNTP sync lands. */
+/* Spec §3: time.now() -> Timestamp (epoch milliseconds). Uses wall clock
+ * when set; falls back to monotonic milliseconds since boot so ordering
+ * still holds on hardware without an RTC and before SNTP sync lands.
+ * Canonical unit is ms to match Duration literals (`1s = 1000`), so
+ * Timestamp ± Duration arithmetic is consistent across the `time.*` API. */
 static deck_value_t *b_time_now(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
     int64_t w = deck_sdi_time_wall_epoch_s();
-    if (w <= 0) w = deck_sdi_time_monotonic_us() / 1000000;
-    return deck_new_int(w);
+    if (w > 0) return deck_new_int(w * 1000LL);
+    return deck_new_int(deck_sdi_time_monotonic_us() / 1000LL);
 }
 static deck_value_t *b_info_device_id(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 { (void)a; (void)n; (void)c; const char *d = deck_sdi_info_device_id(); return deck_new_str_cstr(d ? d : ""); }
@@ -291,8 +293,8 @@ static deck_value_t *b_info_app_version(deck_value_t **a, uint32_t n, deck_inter
 static deck_value_t *b_info_uptime(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
-    /* Duration is in seconds per concept #32's canonical unit. */
-    return deck_new_int(deck_sdi_time_monotonic_us() / 1000000);
+    /* Duration canonical unit is milliseconds (concept #71). */
+    return deck_new_int(deck_sdi_time_monotonic_us() / 1000LL);
 }
 
 static deck_value_t *b_info_cpu_freq(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -1840,9 +1842,9 @@ static deck_value_t *b_time_duration(deck_value_t **args, uint32_t n, deck_inter
 static deck_value_t *b_time_to_iso(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
-    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.to_iso needs epoch seconds"); return NULL; }
-    int64_t epoch_s = args[0]->type == DECK_T_INT ? args[0]->as.i : (int64_t)args[0]->as.f;
-    time_t t = (time_t)epoch_s;
+    if (!is_num(args[0])) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.to_iso needs Timestamp"); return NULL; }
+    int64_t epoch_ms = args[0]->type == DECK_T_INT ? args[0]->as.i : (int64_t)args[0]->as.f;
+    time_t t = (time_t)(epoch_ms / 1000LL);
     struct tm tm; gmtime_r(&t, &tm);
     char buf[32];
     int k = snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
@@ -1851,10 +1853,10 @@ static deck_value_t *b_time_to_iso(deck_value_t **args, uint32_t n, deck_interp_
     return deck_new_str(buf, (uint32_t)k);
 }
 
-/* ---- time.* completeness (concept #32, spec §3) ----
- * Canonical units: Timestamp = epoch seconds (int), Duration = seconds (int).
- * Duration literals (5s, 2m, 1h, 1d) are lowered to seconds by the lexer;
- * `ms` suffix is truncated since the canonical precision is seconds. */
+/* ---- time.* completeness (concept #32+#71, spec §3) ----
+ * Canonical units: Timestamp = epoch milliseconds (int), Duration = ms (int).
+ * Duration literals (`500ms`, `5s`, `2m`, `1h`, `1d`) are lowered to ms
+ * by the lexer. Sub-second granularity is preserved end-to-end. */
 
 static int64_t ts_or_err(deck_value_t *v, deck_interp_ctx_t *c, const char *who)
 {
@@ -1862,14 +1864,19 @@ static int64_t ts_or_err(deck_value_t *v, deck_interp_ctx_t *c, const char *who)
     return v->type == DECK_T_INT ? v->as.i : (int64_t)v->as.f;
 }
 
+static int64_t now_ms_or_mono(void)
+{
+    int64_t w = deck_sdi_time_wall_epoch_s();
+    if (w > 0) return w * 1000LL;
+    return deck_sdi_time_monotonic_us() / 1000LL;
+}
+
 static deck_value_t *b_time_since(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.since");
     if (c->err) return NULL;
-    int64_t now_s = deck_sdi_time_wall_epoch_s();
-    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
-    return deck_new_int(now_s - t);
+    return deck_new_int(now_ms_or_mono() - t);
 }
 
 static deck_value_t *b_time_until(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -1877,9 +1884,7 @@ static deck_value_t *b_time_until(deck_value_t **a, uint32_t n, deck_interp_ctx_
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.until");
     if (c->err) return NULL;
-    int64_t now_s = deck_sdi_time_wall_epoch_s();
-    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
-    return deck_new_int(t - now_s);
+    return deck_new_int(t - now_ms_or_mono());
 }
 
 static deck_value_t *b_time_add(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -2028,7 +2033,7 @@ static deck_value_t *b_time_day_of_week(deck_value_t **a, uint32_t n, deck_inter
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.day_of_week");
     if (c->err) return NULL;
-    time_t tt = (time_t)t;
+    time_t tt = (time_t)(t / 1000LL);
     struct tm tm; gmtime_r(&tt, &tm);
     return deck_new_int(tm.tm_wday);    /* 0=Sunday .. 6=Saturday */
 }
@@ -2038,7 +2043,7 @@ static deck_value_t *b_time_start_of_day(deck_value_t **a, uint32_t n, deck_inte
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.start_of_day");
     if (c->err) return NULL;
-    return deck_new_int((t / 86400) * 86400);
+    return deck_new_int((t / 86400000LL) * 86400000LL);
 }
 
 static deck_value_t *b_time_duration_parts(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -2049,15 +2054,17 @@ static deck_value_t *b_time_duration_parts(deck_value_t **a, uint32_t n, deck_in
     if (d < 0) d = -d;
     deck_value_t *m = deck_new_map(8);
     if (!m) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "time.duration_parts alloc"); return NULL; }
-    int64_t days    = d / 86400; d %= 86400;
-    int64_t hours   = d / 3600;  d %= 3600;
-    int64_t minutes = d / 60;    d %= 60;
-    int64_t seconds = d;
+    int64_t days    = d / 86400000LL; d %= 86400000LL;
+    int64_t hours   = d / 3600000LL;  d %= 3600000LL;
+    int64_t minutes = d / 60000LL;    d %= 60000LL;
+    int64_t seconds = d / 1000LL;     d %= 1000LL;
+    int64_t millis  = d;
     #define PUT_I(k, v) do { deck_value_t *kk = deck_new_str_cstr(k); deck_value_t *vv = deck_new_int(v); deck_map_put(m, kk, vv); deck_release(kk); deck_release(vv); } while (0)
     PUT_I("days",    days);
     PUT_I("hours",   hours);
     PUT_I("minutes", minutes);
     PUT_I("seconds", seconds);
+    PUT_I("millis",  millis);
     #undef PUT_I
     return m;
 }
@@ -2071,10 +2078,11 @@ static deck_value_t *b_time_duration_str(deck_value_t **a, uint32_t n, deck_inte
     if (neg) d = -d;
     char buf[64];
     int k;
-    if (d >= 86400)      k = snprintf(buf, sizeof(buf), "%s%lldd %lldh", neg ? "-" : "", (long long)(d / 86400), (long long)((d % 86400) / 3600));
-    else if (d >= 3600)  k = snprintf(buf, sizeof(buf), "%s%lldh %lldm", neg ? "-" : "", (long long)(d / 3600),  (long long)((d % 3600) / 60));
-    else if (d >= 60)    k = snprintf(buf, sizeof(buf), "%s%lldm %llds", neg ? "-" : "", (long long)(d / 60),    (long long)(d % 60));
-    else                 k = snprintf(buf, sizeof(buf), "%s%llds",       neg ? "-" : "", (long long)d);
+    if (d >= 86400000LL)      k = snprintf(buf, sizeof(buf), "%s%lldd %lldh", neg ? "-" : "", (long long)(d / 86400000LL), (long long)((d % 86400000LL) / 3600000LL));
+    else if (d >= 3600000LL)  k = snprintf(buf, sizeof(buf), "%s%lldh %lldm", neg ? "-" : "", (long long)(d / 3600000LL),  (long long)((d % 3600000LL) / 60000LL));
+    else if (d >= 60000LL)    k = snprintf(buf, sizeof(buf), "%s%lldm %llds", neg ? "-" : "", (long long)(d / 60000LL),    (long long)((d % 60000LL) / 1000LL));
+    else if (d >= 1000LL)     k = snprintf(buf, sizeof(buf), "%s%llds",       neg ? "-" : "", (long long)(d / 1000LL));
+    else                      k = snprintf(buf, sizeof(buf), "%s%lldms",      neg ? "-" : "", (long long)d);
     return deck_new_str(buf, (uint32_t)k);
 }
 
@@ -2083,9 +2091,8 @@ static deck_value_t *b_time_ago(deck_value_t **a, uint32_t n, deck_interp_ctx_t 
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.ago");
     if (c->err) return NULL;
-    int64_t now_s = deck_sdi_time_wall_epoch_s();
-    if (now_s <= 0) now_s = deck_sdi_time_monotonic_us() / 1000000;
-    int64_t d = now_s - t;
+    int64_t d_ms = now_ms_or_mono() - t;
+    int64_t d = d_ms / 1000LL;
     char buf[64];
     int k;
     if (d < 0)            k = snprintf(buf, sizeof(buf), "in the future");
