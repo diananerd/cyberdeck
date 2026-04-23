@@ -5352,9 +5352,17 @@ static deck_value_t *b_unwrap_or(deck_value_t **args, uint32_t n, deck_interp_ct
     if (!args[0]) return deck_retain(args[1]);
     if (args[0]->type == DECK_T_OPTIONAL)
         return deck_retain(args[0]->as.opt.inner ? args[0]->as.opt.inner : args[1]);
-    if (result_tag_is(args[0], "ok"))
+    /* Spec §3.7 / concept #11 atom-variant tuples bridge: `:some v` is a
+     * 2-tuple (:some, v) — unwrap to v. `:err e` / `:err *` short-circuit
+     * to default. Plain `:none` atom (DECK_T_ATOM named "none") is the
+     * absent case and yields default. Generic atom-variant tuples with
+     * any other ctor also fall back to default. */
+    if (result_tag_is(args[0], "ok") || result_tag_is(args[0], "some"))
         return deck_retain(args[0]->as.tuple.items[1]);
     if (result_tag_is(args[0], "err"))
+        return deck_retain(args[1]);
+    if (args[0]->type == DECK_T_ATOM && args[0]->as.atom &&
+        strcmp(args[0]->as.atom, "none") == 0)
         return deck_retain(args[1]);
     return deck_retain(args[0]);
 }

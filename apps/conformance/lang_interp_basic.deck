@@ -44,10 +44,10 @@
   let s7 = "{a}-{b}-{c}"
   let ok_multi = s7 == "1-2-3"
 
-  -- Interpolation inside triple-quoted string.
-  let s8 = """
-x is {n}
-"""
+  -- Interpolation with embedded newline (spec §2.7: triple-quoted
+  -- strings are raw — no interpolation. Use `\n` in a single-quoted
+  -- string to get a multi-line interpolated value).
+  let s8 = "x is {n}\nend"
   let ok_multiline = text.contains(s8, "x is 42")
 
   let ok = ok_basic and ok_expr and ok_none and ok_fn and ok_esc and ok_multi and ok_multiline

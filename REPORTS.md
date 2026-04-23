@@ -2377,3 +2377,29 @@ Without these, `date_parts(time.now())` returned a `tm` struct for `epoch_ms` in
 **Newly passing** (+4): `os.text`, `os.fs`, `os.fs.list`, `os.time`.
 
 **Remaining** (5): `lang.if` (nested match indent), `lang.type.record` (record types), `lang.with.update` (record update), `lang.interp.basic` (sentinel miss), `lang.stdlib.basic` (sentinel miss).
+
+### Concept #76 — `lang.interp.basic` + `lang.stdlib.basic` (unwrap_or on atom-variant tuples)
+
+**lang.interp.basic**: fixture had a triple-quoted string probe `"""\nx is {n}\n"""` expecting interpolation. Spec §2.7 explicitly says triple-quoted strings are raw — no interpolation. Rewrote the multi-line probe as `"x is {n}\nend"` (single-quoted with `\n` escape) to keep the intent (multi-line interpolated content) without violating spec.
+
+**lang.stdlib.basic — runtime bug in `unwrap_or`**: `unwrap_or(:some 7, 0)` returned the whole 2-tuple `(:some, 7)` instead of `7`, and `unwrap_or(:none, 99)` returned the `:none` atom instead of `99`. Root cause: `b_unwrap_or` only knew about `DECK_T_OPTIONAL` and the `:ok` / `:err` Result ctors. Concept #11 made `:some` / `:none` atom-variant tuples first-class values, but `unwrap_or` was never taught to bridge them.
+
+Fix (`components/deck_runtime/src/deck_interp.c:b_unwrap_or`):
+- `:some v` (2-tuple with `:some` ctor) — unwrap to `items[1]`.
+- `:err e` (2-tuple with `:err` ctor) — return default.
+- bare `:none` atom (DECK_T_ATOM named `"none"`) — return default.
+
+Analogous to the `:none` ↔ empty-Optional pattern bridge from concept #73, applied to the `unwrap_or` builtin.
+
+**Verification**:
+
+| Metric | Before (#75) | After (#76) | Delta |
+|---|---|---|---|
+| deck_tests_pass | 75/80 | **77/80** | **+2** |
+| stress_pass | 15/15 | 15/15 | — |
+| suites_pass | 5/5 | 5/5 | — |
+| binary_size | 1.42 MB | 1.42 MB | unchanged |
+
+**Newly passing**: `lang.interp.basic`, `lang.stdlib.basic`.
+
+**Remaining** (3): `lang.if` (nested match inside match arm at deeper indent — parser cross-suite tolerance), `lang.type.record` (full `@type` declaration + `Type { … }` construction + record pattern — spec §4), `lang.with.update` (record `with { field: new, … }` update — spec §4.3). All three require new parser / loader features; each is its own concept.
