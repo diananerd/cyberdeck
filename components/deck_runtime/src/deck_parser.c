@@ -888,13 +888,14 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             /* `:ctor <sub>` — variant pattern. Accept any pattern-start
              * token as the sub: ident binder / wildcard (TOK_IDENT),
              * literal (INT/FLOAT/STRING/TRUE/FALSE/UNIT/NONE), nested
-             * atom patterns `:err :oops`, and the empty-list pattern
-             * `:ok []` (common Result shape for nvs.keys et al). */
+             * atom patterns `:err :oops`, empty-list pattern `:ok []`,
+             * and parenthesised / tuple sub-patterns `:ok (:some v)`
+             * (spec §8.2 nested variant-of-variant). */
             if (at(p, TOK_IDENT) || at(p, TOK_ATOM) ||
                 at(p, TOK_INT) || at(p, TOK_FLOAT) || at(p, TOK_STRING) ||
                 at(p, TOK_KW_TRUE) || at(p, TOK_KW_FALSE) ||
                 at(p, TOK_KW_UNIT) || at(p, TOK_KW_NONE) ||
-                at(p, TOK_LBRACKET)) {
+                at(p, TOK_LBRACKET) || at(p, TOK_LPAREN)) {
                 ast_node_t *sub = parse_pattern(p);
                 if (!sub) return NULL;
                 ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);

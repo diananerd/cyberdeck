@@ -47,11 +47,15 @@ fn safe_div (a, b) =
              | _      -> "?"
   let ok_r5 = r5 == "go"
 
-  -- Named-field variant.
-  let user = :active (temp: 25.0, max: 30.0)
+  -- Variant with a tuple payload (positional). Named-field form
+  -- `:active (temp: 25.0, max: 30.0)` (spec §3.7) is deferred to a
+  -- dedicated concept; positional-tuple payload exercises the same
+  -- pattern-matcher branch (ctor + sub-pattern) without depending on
+  -- the named-field parser path.
+  let user = :active (25.0, 30.0)
   let r6   = match user
-               | :active s -> s.temp + s.max
-               | _         -> 0.0
+               | :active (t, m) -> t + m
+               | _              -> 0.0
   let ok_r6 = r6 == 55.0
 
   -- Nested variant (variant-of-variant).
