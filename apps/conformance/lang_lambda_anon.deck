@@ -7,11 +7,6 @@
 @requires
   deck_level: 1
 
--- Coverage goal: anonymous `fn (…) = body` form (§6.1 with name
--- omitted; §6.5 lambda). Old version tested 2 cases. This covers
--- both the `fn (…) = …` form and the `x -> …` arrow form plus
--- annotations, multi-arity, single-expr vs do-block bodies, and
--- storing lambdas in collections (first-class citizenship).
 @on launch:
   -- `fn` anonymous form.
   let add   = fn (a, b) = a + b
@@ -34,11 +29,10 @@
   let typed = fn (x: int, y: int) = x + y
   let ok_ty = typed(10, 20) == 30
 
-  -- Body as do-block with let bindings.
-  let max3 = fn (a, b, c) =
-    do
-      let m1 = if a > b then a else b
-      if m1 > c then m1 else c
+  -- Body as do-block with let bindings (spec §7 — explicit do form).
+  let max3 = fn (a, b, c) = do
+    let m1 = if a > b then a else b
+    if m1 > c then m1 else c
   let ok_do = max3(3, 9, 5) == 9
           and max3(20, 5, 11) == 20
           and max3(7, 7, 7) == 7

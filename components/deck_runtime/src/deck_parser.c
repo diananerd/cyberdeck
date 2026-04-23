@@ -333,6 +333,55 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             advance(p);
             ast_node_t *first = parse_expr_prec(p, 0);
             if (!first) return NULL;
+            /* Spec §3.7 named-field atom variant payload: `(name: value, …)`
+             * appears after `:ctor` — when `first` parsed as a bare ident
+             * followed by `:` with a NON-ident value (literal, expression),
+             * treat the whole paren group as a map literal with string keys.
+             * The outer TOK_ATOM branch wraps it into `(:ctor, {map})` via
+             * the existing atom-variant tupleization path, so match arms
+             * like `| :active s -> s.temp + s.max` see `s` as a map and
+             * dot access via string key Just Works (see AST_DOT lookup). */
+            if (at(p, TOK_COLON) && first && first->kind == AST_IDENT &&
+                peek_next_tok(p) != TOK_IDENT) {
+                ast_node_t *map = ast_new(p->arena, AST_LIT_MAP, ln, co);
+                if (!map) return NULL;
+                ast_list_init(&map->as.map_lit.keys);
+                ast_list_init(&map->as.map_lit.vals);
+                const char *first_name = first->as.s;
+                advance(p); /* : */
+                ast_node_t *first_val = parse_expr_prec(p, 0);
+                if (!first_val) return NULL;
+                ast_node_t *first_key = ast_new(p->arena, AST_LIT_STR, ln, co);
+                if (!first_key) return NULL;
+                first_key->as.s = first_name;
+                ast_list_push(p->arena, &map->as.map_lit.keys, first_key);
+                ast_list_push(p->arena, &map->as.map_lit.vals, first_val);
+                while (at(p, TOK_COMMA)) {
+                    advance(p);
+                    if (at(p, TOK_RPAREN)) break;
+                    if (!at(p, TOK_IDENT)) {
+                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                                "named-field group expects `name: value` pairs");
+                        return NULL;
+                    }
+                    ast_node_t *key = ast_new(p->arena, AST_LIT_STR,
+                                              p->cur.line, p->cur.col);
+                    if (!key) return NULL;
+                    key->as.s = p->cur.text;
+                    advance(p);
+                    if (!expect(p, TOK_COLON,
+                                "expected ':' after field name in named-field group"))
+                        return NULL;
+                    ast_node_t *val = parse_expr_prec(p, 0);
+                    if (!val) return NULL;
+                    ast_list_push(p->arena, &map->as.map_lit.keys, key);
+                    ast_list_push(p->arena, &map->as.map_lit.vals, val);
+                }
+                if (!expect(p, TOK_RPAREN,
+                            "expected ')' closing named-field group")) return NULL;
+                n = map;
+                break;
+            }
             /* Spec §5 — paren content may be a typed lambda param list
              * `(a: Type, b: Type) -> body`. Eat `:Type` only when the
              * parsed element is a bare ident AND the type is also an
