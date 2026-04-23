@@ -195,6 +195,12 @@ deck_value_t *deck_env_lookup(deck_env_t *e, const char *name);
 deck_env_t *deck_env_retain(deck_env_t *e);
 void        deck_env_release(deck_env_t *e);
 
+/* Force-teardown an env regardless of refcount. Used at module end to
+ * break the fn-closure cycle where every top-level fn's closure retains
+ * the global env, so a plain release never reaches refcount 0. See
+ * concept #73. */
+void        deck_env_force_release(deck_env_t *e);
+
 /* Interpreter selftest. */
 deck_err_t deck_interp_run_selftest(void);
 

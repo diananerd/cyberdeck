@@ -2243,3 +2243,56 @@ Root cause in `components/deck_runtime/src/deck_parser.c:parse_pattern_primary` 
 - `os.text` — mid-expression comment between binop continuation lines (parser multi-newline fix is ready but no fixture consumes it yet; ship with a dependent fixture).
 - `lang.type.record` — requires record-pattern `Type { field: binder }` support (spec §4.4), not yet in parser.
 - `os.fs` / `os.fs.list` / `os.time` — driver / SDI semantic diffs.
+
+### Concept #73 — fn-closure reference-cycle leak + `:none` ↔ Optional pattern bridge
+
+**Drift uncovered by a systemic investigation** requested after concept #72 documented the recurring "cascade" where small additive fixes (`:none` pattern bridge, named-field variant desugar, multi-newline continuation) each regressed the same 7-11 fixtures — specifically `errors.*` negative tests reporting "got ok" instead of the expected runtime error. The pattern was too consistent to be coincidence.
+
+**Reproduction with a 4-line fix as the detonator**: the minimal `:none` bridge (adding `DECK_T_OPTIONAL(inner=NULL) ↔ AST_LIT_ATOM("none")` equivalence in `match_pattern`) reproduced the 66 → 55 deck / 15 → 12 stress regression seen before. Instrumenting `deck_alloc_used/peak/live_values` between every test exposed the real signature: `deck_alloc_peak = 65536` — the **hard limit** set at `deck_runtime_init(64 KB)`. Tests after `lang.tco.deep` were PANIC-ing with `no_memory: deck heap hard limit exceeded` — a red-herring cascade, not a pattern-matching regression.
+
+**Bisection isolated the leak to `lang.tco.deep`** — it left +36 KB / +1011 values live after running, both with and without the `:none` fix. The fix only amplified the problem by letting downstream tests complete fully instead of aborting on the pattern_failed they used to hit. Further bisection within the fixture pinpointed **any combination of a top-level `fn` and a `let big = list.tabulate(N, ...)`** — specifically the `length_acc(big, 0)` probe — as the leak source. Identical leak signature with `length_idx` using index math instead of cons pattern (`+612` for 100 items), confirming the leak was independent of the match-cons path.
+
+**Root cause (finally identified through per-type live-value breakdown)**: the `live_by_type` probe showed post-run delta of `int=+600, list=+6, fn=+6` for 6 runs × 100-int list — exactly `6 × (1 list + 100 ints + 1 fn)`. The `big` list was **never being freed between test runs**. Reading `deck_new_fn` and `deck_env_release` revealed the reference cycle:
+
+1. Every `fn` defined at module scope retains its defining env (`c.global`) as its closure via `deck_env_retain(c.global)` in `deck_new_fn` — so `c.global.refcount += 1` per fn definition.
+2. At module end, `deck_runtime_run_on_launch` calls `deck_env_release(c.global)` once, which decrements refcount by 1. With N fn defs, refcount goes from `1+N` to `N`, not 0. The early-return in `deck_env_release` (refcount > 0) skips tearing down bindings.
+3. Every top-level binding (including `big` and every item of `big`) stays retained forever. Compounds across runs × samples × warmups.
+
+**Fix — `deck_env_force_release` (components/deck_runtime/src/deck_interp.c)**:
+- New helper that bypasses the refcount check and tears down bindings unconditionally. Safe because the fn-closure cycle's self-recursive release on `c.global` short-circuits via the pre-existing `tearing_down` guard (no infinite recursion).
+- `deck_runtime_run_on_launch` swaps its final `deck_env_release(c.global)` for the new `deck_env_force_release(c.global)`. All top-level bindings release, their values decref cleanly, including fn values whose closures loop back to the already-tearing-down env (no-op).
+- Header declaration in `components/deck_runtime/include/deck_interp.h`. A long comment at the declaration site explains the cycle so future edits don't reintroduce the leak.
+
+**Bonus: the `:none` ↔ Optional pattern bridge** (the fix that originally triggered this investigation) ships alongside, unblocking `lang.fn.typed` which has `match int("nope") | :some n when ... | :none -> :err "not a number"`. Pre-fix: `int("nope")` returns DECK_T_OPTIONAL(inner=NULL); neither `:some n` nor `:none` arm matched; pattern_failed aborted the fixture. Post-fix: `:none` pattern recognises the empty Optional via a bridge check in `match_pattern`'s AST_LIT_ATOM case — same shape as concept #63's equality bridge, applied to pattern matching.
+
+**Testbench — 4 regression tests added to `components/deck_runtime/src/deck_interp_test.c`** to ensure neither the leak fix nor the `:none` bridge regresses silently:
+
+1. `t_cycle_leak_fn_closure` — defines one fn + `let big = list.tabulate(50, n -> n)`. Asserts post-run live-value delta ≤ 10. Pre-fix delta: 52. Post-fix: 0.
+2. `t_cycle_leak_list_let` — two fns + two bound 30-item lists. Asserts delta ≤ 10. Pre-fix: 64. Post-fix: 0.
+3. `t_cycle_leak_rerun_x20` — re-runs the same module 20 times (walk + 20-item list + cons pattern). Asserts delta ≤ 50 across all 20 iterations. Pre-fix delta: 440. Post-fix: handful (intern-table churn only).
+4. `t_none_pattern_bridges_optional` — `match int("nope") | :some n -> n | :none -> -1` must succeed (runtime rc == OK). Pre-fix: pattern_failed.
+
+The testbench's effectiveness was validated by **temporarily reintroducing the pre-fix code** (swapping `force_release` back to `release` in `run_on_launch`) and confirming all 3 cycle_leak tests fail with the exact predicted deltas. Fix restored after verification.
+
+**Verification on hardware**:
+
+| Metric | Before (#72) | After (#73) | Delta |
+|---|---|---|---|
+| interp selftest | 54/54 | **58/58** (+4 regression tests) | +4 |
+| suites_pass | 5/5 | 5/5 | — |
+| deck_tests_pass | 66/80 | **68/80** | **+2** |
+| stress_pass | 15/15 | 15/15 | — |
+| deck_alloc_peak | 65536 (at the hard limit) | **45556** (−20 KB headroom) | −19980 |
+| deck_alloc_live | 1886 | **38** | **−1848** (≈50× reduction) |
+| heap_used_during_suite | 88636 | **34892** | **−53744** (−61%) |
+| binary_size | 1.42 MB | 1.42 MB | unchanged (OTA viable) |
+
+**Fixtures newly passing** (+2):
+- `lang.fn.typed` — the `:none` bridge lets `match int("nope") | :none -> :err "..."` succeed. Was pattern_failed.
+- `lang.tco.deep` — with the leak fixed, the deep-recursion test no longer triggers the hard-limit PANIC mid-execution; the fixture's 1000-item `length_acc` walk completes cleanly within the 64 KB ceiling.
+
+**Why this matters (A→B — the canonical case)**: this is the purest "tests pass but reality breaks" shape the project has seen. Pre-fix, the conformance harness reported 66/80 consistently — the 14 fails looked like ordinary feature gaps. But the runtime was silently retaining every value from every previous test, reaching the hard limit after a specific sequence of tests, then silently PANIC-ing allocations for the rest of the suite. Adding ANY feature that let previously-failing tests complete (and therefore retain *their* values too) would expose the underlying state corruption, manifesting as regressions in unrelated tests. Three separate feature attempts (`:none` bridge, named-field variant, multi-newline continuation) each hit this — they looked like three different bugs with the same symptom, when they were actually one common bug (fn-closure cycle leak) amplified by three different entry points.
+
+**The combinatorial audit done right**: concept #72 documented the regression but shipped only the atom (LPAREN in variant pattern) because the investigation to root-cause was non-trivial. Concept #73 is that root-cause — once fixed, the `:none` bridge ships safely as a bonus, and future additive features will no longer trip the same cascade. The testbench ensures the fix itself doesn't silently regress.
+
+**Deck-level invariant now enforced**: at the end of every `run_on_launch`, `deck_alloc_live_values()` returns to near-baseline (~38 on hardware). This is a stronger property than the previous `memory.no_residual_leak` canary (which tolerated up to 2500 live values). Future concept could tighten the stress-test threshold from 2500 → 100 now that the fix makes low numbers achievable.

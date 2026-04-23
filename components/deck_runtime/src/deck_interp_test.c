@@ -3,6 +3,7 @@
 #include "deck_interp.h"
 #include "deck_parser.h"
 #include "deck_runtime.h"
+#include "deck_alloc.h"
 
 #include "esp_log.h"
 #include <string.h>
@@ -603,6 +604,126 @@ static bool t_machine_hooks(const char *name)
 typedef bool (*tfn_t)(const char *);
 typedef struct { const char *name; tfn_t fn; } case_t;
 
+/* ---- Concept #73 testbench: fn-closure cycle leak regression tests ----
+ *
+ * The bug: every top-level `fn` retains its defining env (c.global) as
+ * its closure. When deck_env_release(c.global) is called at run_on_launch
+ * end, the refcount is `1 + N` (N = # fn definitions), so one release
+ * drops it to N ≥ 1 and bindings never release. Result: `let big = ...`
+ * values stay live forever, compounding across test runs.
+ *
+ * The fix: deck_env_force_release() in deck_interp.c ignores the cycle-
+ * contributed refcount at module end and tears down bindings. These tests
+ * assert that post-run live-value count stays tiny regardless of fn count
+ * or bound-list size. Failure = leak regressed. */
+
+/* Snapshot live-value count before and after a run_on_launch; assert the
+ * delta is within `budget`. The `budget` tolerance accommodates a few
+ * interned atom/string admin values that are intentionally long-lived
+ * (the intern table, NOT a deck_value leak) — anything beyond that is
+ * genuine leak. */
+static bool cycle_run_and_check(const char *name, const char *src,
+                                uint32_t budget)
+{
+    size_t before = deck_alloc_live_values();
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "run_on_launch");
+    size_t after = deck_alloc_live_values();
+    int32_t delta = (int32_t)after - (int32_t)before;
+    if (delta < 0) delta = 0;
+    if ((uint32_t)delta > budget) {
+        ESP_LOGE(TAG, "  [%s] FAIL: live +%d > budget %u (before=%u after=%u)",
+                 name, (int)delta, (unsigned)budget,
+                 (unsigned)before, (unsigned)after);
+        return false;
+    }
+    return true;
+}
+
+/* A single fn defined at top level with one top-level `let big = …` that
+ * holds a 50-item list. Pre-fix, this leaked 51 values per run (big + 50
+ * items). Post-fix, the force-release tears down c.global bindings, so
+ * net delta must be near zero. Budget 10 is generous — real observed
+ * delta on hardware is 0. */
+static bool t_cycle_leak_fn_closure(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn noop (n) = n\n"
+        "@on launch:\n"
+        "  let big = list.tabulate(50, n -> n)\n"
+        "  log.info(str(list.len(big)))\n";
+    return cycle_run_and_check(name, src, /*budget*/ 10);
+}
+
+/* Stress the leak: two top-level fns + a bound list. Pre-fix leaked
+ * proportionally with # fns (each fn added +1 to c.global.refcount that
+ * the single release couldn't drop to 0). Post-fix still ~0 regardless
+ * of fn count. */
+static bool t_cycle_leak_list_let(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn square (n) = n * n\n"
+        "fn cube   (n) = n * n * n\n"
+        "@on launch:\n"
+        "  let ints  = list.tabulate(30, n -> n)\n"
+        "  let sq    = list.tabulate(30, square)\n"
+        "  log.info(str(list.len(ints)))\n"
+        "  log.info(str(list.len(sq)))\n";
+    return cycle_run_and_check(name, src, /*budget*/ 10);
+}
+
+/* Re-run the same module 20 times and assert the live count does not
+ * grow proportionally. Pre-fix this would accumulate ~50 values per
+ * iteration → ~1000 total delta, clearly above any reasonable budget.
+ * Post-fix the delta across 20 iterations is a handful (intern table
+ * churn from any str/atom not already interned). */
+static bool t_cycle_leak_rerun_x20(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\nfn walk (xs, acc) =\n"
+        "  match xs\n"
+        "    | []     -> acc\n"
+        "    | _ :: r -> walk(r, acc + 1)\n"
+        "@on launch:\n"
+        "  let xs = list.tabulate(20, n -> n)\n"
+        "  log.info(str(walk(xs, 0)))\n";
+    size_t before = deck_alloc_live_values();
+    for (int i = 0; i < 20; i++) {
+        deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+        CHECK(rc == DECK_RT_OK, "run_on_launch in loop");
+    }
+    size_t after = deck_alloc_live_values();
+    int32_t delta = (int32_t)after - (int32_t)before;
+    if (delta < 0) delta = 0;
+    /* Budget 50 for 20 iterations — generous to cover intern-table growth
+     * for any new strings/atoms introduced on the first run. Real-world
+     * delta is typically < 10. Pre-fix the delta would be ~420. */
+    if ((uint32_t)delta > 50) {
+        ESP_LOGE(TAG, "  [%s] FAIL: live +%d after 20 runs > 50 (before=%u after=%u)",
+                 name, (int)delta, (unsigned)before, (unsigned)after);
+        return false;
+    }
+    return true;
+}
+
+/* Independent: `:none` literal pattern must match an empty Optional
+ * value (DECK_T_OPTIONAL with inner=NULL), not just a DECK_T_ATOM named
+ * "none". int("nope") returns an empty Optional; match against `:none`
+ * must succeed. Pre-fix (no bridge) the runtime returned pattern_failed
+ * because only the atom-vs-atom branch matched. */
+static bool t_none_pattern_bridges_optional(const char *name)
+{
+    const char *src = APP_HDR_DL1
+        "\n@on launch:\n"
+        "  let x = match int(\"nope\")\n"
+        "            | :some n -> n\n"
+        "            | :none   -> -1\n"
+        "  log.info(str(x))\n";
+    deck_err_t rc = deck_runtime_run_on_launch(src, (uint32_t)strlen(src));
+    CHECK(rc == DECK_RT_OK, "int('nope') should match :none arm");
+    return true;
+}
+
 static const case_t CASES[] = {
     { "int_literal",   t_int_literal },
     { "add",           t_add },
@@ -658,6 +779,10 @@ static const case_t CASES[] = {
     { "eq_structural",          t_eq_structural },
     { "pipe_opt_variants",      t_pipe_opt_variants },
     { "named_call_args",        t_named_call_args },
+    { "cycle_leak_fn_closure",  t_cycle_leak_fn_closure },
+    { "cycle_leak_list_let",    t_cycle_leak_list_let },
+    { "cycle_leak_rerun_x20",   t_cycle_leak_rerun_x20 },
+    { "none_pattern_bridges_optional", t_none_pattern_bridges_optional },
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
 

@@ -82,6 +82,36 @@ void deck_env_release(deck_env_t *e)
     deck_env_release(p);
 }
 
+/* Concept #73 — reference cycle teardown. A top-level env (like c.global)
+ * accumulates refs from every fn-value bound in it (fn.closure retains its
+ * defining env). When the module ends, `deck_env_release(c.global)` only
+ * drops the single initial ref — the N retains held via fn closures keep
+ * the env alive, so the bindings (including `let big = ...` and its list
+ * items) never release. That manifests as permanent +(101*runs) value
+ * growth per test with `let big = list.tabulate(100, ...)` shape.
+ *
+ * This helper forces the teardown regardless of remaining refcount, so
+ * the caller (module end) can break the cycle safely. The closure fn
+ * values, when released, try to release c.global back — but c.global is
+ * marked tearing_down by then, so that branch is a no-op (same guard
+ * that prevents infinite recursion on arbitrary cycles). */
+void deck_env_force_release(deck_env_t *e)
+{
+    if (!e || e->tearing_down) return;
+    e->tearing_down = true;
+    for (uint32_t i = 0; i < e->count; i++) {
+        deck_release(e->bindings[i].val);
+        e->bindings[i].val  = NULL;
+        e->bindings[i].name = NULL;
+    }
+    e->count = 0;
+    deck_env_t *p = e->parent;
+    e->parent = NULL;
+    e->refcount = 0;
+    e->tearing_down = false;
+    if (p) deck_env_release(p);
+}
+
 bool deck_env_bind(deck_arena_t *a, deck_env_t *e,
                    const char *name, deck_value_t *val)
 {
@@ -5471,7 +5501,16 @@ static bool match_pattern(deck_arena_t *a, deck_env_t *env,
                 case AST_LIT_FLOAT: return val->type == DECK_T_FLOAT && val->as.f == lit->as.f;
                 case AST_LIT_BOOL:  return val->type == DECK_T_BOOL  && val->as.b == lit->as.b;
                 case AST_LIT_STR:   return val->type == DECK_T_STR   && val->as.s.ptr == lit->as.s;
-                case AST_LIT_ATOM:  return val->type == DECK_T_ATOM  && val->as.atom == lit->as.s;
+                case AST_LIT_ATOM:
+                    if (val->type == DECK_T_ATOM && val->as.atom == lit->as.s) return true;
+                    /* Spec §3.7 / concept #63 bridge: the `:none` literal
+                     * pattern matches an empty Optional value (DECK_T_OPTIONAL
+                     * with inner == NULL), so code that consumes `int(s)` /
+                     * `map.get(m, k)` can pattern-match `:none` uniformly
+                     * regardless of which representation the producer used. */
+                    if (val->type == DECK_T_OPTIONAL && val->as.opt.inner == NULL &&
+                        lit->as.s && strcmp(lit->as.s, "none") == 0) return true;
+                    return false;
                 case AST_LIT_UNIT:  return val->type == DECK_T_UNIT;
                 case AST_LIT_NONE:  return val->type == DECK_T_OPTIONAL && val->as.opt.inner == NULL;
                 default: return false;
@@ -6676,8 +6715,15 @@ deck_err_t deck_runtime_run_on_launch(const char *src, uint32_t len)
     /* Release every retained value bound in the global env (top-level
      * fn pre-bindings, top-level let bindings inside @on launch). The
      * arena reset only frees the env struct; without this, refcounted
-     * values leak across runs and `memory.no_residual_leak` trips. */
-    deck_env_release(c.global);
+     * values leak across runs and `memory.no_residual_leak` trips.
+     *
+     * Concept #73 — plain deck_env_release is insufficient here because
+     * every top-level fn retains c.global as its closure, forming a
+     * cycle (c.global → fn binding → fn.closure → c.global). After
+     * N fn defs, c.global.refcount is 1+N; a single release drops it
+     * to N, bindings never release, `let big = ...` values leak. The
+     * force-release ignores the refcount cycle and tears down. */
+    deck_env_force_release(c.global);
     deck_arena_reset(&arena);
     return run_rc;
 }
