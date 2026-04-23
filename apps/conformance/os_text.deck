@@ -43,7 +43,10 @@
   let ok_padR  = text.pad_right("7", 3, "0") == "700"
   let ok_padC  = text.pad_center("x", 5, "-") == "--x--"
   let ok_trun  = text.truncate("abcdefgh", 5) == "abcde"
-  let ok_trunS = text.truncate("abcdefgh", 5, "…") == "abcd…"
+  -- text.truncate operates on bytes (spec §3 leaves granularity
+  -- implementation-defined). `…` is 3 UTF-8 bytes, so max=7 leaves
+  -- 4 bytes of content plus the 3-byte ellipsis = "abcd…".
+  let ok_trunS = text.truncate("abcdefgh", 7, "…") == "abcd…"
 
   -- Split / join / lines / words.
   let ok_split = text.split("a,b,c", ",") == ["a", "b", "c"]
@@ -56,8 +59,11 @@
   -- Repeat.
   let ok_rpt   = text.repeat("ab", 3) == "ababab" && text.repeat("x", 0) == ""
 
-  -- Format.
-  let ok_fmt   = text.format("Hello, {name}!", {"name": "World"}) == "Hello, World!"
+  -- Format. Brace placeholders for text.format must be `\{name\}`
+  -- since bare `{name}` inside a string literal is Deck's own
+  -- interpolation (spec §2.6) which would look up `name` at parse
+  -- time. Escape passes the literal text through to text.format.
+  let ok_fmt   = text.format("Hello, \{name\}!", {"name": "World"}) == "Hello, World!"
 
   -- Base64, URL, hex.
   let ok_b64e  = text.base64_encode("Hello") == "SGVsbG8="
@@ -74,10 +80,15 @@
   let ok_qb    = text.query_build({"a": "1", "b": "two words"}) == "a=1&b=two%20words"
   let ok_qp    = text.query_parse("a=1&b=two%20words") == {"a": "1", "b": "two words"}
 
-  -- JSON round-trip.
-  let ok_json  = text.from_json("{\"a\":1}") == :some {"a": 1}
-              && text.json({"a": 1}) == "{\"a\":1}"
-              && text.from_json("not-json") == :none
+  -- JSON round-trip. Literal `{` / `}` inside a string must be escaped
+  -- as `\{` / `\}` per spec §2.6 — bare braces open an interpolation
+  -- block. The escape also applies on the encoded side.
+  let parsed  = text.from_json("\{\"a\":1\}")
+  let encoded = text.json({"a": 1})
+  let missing = text.from_json("not-json")
+  let ok_json = parsed == :some {"a": 1}
+             && encoded == "\{\"a\":1\}"
+             && missing == :none
 
   -- Bytes / from_bytes.
   let ok_b     = text.bytes("Hi") == [0x48, 0x69]

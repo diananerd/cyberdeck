@@ -1972,7 +1972,8 @@ static deck_value_t *b_time_format(deck_value_t **a, uint32_t n, deck_interp_ctx
     if (!a[1] || a[1]->type != DECK_T_STR) { set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.format(t, fmt:str)"); return NULL; }
     char fmt[64]; uint32_t L = a[1]->as.s.len < 63 ? a[1]->as.s.len : 63;
     memcpy(fmt, a[1]->as.s.ptr, L); fmt[L] = 0;
-    time_t tt = (time_t)t;
+    /* Timestamp is epoch-ms (concept #71). POSIX time_t is seconds. */
+    time_t tt = (time_t)(t / 1000LL);
     struct tm tm; gmtime_r(&tt, &tm);
     char buf[128];
     size_t k = strftime(buf, sizeof(buf), fmt, &tm);
@@ -2006,7 +2007,8 @@ static deck_value_t *b_time_parse(deck_value_t **a, uint32_t n, deck_interp_ctx_
     bool is_leap = ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
     if (month >= 2 && is_leap) days += 1;
     int64_t epoch = days * 86400 + tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec;
-    return deck_new_some(deck_new_int(epoch));
+    /* Return epoch-ms per concept #71 Timestamp unit. */
+    return deck_new_some(deck_new_int(epoch * 1000LL));
 }
 
 /* from_iso is just parse with the fixed ISO 8601 Z format. Returns :none on bad input. */
@@ -2029,7 +2031,8 @@ static deck_value_t *b_time_from_iso(deck_value_t **a, uint32_t n, deck_interp_c
     bool is_leap = ((Y % 4 == 0) && (Y % 100 != 0)) || (Y % 400 == 0);
     if (Mo >= 3 && is_leap) days += 1;
     int64_t epoch = days * 86400 + h * 3600 + m * 60 + sec;
-    return deck_new_some(deck_new_int(epoch));
+    /* Return epoch-ms per concept #71 Timestamp unit. */
+    return deck_new_some(deck_new_int(epoch * 1000LL));
 }
 
 /* time.date_parts(t) -> {str: int?} with year/month/day/hour/minute/second.
@@ -2043,7 +2046,8 @@ static deck_value_t *b_time_date_parts(deck_value_t **a, uint32_t n, deck_interp
     (void)n;
     int64_t t = ts_or_err(a[0], c, "time.date_parts");
     if (c->err) return NULL;
-    time_t tt = (time_t)t;
+    /* Timestamp is epoch-ms (concept #71). POSIX time_t is seconds. */
+    time_t tt = (time_t)(t / 1000LL);
     struct tm tm; gmtime_r(&tt, &tm);
     deck_value_t *m = deck_new_map(8);
     if (!m) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "time.date_parts alloc"); return NULL; }

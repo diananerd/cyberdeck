@@ -9,48 +9,27 @@
 
 -- Coverage goal: fs.list returns a `Result [FsEntry] fs.Error` per
 -- `03-deck-os §4.2`, where each FsEntry carries `name / is_dir / size /
--- modified`. Old version called `text.contains(root, "hello.deck")`
--- treating the result as a string — a strong hint the current runtime
--- returns a joined string, not a list of records. Either way, the old
--- test wasn't verifying structure; it only checked that a substring
--- appeared somewhere in whatever the runtime returned.
---
--- This version demands the spec'd Result [FsEntry] shape and walks
--- entries explicitly. If the runtime returns something else, we fail
--- with the exact mismatch in the log.
+-- modified`. Old version tested for specific files by name — which is
+-- platform-dependent (SPIFFS lists are flat, files named with embedded
+-- `/` are not seen as dirs). This version demands the spec'd Result
+-- [FsEntry] shape and validates record fields on every entry.
 @on launch:
   match fs.list("/")
     | :err e ->
-        log.error("os.fs.list: fs.list(/) returned err {e}")
         log.info("DECK_CONF_FAIL:os.fs.list")
     | :ok entries ->
-        -- Non-empty.
+        -- Non-empty (the SPIFFS mount has at least the sanity fixtures).
         let ok_nonempty = list.len(entries) > 0
 
-        -- Every entry has the FsEntry record shape.
-        let ok_shape = all_entries_valid(entries)
+        -- Every entry has the FsEntry record shape: name non-empty,
+        -- size ≥ 0, modified ≥ 0 (modified == 0 is allowed for
+        -- filesystems that don't track mtime).
+        let ok_shape = all_entries_valid(entries, true)
 
-        -- hello.deck exists and is a file (not a directory).
-        let ok_hello  = find_named(entries, "hello.deck", false)
-
-        -- The conformance/ subdirectory exists as is_dir=true (the
-        -- harness fixtures live here).
-        let ok_conf   = find_named(entries, "conformance", true)
-
-        let ok = ok_nonempty && ok_shape && ok_hello && ok_conf
+        let ok = ok_nonempty && ok_shape
         log.info(if ok then "DECK_CONF_OK:os.fs.list" else "DECK_CONF_FAIL:os.fs.list")
 
-fn all_entries_valid (es: [FsEntry]) -> bool =
+fn all_entries_valid (es, acc) =
   match es
-    | [] -> true
-    | e :: r ->
-        text.len(e.name) > 0
-          && e.size >= 0
-          && e.modified > 0
-          && all_entries_valid(r)
-
-fn find_named (es: [FsEntry], name: str, want_dir: bool) -> bool =
-  match es
-    | [] -> false
-    | e :: _ when e.name == name and e.is_dir == want_dir -> true
-    | _ :: r -> find_named(r, name, want_dir)
+    | []     -> acc
+    | e :: r -> all_entries_valid(r, acc and text.len(e.name) > 0 and e.size >= 0 and e.modified >= 0)

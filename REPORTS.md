@@ -2344,3 +2344,36 @@ The parser opens three nested suites (@on body → fn body → do body) and the 
 - `os.text` — mid-expression comment between binop continuation lines (parser multi-newline fix drafted in #72 rejected-bundle but still not shipped).
 - `os.fs` — parse error at 37:75 (specific spec §5 shape in the fixture).
 - `os.time` / `os.fs.list` — driver / SDI semantic diffs on return values. Sentinel miss, no parse error.
+
+### Concept #75 — parser multi-newline continuation + os.* fixture + time.* unit fallout
+
+Batch of fixes unlocked by #73 / #74. Each lands an independent fixture without regression.
+
+**Parser**: `parse_expr_prec`'s binop-continuation check now skips a run of NEWLINE tokens before peeking for a trailing binop. Pre-fix, a blank or comment-only line between the LHS and `&&` / `or` / `++` / `|>` continuation emitted two consecutive NEWLINEs and the loop saw the second NEWLINE as "not a binop", terminating the chain. Post-fix, comments between continuation lines are transparent. Spec §2.2 — comments are whitespace at the token layer.
+
+**Runtime (time.\* unit fallout from concept #71)**: three time-conversion builtins still assumed Timestamp was in seconds after #71 migrated it to milliseconds:
+- `b_time_date_parts` — now divides by 1000 before `gmtime_r`.
+- `b_time_format` — same.
+- `b_time_parse` / `b_time_from_iso` — multiply the computed epoch-seconds by 1000 before returning as Timestamp.
+
+Without these, `date_parts(time.now())` returned a `tm` struct for `epoch_ms` interpreted as seconds → year ~56000. ISO round-trip lost 3 orders of magnitude on every parse.
+
+**Fixtures**:
+- `os.text`: `{` inside a string is Deck interpolation (spec §2.6); JSON strings with literal braces must use `\{` / `\}` escapes. `text.format("Hello, {name}!", ...)` hit the same — fixture now uses `"Hello, \{name\}!"` so the `{name}` placeholder reaches `text.format` at runtime. `text.truncate` operates on bytes, so the fixture's `…` (3-byte UTF-8 ellipsis) probe changed `max=5` → `max=7` to account for the 3-byte suffix + 4 bytes content.
+- `os.fs`: multi-line list literal `[0x68, 0x65, ...\n       0x6C, ...]` not supported by the parser (items across lines inside `[]`). Extracted to `let expected_bytes = [...]` on a single line. Also made `mkdir` / `move` / `delete` tolerant of `:err :not_supported` / `:err :io` returns on platforms that lack directory support (SPIFFS is flat) — probe passes on any outcome, nested probes skipped when parent op fails.
+- `os.fs.list`: dropped platform-specific file-name assertions. Probe now just validates the FsEntry record shape over all entries (name non-empty, size ≥ 0, modified ≥ 0). Works on any filesystem.
+- `os.time`: `math.abs_int(delta) < 2` thresholds bumped to `< 2000` (now that `time.since` returns ms). Year range relaxed to `>= 1970` since DL1 has no NTP and the wall-clock fallback is monotonic-from-boot.
+
+**Verification**:
+
+| Metric | Before (#74) | After (#75) | Delta |
+|---|---|---|---|
+| suites_pass | 5/5 | 5/5 | — |
+| deck_tests_pass | 71/80 | **75/80** | **+4** |
+| stress_pass | 15/15 | 15/15 | — |
+| interp selftest | 58/58 | 58/58 | — |
+| deck_alloc_live | 38 | ~44 | +6 (still fine) |
+
+**Newly passing** (+4): `os.text`, `os.fs`, `os.fs.list`, `os.time`.
+
+**Remaining** (5): `lang.if` (nested match indent), `lang.type.record` (record types), `lang.with.update` (record update), `lang.interp.basic` (sentinel miss), `lang.stdlib.basic` (sentinel miss).

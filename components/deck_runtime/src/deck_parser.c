@@ -770,12 +770,22 @@ static ast_node_t *parse_expr_prec(deck_parser_t *p, int min_prec)
         /* Indent-continuation: `let X = A\n   && B` — the lexer leaves
          * only a bare NEWLINE before the binop (INDENT suppressed by
          * handle_line_start continuation detection). Peek across the
-         * newline; if the next token is a binop we continue the chain. */
+         * newline; if the next token is a binop we continue the chain.
+         *
+         * When a blank or comment-only line sits between the LHS and the
+         * continuation (`= A \n -- comment \n  && B`) the lexer emits two
+         * NEWLINEs back-to-back — one per source line. Skip past the run
+         * of NEWLINEs before deciding, so comments between continuation
+         * lines are transparent (spec §2.2 — comments are whitespace). */
         if (at(p, TOK_NEWLINE)) {
+            deck_tok_t nx = peek_next_tok(p);
+            while (nx == TOK_NEWLINE) {
+                advance(p);
+                nx = peek_next_tok(p);
+            }
             binop_info_t peek_info;
-            if (binop_for(peek_next_tok(p), &peek_info) &&
-                peek_info.prec >= min_prec) {
-                advance(p);   /* consume the NEWLINE */
+            if (binop_for(nx, &peek_info) && peek_info.prec >= min_prec) {
+                advance(p);   /* consume the final NEWLINE */
             } else {
                 break;
             }

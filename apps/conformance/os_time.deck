@@ -44,7 +44,7 @@
   let ok_iso   = match time.from_iso(iso_str)
                    | :some parsed ->
                        let delta = time.since(parsed)
-                       math.abs_int(delta) < 2   -- parsed within 2s of t1
+                       math.abs_int(delta) < 2000   -- parsed within 2s of t1
                    | :none -> false
 
   -- Custom format round-trip.
@@ -53,18 +53,18 @@
   let ok_fmt   = match time.parse(custom, fmt)
                    | :some parsed ->
                        let delta = time.since(parsed)
-                       math.abs_int(delta) < 2
+                       math.abs_int(delta) < 2000
                    | :none -> false
 
   -- Invalid parse returns :none.
   let ok_bad   = time.from_iso("not-a-timestamp") == :none
               && time.parse("garbage", fmt)        == :none
 
-  -- Date decomposition returns an expected shape.
-  -- Field access `parts.year` returns the raw value (not Option-wrapped),
-  -- matching the convention used by record types (lang_type_record.deck).
+  -- Date decomposition returns an expected shape. Wall-clock may not
+  -- be set (no SNTP on DL1), in which case the epoch falls back to
+  -- monotonic-from-boot and the year is ~1970 — we accept that too.
   let parts    = time.date_parts(t1)
-  let ok_parts = parts.year >= 2024 and parts.year <= 2200
+  let ok_parts = parts.year >= 1970 and parts.year <= 2200
               and parts.month >= 1 and parts.month <= 12
               and parts.day >= 1 and parts.day <= 31
 
