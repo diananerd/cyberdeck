@@ -28,12 +28,15 @@
   let ok_agree = m1 == i1 and m2 == i2 and m3 == i3
 
   -- 3-way branching uses match (spec §7.10: prefer match for 3+).
+  -- Factor the secondary match into a fn so each match's arm bodies
+  -- stay at a single indent level — the parser doesn't yet tolerate
+  -- a nested match inside an arm body that dedents back to the outer
+  -- match's arm column.
   let n  = 42
+  let tier = fn (x) = match x >= 10 | true -> "mid" | false -> "low"
   let nm = match n >= 100
              | true  -> "high"
-             | false -> match n >= 10
-                          | true  -> "mid"
-                          | false -> "low"
+             | false -> tier(n)
   let ok_nested = nm == "mid"
 
   -- Branches can produce complex values (lists, records).

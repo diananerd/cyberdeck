@@ -319,6 +319,60 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                 n->as.fndef.body     = body;
                 break;
             }
+            /* Spec §4.1 — `TypeName { field: value, … }` record
+             * construction. Desugars to a map literal with an extra
+             * `__type` entry tagging the type, so field access via
+             * `.field` and type_of(x) both Just Work on the resulting
+             * map. Heuristic: the ident starts with an uppercase ASCII
+             * letter (Deck convention for type names) and the very next
+             * token is `{`. Lowercase idents never take this branch so
+             * regular variable refs still work. */
+            if (peek_next_tok(p) == TOK_LBRACE &&
+                p->cur.text && p->cur.text[0] >= 'A' && p->cur.text[0] <= 'Z') {
+                uint32_t ln = p->cur.line, co = p->cur.col;
+                const char *type_name = p->cur.text;
+                advance(p);   /* ident */
+                advance(p);   /* { */
+                ast_node_t *map = ast_new(p->arena, AST_LIT_MAP, ln, co);
+                if (!map) return NULL;
+                ast_list_init(&map->as.map_lit.keys);
+                ast_list_init(&map->as.map_lit.vals);
+                /* Inject `__type: :TypeName` as the first entry. */
+                ast_node_t *tk = ast_new(p->arena, AST_LIT_STR, ln, co);
+                ast_node_t *tv = ast_new(p->arena, AST_LIT_ATOM, ln, co);
+                if (!tk || !tv) return NULL;
+                tk->as.s = deck_intern_cstr("__type");
+                tv->as.s = type_name;
+                ast_list_push(p->arena, &map->as.map_lit.keys, tk);
+                ast_list_push(p->arena, &map->as.map_lit.vals, tv);
+                if (!at(p, TOK_RBRACE)) {
+                    for (;;) {
+                        if (!at(p, TOK_IDENT)) {
+                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                                    "expected field name in record construction");
+                            return NULL;
+                        }
+                        ast_node_t *k = ast_new(p->arena, AST_LIT_STR,
+                                                p->cur.line, p->cur.col);
+                        if (!k) return NULL;
+                        k->as.s = p->cur.text;
+                        advance(p);
+                        if (!expect(p, TOK_COLON,
+                                    "expected ':' after field name")) return NULL;
+                        ast_node_t *v = parse_expr_prec(p, 0);
+                        if (!v) return NULL;
+                        ast_list_push(p->arena, &map->as.map_lit.keys, k);
+                        ast_list_push(p->arena, &map->as.map_lit.vals, v);
+                        if (!at(p, TOK_COMMA)) break;
+                        advance(p);
+                        if (at(p, TOK_RBRACE)) break;
+                    }
+                }
+                if (!expect(p, TOK_RBRACE,
+                            "expected '}' closing record construction")) return NULL;
+                n = map;
+                break;
+            }
             n = mknode(p, AST_IDENT); if (!n) return NULL;
             n->as.s = p->cur.text; advance(p); break;
         case TOK_LPAREN: {
@@ -651,7 +705,10 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
         }
         if (at(p, TOK_KW_WITH)) {
             /* DL2 F22.2 — `expr with { field: val, ... }` returns a
-             * new record/map with the given fields updated. */
+             * new record/map with the given fields updated. Spec §4.3
+             * treats `field` on the LHS of `:` as a bare name (not an
+             * expression) — emit a string literal so the runtime's
+             * with-update matches map string keys. */
             advance(p); /* with */
             if (!expect(p, TOK_LBRACE, "expected '{' after `with`")) return NULL;
             ast_node_t *w = mknode(p, AST_WITH); if (!w) return NULL;
@@ -660,8 +717,15 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
             ast_list_init(&w->as.with_.vals);
             if (!at(p, TOK_RBRACE)) {
                 for (;;) {
-                    ast_node_t *k = parse_expr_prec(p, 0);
-                    if (!k) return NULL;
+                    ast_node_t *k = NULL;
+                    if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                        k = mknode(p, AST_LIT_STR); if (!k) return NULL;
+                        k->as.s = p->cur.text;
+                        advance(p);
+                    } else {
+                        k = parse_expr_prec(p, 0);
+                        if (!k) return NULL;
+                    }
                     if (!expect(p, TOK_COLON, "expected ':' in with update")) return NULL;
                     ast_node_t *v = parse_expr_prec(p, 0);
                     if (!v) return NULL;

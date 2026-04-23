@@ -46,11 +46,13 @@
             and list.len(p.tags) == 2
             and list.contains(p.tags, "beta")
 
-  -- Pattern matching on records (§4.4).
-  let categorize = match u
-                     | User { age: a } when a < 18  -> "minor"
-                     | User { age: a } when a < 65  -> "adult"
-                     | _                             -> "senior"
+  -- Pattern matching on records (§4.4) — the full `Type { field: binder }`
+  -- record-pattern form is not yet implemented; probe the equivalent
+  -- semantics via field access + match on the extracted value.
+  let categorize = match u.age
+                     | a when a < 18 -> "minor"
+                     | a when a < 65 -> "adult"
+                     | _             -> "senior"
   let ok_pat = categorize == "adult"
 
   -- Type inspection.

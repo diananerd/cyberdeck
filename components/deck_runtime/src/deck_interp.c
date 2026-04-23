@@ -5399,7 +5399,18 @@ static deck_value_t *b_and_then(deck_value_t **args, uint32_t n, deck_interp_ctx
 static deck_value_t *b_type_of(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n; (void)c;
-    return deck_new_atom(args[0] ? deck_type_name(args[0]->type) : "nil");
+    if (!args[0]) return deck_new_atom("nil");
+    /* Record instances constructed via `Name { ... }` carry an
+     * `__type` entry tagging their @type declaration — report that
+     * as the type instead of the generic `:map`. */
+    if (args[0]->type == DECK_T_MAP) {
+        deck_value_t *k = deck_new_str_cstr("__type");
+        deck_value_t *v = k ? deck_map_get(args[0], k) : NULL;
+        if (k) deck_release(k);
+        if (v && v->type == DECK_T_ATOM && v->as.atom)
+            return deck_new_atom(v->as.atom);
+    }
+    return deck_new_atom(deck_type_name(args[0]->type));
 }
 static deck_value_t *b_is_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 { (void)n; (void)c; return deck_retain(args[0] && args[0]->type == DECK_T_INT ? deck_true() : deck_false()); }
