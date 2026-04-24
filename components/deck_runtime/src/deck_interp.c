@@ -5046,6 +5046,23 @@ static deck_value_t *b_record_field(deck_value_t **args, uint32_t n, deck_interp
     return deck_new_some(v);
 }
 
+/* ---- stream.* (Stage 5d-ii) --------------------------------------
+ *
+ * BUILTINS §12 — stream pipeline operators. Full support requires a
+ * DECK_T_STREAM runtime type + a scheduler; those are DL3 features
+ * not yet implemented. Stubs exist so `stream.X` method references
+ * resolve at parse/lookup time — any call panics :bug with a clear
+ * message. This is the honest state: apps that touch Streams fail
+ * at runtime rather than load.
+ */
+static deck_value_t *b_stream_unimpl(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    set_err(c, DECK_RT_ABORTED, 0, 0,
+            "stream.* is DL3; runtime does not yet carry DECK_T_STREAM");
+    return NULL;
+}
+
 /* ---- json.* ------------------------------------------------------
  *
  * Reuses the existing js_in_t / json_parse_value parser (defined
@@ -5516,6 +5533,29 @@ static const builtin_t BUILTINS[] = {
     { "json.parse",             b_json_parse,          1, 1 },
     { "json.encode",            b_json_encode,         1, 1 },
     { "json.encode_pretty",     b_json_encode_pretty,  1, 1 },
+
+    /* Stage 5d-ii — stream.* (BUILTINS §12). DECK_T_STREAM is DL3 and
+     * not yet carried by the runtime; these are stubs that panic :bug
+     * on call. Registered here so method-name lookup resolves and
+     * apps fail at the call site (clear error) rather than load. */
+    { "stream.map",             b_stream_unimpl,     2, 2 },
+    { "stream.filter",          b_stream_unimpl,     2, 2 },
+    { "stream.each",            b_stream_unimpl,     2, 2 },
+    { "stream.distinct",        b_stream_unimpl,     1, 1 },
+    { "stream.skip",            b_stream_unimpl,     2, 2 },
+    { "stream.take",            b_stream_unimpl,     2, 2 },
+    { "stream.take_while",      b_stream_unimpl,     2, 2 },
+    { "stream.scan",            b_stream_unimpl,     3, 3 },
+    { "stream.throttle",        b_stream_unimpl,     2, 2 },
+    { "stream.debounce",        b_stream_unimpl,     2, 2 },
+    { "stream.delay",           b_stream_unimpl,     2, 2 },
+    { "stream.merge",           b_stream_unimpl,     2, 2 },
+    { "stream.combine",         b_stream_unimpl,     2, 2 },
+    { "stream.buffer",          b_stream_unimpl,     2, 2 },
+    { "stream.window",          b_stream_unimpl,     2, 2 },
+    { "stream.map_io",          b_stream_unimpl,     2, 2 },
+    { "stream.filter_io",       b_stream_unimpl,     2, 2 },
+    { "stream.each_io",         b_stream_unimpl,     2, 2 },
 
     { NULL, NULL, 0, 0 },
 };
