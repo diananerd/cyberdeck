@@ -2687,11 +2687,11 @@ Diff: 1 file, +2 / −4.
 
 ### Session checkpoint — what's done, what's next
 
-**Commits closed to date (9):**
+**All 13 alignment stages closed.** Commits:
 
 | Commit | Stage | Scope |
 |---|---|---|
-| `0fa5844` | Cutover | Deleted 14 legacy specs + 5 annexes + 5 plans; renamed 5 pillars; 2047→2073 BRIDGE lines post-cleanup |
+| `0fa5844` | Cutover | Deleted 14 legacy specs + 5 annexes + 5 plans; renamed 5 pillars |
 | `2f89ed1` | 1 | Root-doc cleanup (README, ARCHITECTURE, CHANGELOG) |
 | `95ef55f` | 2+3+4 | CODE-AUDIT / FIXTURE-AUDIT / DEMO-AUDIT |
 | `cbdcbac` | 5a | Rename @requires/@permissions/@migration (91 files) |
@@ -2699,19 +2699,25 @@ Diff: 1 file, +2 / −4.
 | `17412d2` | 6c | Prune LoadError C enum 21 → 9 |
 | `0ea204e` | 5f | DVC wire envelope identity triple |
 | `a1362db` | 10 | demo.deck touch-ups |
+| `23e3a26` | 5d-i | Add json.* / rand.* / record.* builtin modules |
+| `e734208` | 5b | Structured parsers for @grants/@config/@errors/@handles/@service |
+| `750dd2e` | 5c | Bare `!` purity, postfix `?` operator, T? sugar |
+| `21f1ff7` | 5d-ii | Register stream.* names as DL3 stubs |
+| `8abb27f` | 6b | SERVICES.md §13 catalog for @needs.services resolution |
+| `66cdfa3` | 7 | @on back :confirm routing through Confirm Dialog |
+| `a045670` | 6 | SDI bridge.ui vtable stratified (4 bands, 22 methods) |
+| `f7c27e9` | 8 | Bridge snapshot diffing consults envelope identity triple |
+| `b6fafd9` | 9 | Fixture rewrite per FIXTURE-AUDIT (30 files) |
+| `3bd7c30` | 5d-iii | Namespace option.* / result.* combinators |
 
-**Remaining stages in priority order (10 left):**
+**Next — not part of the 13-stage alignment plan:**
 
-- **Stage 5b** — structured parsers for @grants / @service / @handles / @config / @errors (currently parse_opaque_block / parse_metadata_block). Biggest parser work. Unblocks real @service dispatch, @on back, @handles URL matching.
-- **Stage 5c** — `!` effect marker, postfix `?` operator, `T?` sugar (LANG §1.10 / §2.6). Required for every capability consumer in demo.deck.
-- **Stage 5d-i** — add json.*, rand.*, record.* builtin modules (pure, small).
-- **Stage 5d-ii** — add stream.* module (DL3; ties to @on source).
-- **Stage 5d-iii** — namespace bare unwrap/map_ok/and_then etc under option.*/result.*. Breaking change; after fixture rewrite starts.
-- **Stage 6** — SDI bridge.ui vtable stratification (4 bands × ~20 methods) per BRIDGE §4. (Unblocked by 5f.)
-- **Stage 6b** — stub 24 missing SERVICES so `@needs.services` imports resolve. (Blocked by 5b.)
-- **Stage 7** — `@on back :confirm` routing through Confirm Dialog. (Blocked by 5b.)
-- **Stage 8** — bridge diff (patch vs rebuild) per BRIDGE §9. (Blocked by 5f ✓ and 6.)
-- **Stage 9** — fixture rewrite per FIXTURE-AUDIT (23 YELLOW + 7 RED). (Blocked by 5b, 5c, 5d-i, 5d-ii, 6b.)
-- **Stage 11** — author reference apps fresh (Launcher → Task Manager → Settings → Files → Bluesky). Separate from the 13-stage alignment plan.
+- **Stage 11** — author reference apps fresh (Launcher → Task Manager → Settings → Files → Bluesky).
+- **Stage 5d-ii refinement** — full Stream runtime type + scheduler (currently stubs panic with "DL3 not wired"). Needed for any `@on source <stream>` pipeline.
+- **Per-method wiring** of the new bridge.ui vtable slots (toast, loading, progress, choice_show, etc. — currently NULL fall-through). Each is a mechanical map to the existing `deck_bridge_ui_overlay_*` / `ui_*` functions.
+- **Shell integration** of `deck_runtime_app_back` — wire it into the back-gesture hook so @on back results actually steer navigation.
+- **Patch path in bridge diffing** — Stage 8 shipped the diff decision table but treats every same-state case as REBUILD. A same-shape comparison that flips to PATCH (leaf-attr-only update) would cut render work substantially.
+
+Build is green throughout; the runtime, bridge, loader, fixtures and demo.deck all align to the five-pillar spec where the spec is authoritative and declare their known gaps where they cannot.
 
 Each remaining stage is its own concept. Build is green throughout; every stage closes with an atomic commit and hardware test (`idf.py build` passing on reference HW).
