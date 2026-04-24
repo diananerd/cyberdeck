@@ -11,6 +11,7 @@
 #include "drivers/deck_sdi_bridge_ui.h"
 
 #include "esp_log.h"
+#include "esp_random.h"
 
 #include <stdarg.h>
 #include <string.h>
@@ -4813,6 +4814,422 @@ static deck_value_t *b_to_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return o;
 }
 
+/* ================================================================
+ * Stage 5d-i — rand.* / record.* / json.* builtin modules
+ * ================================================================
+ *
+ * Per BUILTINS.md:
+ *   - rand.*   (§20) — impure; panic :bug on invalid bounds.
+ *   - record.* (§16) — pure; dynamic field reflection. Since the DL2
+ *                       runtime represents records as maps (see
+ *                       map.set / map.get), record.* is a thin rename
+ *                       of map.* with atom-typed key discipline.
+ *   - json.*   (§17) — pure; parse/encode. Error domain `json.Error`.
+ */
+
+/* ---- rand.* ------------------------------------------------------ */
+
+static deck_value_t *b_rand_int(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT ||
+        !args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "rand.int(lo:int, hi:int)"); return NULL;
+    }
+    int64_t lo = args[0]->as.i;
+    int64_t hi = args[1]->as.i;
+    if (lo >= hi) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "rand.int: lo ≥ hi");
+        return NULL;
+    }
+    uint64_t span = (uint64_t)(hi - lo);
+    uint64_t r = ((uint64_t)esp_random() << 32) | esp_random();
+    return deck_new_int(lo + (int64_t)(r % span));
+}
+
+static deck_value_t *b_rand_float(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n; (void)c;
+    /* 53-bit mantissa resolution from 64 random bits → [0.0, 1.0). */
+    uint64_t r = ((uint64_t)esp_random() << 32) | esp_random();
+    double f = (double)(r >> 11) / (double)(1ULL << 53);
+    return deck_new_float(f);
+}
+
+static deck_value_t *b_rand_range(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || !args[1] ||
+        (args[0]->type != DECK_T_FLOAT && args[0]->type != DECK_T_INT) ||
+        (args[1]->type != DECK_T_FLOAT && args[1]->type != DECK_T_INT)) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "rand.range(lo:float, hi:float)"); return NULL;
+    }
+    double lo = (args[0]->type == DECK_T_INT) ? (double)args[0]->as.i : args[0]->as.f;
+    double hi = (args[1]->type == DECK_T_INT) ? (double)args[1]->as.i : args[1]->as.f;
+    if (lo >= hi) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "rand.range: lo ≥ hi");
+        return NULL;
+    }
+    uint64_t r = ((uint64_t)esp_random() << 32) | esp_random();
+    double u = (double)(r >> 11) / (double)(1ULL << 53);
+    return deck_new_float(lo + u * (hi - lo));
+}
+
+static deck_value_t *b_rand_bool(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)c;
+    double prob = 0.5;
+    if (n >= 1 && args[0]) {
+        if (args[0]->type == DECK_T_OPTIONAL) {
+            if (args[0]->as.opt.inner) {
+                deck_value_t *p = args[0]->as.opt.inner;
+                if (p->type == DECK_T_FLOAT) prob = p->as.f;
+                else if (p->type == DECK_T_INT) prob = (double)p->as.i;
+            }
+        } else if (args[0]->type == DECK_T_FLOAT) {
+            prob = args[0]->as.f;
+        } else if (args[0]->type == DECK_T_INT) {
+            prob = (double)args[0]->as.i;
+        }
+    }
+    if (prob <= 0.0) return deck_retain(deck_false());
+    if (prob >= 1.0) return deck_retain(deck_true());
+    uint64_t r = ((uint64_t)esp_random() << 32) | esp_random();
+    double u = (double)(r >> 11) / (double)(1ULL << 53);
+    return deck_retain(u < prob ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_rand_choice(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "rand.choice(xs:[T])"); return NULL;
+    }
+    uint32_t len = args[0]->as.list.len;
+    if (len == 0) return deck_new_none();
+    uint32_t idx = esp_random() % len;
+    return deck_new_some(args[0]->as.list.items[idx]);
+}
+
+static deck_value_t *b_rand_shuffle(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_LIST) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "rand.shuffle(xs:[T])"); return NULL;
+    }
+    uint32_t len = args[0]->as.list.len;
+    deck_value_t *out = deck_new_list(len);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "rand.shuffle alloc"); return NULL; }
+    for (uint32_t i = 0; i < len; i++) deck_list_push(out, args[0]->as.list.items[i]);
+    /* Fisher-Yates — swap items from tail down. */
+    for (uint32_t i = len; i > 1; i--) {
+        uint32_t j = esp_random() % i;
+        deck_value_t *tmp = out->as.list.items[i - 1];
+        out->as.list.items[i - 1] = out->as.list.items[j];
+        out->as.list.items[j] = tmp;
+    }
+    return out;
+}
+
+static deck_value_t *b_rand_uuid(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n; (void)c;
+    uint8_t u[16];
+    esp_fill_random(u, sizeof(u));
+    /* RFC 4122 v4 — set version + variant bits. */
+    u[6] = (u[6] & 0x0F) | 0x40;
+    u[8] = (u[8] & 0x3F) | 0x80;
+    char buf[37];
+    snprintf(buf, sizeof(buf),
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             u[0],u[1],u[2],u[3], u[4],u[5], u[6],u[7],
+             u[8],u[9], u[10],u[11],u[12],u[13],u[14],u[15]);
+    return deck_new_str_cstr(buf);
+}
+
+static deck_value_t *b_rand_bytes(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "rand.bytes(n:int)"); return NULL;
+    }
+    int64_t req = args[0]->as.i;
+    if (req <= 0 || req > 4096) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "rand.bytes: n must be in 1..4096");
+        return NULL;
+    }
+    uint8_t *tmp = malloc((size_t)req);
+    if (!tmp) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "rand.bytes alloc"); return NULL; }
+    esp_fill_random(tmp, (size_t)req);
+    deck_value_t *v = deck_new_bytes(tmp, (uint32_t)req);
+    free(tmp);
+    return v;
+}
+
+/* ---- record.* (thin wrappers over map) --------------------------- */
+
+static deck_value_t *b_record_keys(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "record.keys(r)"); return NULL;
+    }
+    deck_value_t *out = deck_new_list(args[0]->as.map.len);
+    if (!out) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "record.keys alloc"); return NULL; }
+    for (uint32_t i = 0; i < args[0]->as.map.cap; i++) {
+        if (!args[0]->as.map.entries[i].used) continue;
+        deck_value_t *k = args[0]->as.map.entries[i].key;
+        /* Spec says keys → [atom]; coerce str keys to atoms. */
+        if (k && k->type == DECK_T_STR) {
+            deck_value_t *atom = deck_new_atom(k->as.s.ptr);
+            if (atom) { deck_list_push(out, atom); deck_release(atom); }
+        } else if (k && k->type == DECK_T_ATOM) {
+            deck_list_push(out, k);
+        }
+    }
+    return out;
+}
+
+static deck_value_t *b_record_to_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "record.to_map(r)"); return NULL;
+    }
+    return deck_retain(args[0]);
+}
+
+static deck_value_t *b_record_from_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    /* No type registry at this layer — return :ok m if m is a map,
+     * else :err :unknown_type. Full schema validation lands with
+     * @type structured binding (Stage 5b). */
+    if (!args[0] || args[0]->type != DECK_T_ATOM) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "record.from_map(type:atom, m:map)"); return NULL;
+    }
+    if (!args[1] || args[1]->type != DECK_T_MAP) {
+        deck_value_t *e = deck_new_atom("unknown_type");
+        deck_value_t *r = make_result_tag("err", e);
+        if (e) deck_release(e);
+        return r;
+    }
+    return make_result_tag("ok", args[1]);
+}
+
+static deck_value_t *b_record_has_field(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP || !args[1]) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "record.has_field(r, name)"); return NULL;
+    }
+    deck_value_t *v = deck_map_get(args[0], args[1]);
+    return deck_retain(v ? deck_true() : deck_false());
+}
+
+static deck_value_t *b_record_field(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_MAP || !args[1]) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "record.field(r, name)"); return NULL;
+    }
+    deck_value_t *v = deck_map_get(args[0], args[1]);
+    if (!v) return deck_new_none();
+    return deck_new_some(v);
+}
+
+/* ---- json.* ------------------------------------------------------
+ *
+ * Reuses the existing js_in_t / json_parse_value parser (defined
+ * earlier in this file for `text.from_json`). `json.parse` wraps the
+ * bare parser in a `Result any json.Error` envelope per BUILTINS §17.
+ */
+
+static deck_value_t *b_json_parse(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_STR) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "json.parse(s:str)"); return NULL;
+    }
+    js_in_t p = { args[0]->as.s.ptr, 0, args[0]->as.s.len, false };
+    deck_value_t *v = json_parse_value(&p);
+    if (!p.err) {
+        js_skip_ws(&p);
+        if (p.i != p.L) { p.err = true; if (v) { deck_release(v); v = NULL; } }
+    }
+    if (p.err) {
+        deck_value_t *e = deck_new_atom("malformed");
+        deck_value_t *res = make_result_tag("err", e);
+        if (e) deck_release(e);
+        return res;
+    }
+    deck_value_t *ok = make_result_tag("ok", v);
+    if (v) deck_release(v);
+    return ok;
+}
+
+typedef struct { char *buf; size_t cap; size_t len; bool bad; bool pretty; int depth; const char *reason; } json_w_t;
+
+static void jw_grow(json_w_t *w, size_t add)
+{
+    if (w->len + add + 1 > w->cap) {
+        size_t nc = w->cap ? w->cap * 2 : 128;
+        while (nc < w->len + add + 1) nc *= 2;
+        char *nb = realloc(w->buf, nc);
+        if (!nb) { w->bad = true; w->reason = "unsupported_type"; return; }
+        w->buf = nb; w->cap = nc;
+    }
+}
+
+static void jw_puts(json_w_t *w, const char *s, size_t len)
+{
+    jw_grow(w, len);
+    if (w->bad) return;
+    memcpy(w->buf + w->len, s, len); w->len += len; w->buf[w->len] = '\0';
+}
+
+static void jw_cstr(json_w_t *w, const char *s) { jw_puts(w, s, strlen(s)); }
+
+static void jw_indent(json_w_t *w)
+{
+    if (!w->pretty) return;
+    jw_cstr(w, "\n");
+    for (int i = 0; i < w->depth; i++) jw_cstr(w, "  ");
+}
+
+static void jw_quote(json_w_t *w, const char *s, size_t len)
+{
+    jw_cstr(w, "\"");
+    for (size_t i = 0; i < len && !w->bad; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        switch (ch) {
+            case '"':  jw_cstr(w, "\\\""); break;
+            case '\\': jw_cstr(w, "\\\\"); break;
+            case '\n': jw_cstr(w, "\\n");  break;
+            case '\t': jw_cstr(w, "\\t");  break;
+            case '\r': jw_cstr(w, "\\r");  break;
+            case '\b': jw_cstr(w, "\\b");  break;
+            case '\f': jw_cstr(w, "\\f");  break;
+            default:
+                if (ch < 0x20) {
+                    char esc[8];
+                    snprintf(esc, sizeof(esc), "\\u%04x", ch);
+                    jw_cstr(w, esc);
+                } else {
+                    jw_puts(w, (const char *)&ch, 1);
+                }
+        }
+    }
+    jw_cstr(w, "\"");
+}
+
+static void json_write_value(json_w_t *w, deck_value_t *v);
+
+static void json_write_value(json_w_t *w, deck_value_t *v)
+{
+    if (w->bad) return;
+    if (!v || v->type == DECK_T_UNIT ||
+        (v->type == DECK_T_OPTIONAL && v->as.opt.inner == NULL)) {
+        jw_cstr(w, "null"); return;
+    }
+    switch (v->type) {
+        case DECK_T_BOOL:   jw_cstr(w, v->as.b ? "true" : "false"); return;
+        case DECK_T_INT:    {
+            char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)v->as.i);
+            jw_cstr(w, buf); return;
+        }
+        case DECK_T_FLOAT:  {
+            if (!isfinite(v->as.f)) { w->bad = true; w->reason = "non_finite"; return; }
+            char buf[40]; snprintf(buf, sizeof(buf), "%.17g", v->as.f);
+            jw_cstr(w, buf); return;
+        }
+        case DECK_T_STR:    jw_quote(w, v->as.s.ptr, v->as.s.len); return;
+        case DECK_T_ATOM:   jw_quote(w, v->as.atom, strlen(v->as.atom)); return;
+        case DECK_T_OPTIONAL:
+            json_write_value(w, v->as.opt.inner); return;
+        case DECK_T_LIST: {
+            jw_cstr(w, "[");
+            w->depth++;
+            for (uint32_t i = 0; i < v->as.list.len; i++) {
+                if (i) jw_cstr(w, ",");
+                jw_indent(w);
+                json_write_value(w, v->as.list.items[i]);
+            }
+            w->depth--;
+            if (v->as.list.len) jw_indent(w);
+            jw_cstr(w, "]");
+            return;
+        }
+        case DECK_T_MAP: {
+            jw_cstr(w, "{");
+            w->depth++;
+            bool first = true;
+            for (uint32_t i = 0; i < v->as.map.cap; i++) {
+                if (!v->as.map.entries[i].used) continue;
+                if (!first) jw_cstr(w, ",");
+                first = false;
+                jw_indent(w);
+                deck_value_t *k = v->as.map.entries[i].key;
+                if (k && k->type == DECK_T_STR) jw_quote(w, k->as.s.ptr, k->as.s.len);
+                else if (k && k->type == DECK_T_ATOM) jw_quote(w, k->as.atom, strlen(k->as.atom));
+                else { w->bad = true; w->reason = "unsupported_type"; return; }
+                jw_cstr(w, w->pretty ? ": " : ":");
+                json_write_value(w, v->as.map.entries[i].val);
+            }
+            w->depth--;
+            if (!first) jw_indent(w);
+            jw_cstr(w, "}");
+            return;
+        }
+        case DECK_T_TUPLE: {
+            /* Tuples serialise as arrays. Atom-variants like (:ok, v)
+             * aren't given special treatment here — callers can remap. */
+            jw_cstr(w, "[");
+            w->depth++;
+            for (uint32_t i = 0; i < v->as.tuple.arity; i++) {
+                if (i) jw_cstr(w, ",");
+                jw_indent(w);
+                json_write_value(w, v->as.tuple.items[i]);
+            }
+            w->depth--;
+            if (v->as.tuple.arity) jw_indent(w);
+            jw_cstr(w, "]");
+            return;
+        }
+        default:
+            w->bad = true; w->reason = "unsupported_type"; return;
+    }
+}
+
+static deck_value_t *b_json_encode_impl(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c, bool pretty)
+{
+    (void)n;
+    json_w_t w = { .buf = NULL, .cap = 0, .len = 0, .bad = false, .pretty = pretty, .depth = 0, .reason = NULL };
+    json_write_value(&w, args[0]);
+    if (w.bad) {
+        deck_value_t *e = deck_new_atom(w.reason ? w.reason : "unsupported_type");
+        deck_value_t *res = make_result_tag("err", e);
+        if (e) deck_release(e);
+        free(w.buf);
+        return res;
+    }
+    deck_value_t *s = deck_new_str(w.buf ? w.buf : "", (uint32_t)w.len);
+    free(w.buf);
+    deck_value_t *ok = make_result_tag("ok", s);
+    if (s) deck_release(s);
+    (void)c;
+    return ok;
+}
+
+static deck_value_t *b_json_encode(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    return b_json_encode_impl(args, n, c, false);
+}
+static deck_value_t *b_json_encode_pretty(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    return b_json_encode_impl(args, n, c, true);
+}
+
 static const builtin_t BUILTINS[] = {
     /* log */
     { "log.debug",              b_log_debug,         1, 1 },
@@ -5069,6 +5486,28 @@ static const builtin_t BUILTINS[] = {
      * content = … in @machine states; runtime evaluates into a DVC
      * snapshot; bridge (via SDI deck.driver.bridge.ui) presents. There
      * is no builder API visible to Deck code. */
+
+    /* Stage 5d-i — rand.* (BUILTINS §20), impure. */
+    { "rand.int",               b_rand_int,          2, 2 },
+    { "rand.float",             b_rand_float,        0, 0 },
+    { "rand.range",             b_rand_range,        2, 2 },
+    { "rand.bool",              b_rand_bool,         0, 1 },
+    { "rand.choice",            b_rand_choice,       1, 1 },
+    { "rand.shuffle",           b_rand_shuffle,      1, 1 },
+    { "rand.uuid",              b_rand_uuid,         0, 0 },
+    { "rand.bytes",             b_rand_bytes,        1, 1 },
+
+    /* Stage 5d-i — record.* (BUILTINS §16), pure. */
+    { "record.keys",            b_record_keys,       1, 1 },
+    { "record.to_map",          b_record_to_map,     1, 1 },
+    { "record.from_map",        b_record_from_map,   2, 2 },
+    { "record.has_field",       b_record_has_field,  2, 2 },
+    { "record.field",           b_record_field,      2, 2 },
+
+    /* Stage 5d-i — json.* (BUILTINS §17), pure. */
+    { "json.parse",             b_json_parse,          1, 1 },
+    { "json.encode",            b_json_encode,         1, 1 },
+    { "json.encode_pretty",     b_json_encode_pretty,  1, 1 },
 
     { NULL, NULL, 0, 0 },
 };
