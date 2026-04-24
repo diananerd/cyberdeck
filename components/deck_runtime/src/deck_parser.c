@@ -1531,28 +1531,36 @@ static bool parse_needs_fields(deck_parser_t   *p,
     ast_app_field_t buf[32];
     uint32_t n = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
-        if (!at(p, TOK_IDENT)) {
+        const char *full_name = NULL;
+        if (at(p, TOK_STRING)) {
+            /* LANG §8 / SERVICES §7.2 — @needs.services uses quoted
+             * service IDs ("storage.fs", "network.http"). Accept the
+             * string form here so the services: sub-block parses. */
+            full_name = p->cur.text;
+            advance(p);
+        } else if (at(p, TOK_IDENT)) {
+            const char *name = p->cur.text;
+            advance(p);
+            /* Support dotted keys for capability paths like `network.http:`. */
+            char scratch[128];
+            uint32_t k = (uint32_t)snprintf(scratch, sizeof(scratch), "%s", name);
+            while (at(p, TOK_DOT)) {
+                advance(p);
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected ident after '.' in @needs key");
+                    return false;
+                }
+                if (k < sizeof(scratch) - 1) scratch[k++] = '.';
+                k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k,
+                                        "%s", p->cur.text);
+                advance(p);
+            }
+            full_name = deck_intern(scratch, k);
+        } else {
             set_err(p, DECK_LOAD_PARSE, "expected field name in @needs");
             return false;
         }
-        const char *name = p->cur.text;
-        advance(p);
-        /* Support dotted keys for capability paths like `network.http:`. */
-        char scratch[128];
-        uint32_t k = (uint32_t)snprintf(scratch, sizeof(scratch), "%s", name);
-        while (at(p, TOK_DOT)) {
-            advance(p);
-            if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE,
-                        "expected ident after '.' in @needs key");
-                return false;
-            }
-            if (k < sizeof(scratch) - 1) scratch[k++] = '.';
-            k += (uint32_t)snprintf(scratch + k, sizeof(scratch) - k,
-                                    "%s", p->cur.text);
-            advance(p);
-        }
-        const char *full_name = deck_intern(scratch, k);
         if (!expect(p, TOK_COLON, "expected ':' after @needs field name")) return false;
         ast_node_t *val = NULL;
         if (at(p, TOK_NEWLINE)) {

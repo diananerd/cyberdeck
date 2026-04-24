@@ -542,6 +542,71 @@ static bool cap_advertised(const char *name)
     return false;
 }
 
+/* Stage 6b — SERVICES.md §13 canonical catalog. Every service ID an
+ * app can declare in `@needs.services` must be on this list. Native
+ * dispatch for a given ID may or may not be wired — at-call-time
+ * resolution is a separate check (SDI registry lookup). `@needs` is
+ * a coarse declaration that the runtime advertises the surface. */
+static bool service_advertised(const char *id)
+{
+    if (!id) return false;
+    static const char *SPEC_SERVICES[] = {
+        /* Tier 1 — storage */
+        "storage.fs", "storage.nvs", "storage.cache",
+        /* Tier 2 — network */
+        "network.http", "network.ws", "network.wifi", "network.bluetooth",
+        /* Tier 3 — system */
+        "system.platform", "system.apps", "system.power", "system.display",
+        "system.audio", "system.security", "system.time", "system.locale",
+        "system.ota", "system.url", "system.notify", "system.theme",
+        "system.logs", "system.scheduler", "system.events",
+        "system.intents", "system.services", "system.tasks",
+        /* Tier 4 — high-level */
+        "api.client", "media.image", "media.audio", "auth.oauth",
+        "data.cache", "share.target",
+        NULL,
+    };
+    for (const char **e = SPEC_SERVICES; *e; e++)
+        if (strcmp(*e, id) == 0) return true;
+    /* Tier 5 — sensors.<name> is an open namespace per SERVICES §13. */
+    if (strncmp(id, "sensors.", 8) == 0 && id[8] != '\0') return true;
+    return false;
+}
+
+static void check_required_services(deck_loader_t *l)
+{
+    const ast_node_t *req = find_needs(l->module);
+    if (!req) return;
+    const ast_app_field_t *svc = find_field(req, "services");
+    if (!svc || !svc->value) return;
+    const ast_node_t *block = svc->value;
+    if (block->kind != AST_NEEDS) {
+        set_err(l, DECK_LOAD_TYPE, 6, block->line, block->col,
+                "@needs.services must be an indented block of "
+                "`\"service.id\": \"version_range\"` entries (LANG §8)");
+        return;
+    }
+    for (uint32_t i = 0; i < block->as.app.n_fields; i++) {
+        const ast_app_field_t *f = &block->as.app.fields[i];
+        const char *id = f->name;
+        if (!id) {
+            set_err(l, DECK_LOAD_TYPE, 6,
+                    f->value ? f->value->line : 0,
+                    f->value ? f->value->col  : 0,
+                    "@needs.services entry missing service id");
+            return;
+        }
+        if (!service_advertised(id)) {
+            set_err(l, DECK_LOAD_INCOMPATIBLE, 6,
+                    f->value ? f->value->line : 0,
+                    f->value ? f->value->col  : 0,
+                    "@needs.services lists '%s' which is not in the "
+                    "SERVICES §13 catalog", id);
+            return;
+        }
+    }
+}
+
 static void check_required_capabilities(deck_loader_t *l)
 {
     /* Spec 02-deck-app §4A — capabilities: nested block of
@@ -620,6 +685,8 @@ static void stage6_compat(deck_loader_t *l)
 
     /* DL2 F23.5 — verify @needs.capabilities list against runtime. */
     check_required_capabilities(l);
+    /* Stage 6b — @needs.services catalog check. */
+    check_required_services(l);
 }
 
 /* ================================================================
