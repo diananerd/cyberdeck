@@ -1,8 +1,10 @@
 /* deck_shell_intent — intent registry + navbar wiring. */
 
 #include "deck_shell_intent.h"
+#include "deck_shell_deck_apps.h"
 
 #include "deck_bridge_ui.h"
+#include "deck_interp.h"
 #include "esp_log.h"
 
 #include <string.h>
@@ -55,14 +57,50 @@ deck_err_t deck_shell_intent_navigate(const deck_shell_intent_t *intent)
     return DECK_LOAD_UNRESOLVED;
 }
 
+/* §14.8 — async resolver: when @on back returns :confirm the runtime
+ * shows a dialog and reports HANDLED/UNHANDLED through this callback
+ * once the user picks. The shell acts on the outcome: HANDLED keeps the
+ * current activity; UNHANDLED pops. */
+static void back_resolved_cb(deck_back_result_t outcome)
+{
+    if (s_nav_locked) return;
+    if (outcome == DECK_BACK_HANDLED) {
+        ESP_LOGI(TAG, "back :confirm → handled (staying)");
+        return;
+    }
+    if (deck_bridge_ui_activity_depth() > 1) {
+        deck_bridge_ui_activity_pop();
+    }
+}
+
 void deck_shell_navbar_back(void)
 {
     if (s_nav_locked) {
         ESP_LOGI(TAG, "back ignored — nav locked");
         return;
     }
-    /* Pop only if we have something popable (depth > 1 or > 0 if no
-     * launcher yet). */
+
+    /* If the top activity is a .deck app, let @on back steer the gesture
+     * first. Ensure the runtime resolver is registered — it is a no-op
+     * if the app's @on back doesn't return :confirm. */
+    deck_runtime_set_back_resolved_handler(back_resolved_cb);
+
+    deck_bridge_ui_activity_t *top = deck_bridge_ui_activity_current();
+    deck_runtime_app_t *app = top ? deck_shell_deck_apps_handle(top->app_id) : NULL;
+    if (app) {
+        deck_back_result_t r = deck_runtime_app_back(app);
+        if (r == DECK_BACK_HANDLED) {
+            ESP_LOGI(TAG, "back consumed by @on back");
+            return;
+        }
+        if (r == DECK_BACK_CONFIRMED) {
+            /* Dialog is up; back_resolved_cb will pop (or not) later. */
+            return;
+        }
+        /* UNHANDLED / ERROR → fall through to shell default. */
+    }
+
+    /* Default: pop only if we have something popable. */
     if (deck_bridge_ui_activity_depth() > 1) {
         deck_bridge_ui_activity_pop();
     } else {

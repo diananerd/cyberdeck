@@ -54,6 +54,14 @@ uint32_t deck_shell_deck_apps_count(void)
     return s_n_loaded;
 }
 
+deck_runtime_app_t *deck_shell_deck_apps_handle(uint16_t app_id)
+{
+    for (uint32_t i = 0; i < s_n_loaded; i++) {
+        if (s_slots[i].app_id == app_id) return s_slots[i].handle;
+    }
+    return NULL;
+}
+
 void deck_shell_deck_apps_info(uint32_t idx, deck_shell_deck_app_info_t *out)
 {
     if (!out) return;

@@ -48,6 +48,11 @@ void deck_shell_deck_apps_info(uint32_t idx, deck_shell_deck_app_info_t *out);
  * are logged but do not abort the scan. */
 deck_err_t deck_shell_deck_apps_scan_and_register(void);
 
+/* Look up the runtime handle for a shell app_id; NULL if the id does not
+ * correspond to a loaded .deck app (C-side launcher apps return NULL). */
+struct deck_runtime_app;
+struct deck_runtime_app *deck_shell_deck_apps_handle(uint16_t app_id);
+
 #ifdef __cplusplus
 }
 #endif

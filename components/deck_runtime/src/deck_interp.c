@@ -7653,24 +7653,32 @@ typedef struct {
 } back_confirm_state_t;
 
 static deck_back_result_t s_back_resolved = DECK_BACK_UNHANDLED;
+static deck_runtime_back_resolved_cb_t s_back_resolved_cb = NULL;
+
+void deck_runtime_set_back_resolved_handler(deck_runtime_back_resolved_cb_t cb)
+{
+    s_back_resolved_cb = cb;
+}
 
 static void back_confirm_on_ok(void *user)
 {
     back_confirm_state_t *s = user;
+    deck_back_result_t outcome = DECK_BACK_UNHANDLED;
     if (s && s->confirm_atom && strcmp(s->confirm_atom, "handled") == 0)
-        s_back_resolved = DECK_BACK_HANDLED;
-    else
-        s_back_resolved = DECK_BACK_UNHANDLED;
-    free(s);
+        outcome = DECK_BACK_HANDLED;
+    s_back_resolved = outcome;
+    if (s) free(s);
+    if (s_back_resolved_cb) s_back_resolved_cb(outcome);
 }
 static void back_confirm_on_cancel(void *user)
 {
     back_confirm_state_t *s = user;
+    deck_back_result_t outcome = DECK_BACK_UNHANDLED;
     if (s && s->cancel_atom && strcmp(s->cancel_atom, "handled") == 0)
-        s_back_resolved = DECK_BACK_HANDLED;
-    else
-        s_back_resolved = DECK_BACK_UNHANDLED;
-    free(s);
+        outcome = DECK_BACK_HANDLED;
+    s_back_resolved = outcome;
+    if (s) free(s);
+    if (s_back_resolved_cb) s_back_resolved_cb(outcome);
 }
 
 deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app)

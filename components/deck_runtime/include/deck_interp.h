@@ -196,6 +196,14 @@ typedef enum {
 
 deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app);
 
+/* When @on back returns :confirm the runtime shows the dialog and
+ * returns DECK_BACK_CONFIRMED synchronously. The user's eventual pick
+ * fires this resolver with the final outcome (HANDLED or UNHANDLED) so
+ * the shell can pop or not. The resolver is a singleton — the shell
+ * registers once at boot. NULL clears it. */
+typedef void (*deck_runtime_back_resolved_cb_t)(deck_back_result_t outcome);
+void deck_runtime_set_back_resolved_handler(deck_runtime_back_resolved_cb_t cb);
+
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */
 void deck_runtime_app_unload(deck_runtime_app_t *app);
