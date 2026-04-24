@@ -695,6 +695,14 @@ static deck_value_t *call_fn_value_c(deck_interp_ctx_t *c,
         deck_env_bind(c->arena, call_env, fnv->as.fn.params[i], argv[i]);
     deck_value_t *result = deck_interp_run(c, call_env, fnv->as.fn.body);
     deck_env_release(call_env);
+    /* LANG §11.1 — a `?` inside this body bailed out. Catch the
+     * propagated err tuple here and make it this fn's return value. */
+    if (c->try_unwinding && c->try_propagated) {
+        if (result) deck_release(result);
+        result = c->try_propagated;
+        c->try_propagated = NULL;
+        c->try_unwinding = false;
+    }
     return result;
 }
 
@@ -5856,6 +5864,10 @@ static deck_value_t *run_match(deck_interp_ctx_t *c, deck_env_t *env, const ast_
 deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *n)
 {
     if (!n || c->err != DECK_RT_OK) return NULL;
+    /* LANG §11.1 — a `?` inside a previous sub-expression is
+     * unwinding to the enclosing fn body. Short-circuit every
+     * further evaluation until invoke_user_fn consumes the result. */
+    if (c->try_unwinding) return NULL;
     if (++c->depth > DECK_INTERP_STACK_MAX) {
         set_err(c, DECK_RT_STACK_OVERFLOW, n->line, n->col, "stack depth > %u", DECK_INTERP_STACK_MAX);
         c->depth--; return NULL;
@@ -5880,6 +5892,35 @@ deck_value_t *deck_interp_run(deck_interp_ctx_t *c, deck_env_t *env, const ast_n
         case AST_LIT_ATOM:   r = deck_new_atom(n->as.s); break;
         case AST_LIT_UNIT:   r = deck_retain(deck_unit()); break;
         case AST_LIT_NONE:   r = deck_new_none(); break;
+
+        case AST_TRY: {
+            /* LANG §11.1 — evaluate inner; if (:ok, v) yield v;
+             * if (:err, e) stash the tuple in c->try_propagated and
+             * flip c->try_unwinding so the enclosing fn bails. */
+            c->tail_pos = false;
+            deck_value_t *v = deck_interp_run(c, env, n->as.try_.inner);
+            if (!v) break;
+            if (v->type == DECK_T_TUPLE && v->as.tuple.arity == 2 &&
+                v->as.tuple.items[0] && v->as.tuple.items[0]->type == DECK_T_ATOM) {
+                const char *ctor = v->as.tuple.items[0]->as.atom;
+                if (strcmp(ctor, "ok") == 0) {
+                    r = deck_retain(v->as.tuple.items[1]);
+                    deck_release(v);
+                    break;
+                }
+                if (strcmp(ctor, "err") == 0) {
+                    c->try_propagated = v;  /* transfer ownership */
+                    c->try_unwinding  = true;
+                    r = NULL;
+                    break;
+                }
+            }
+            /* Not a Result — `?` only applies to Result values. */
+            set_err(c, DECK_RT_TYPE_MISMATCH, n->line, n->col,
+                    "postfix '?' expects a Result value");
+            deck_release(v);
+            break;
+        }
 
         case AST_LIT_LIST: {
             /* DL2 F21.4: build a deck list value from the literal nodes. */

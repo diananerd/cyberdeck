@@ -58,6 +58,12 @@ typedef struct {
      * top-level decls (@assets) at call time. NULL for expressions
      * evaluated outside a module (e.g. interp_test scratch runs). */
     const ast_node_t  *module;
+    /* LANG §11.1 — postfix `?` propagation state. When AST_TRY sees a
+     * (:err, e) tuple, it retains the entire tuple here and flips
+     * try_unwinding. The interpreter bails to the enclosing fn body,
+     * which returns this value and clears the flag. */
+    struct deck_value *try_propagated;   /* retained when set */
+    bool               try_unwinding;
 } deck_interp_ctx_t;
 
 /* Initialize interpreter context. global env starts empty. */

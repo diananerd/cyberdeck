@@ -85,6 +85,7 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_ERRORS:      return "errors";
         case AST_HANDLES:     return "handles";
         case AST_SERVICE:     return "service";
+        case AST_TRY:         return "try";
         default:              return "?";
     }
 }

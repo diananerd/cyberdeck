@@ -613,6 +613,17 @@ static ast_node_t *parse_primary(deck_parser_t *p)
 static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
 {
     for (;;) {
+        /* LANG §11.1 — postfix `?` propagation on a Result-typed expr.
+         * Desugars at eval time: if the value is (:ok, v) yield v, if
+         * (:err, e) unwind to the enclosing fn body and return that
+         * err tuple directly. */
+        if (at(p, TOK_QUESTION)) {
+            ast_node_t *t = mknode(p, AST_TRY); if (!t) return NULL;
+            t->as.try_.inner = head;
+            advance(p);
+            head = t;
+            continue;
+        }
         if (at(p, TOK_DOT)) {
             advance(p);
             /* DL2 F21.5: `.0`, `.1`, ... is tuple-field access. */
@@ -2688,22 +2699,24 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
         if (!skip_type_annotation(p)) return NULL;
     }
 
-    /* DL2 F23: collect effect annotations `!alias` for loader to enforce
-     * against @use declarations. */
+    /* LANG §2.6 — `!` on a fn signature is a single purity bit. A bare
+     * `!` declares the fn impure; the loader derives which capabilities
+     * it touches from the body (no alias list required). DL2 F23 also
+     * accepts legacy `!alias` annotations as a refinement and carries
+     * them forward for loader cross-check. */
     const char *effects_buf[8];
     uint32_t n_effects = 0;
     while (at(p, TOK_BANG)) {
         advance(p);
-        if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE, "expected effect alias after '!'");
-            return NULL;
+        if (at(p, TOK_IDENT)) {
+            if (n_effects >= 8) {
+                set_err(p, DECK_LOAD_PARSE, "too many effect annotations (max 8)");
+                return NULL;
+            }
+            effects_buf[n_effects++] = p->cur.text;
+            advance(p);
         }
-        if (n_effects >= 8) {
-            set_err(p, DECK_LOAD_PARSE, "too many effect annotations (max 8)");
-            return NULL;
-        }
-        effects_buf[n_effects++] = p->cur.text;
-        advance(p);
+        /* No ident after `!` → bare purity bit; no alias captured. */
     }
 
     if (!expect(p, TOK_ASSIGN, "expected '=' in fn declaration")) return NULL;

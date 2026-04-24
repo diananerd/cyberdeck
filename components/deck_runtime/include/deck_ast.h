@@ -87,6 +87,7 @@ typedef enum {
     AST_ERRORS,      /* LANG §2.4 — @errors <domain> + :variant str pairs. */
     AST_HANDLES,     /* LANG §19 — @handles with deep-link URL patterns. */
     AST_SERVICE,     /* LANG §18 — @service "<id>" with allow/keep + methods. */
+    AST_TRY,         /* LANG §11.1 — postfix `expr?` propagation operator. */
 } ast_kind_t;
 
 typedef enum {
@@ -390,6 +391,14 @@ struct ast_node {
             bool          keep;            /* from `keep:` */
             ast_list_t    methods;         /* AST_ON entries */
         } service;
+
+        /* LANG §11.1 — postfix `expr?`. Evaluates `inner`; if its value
+         * is (:ok, v) the node yields v, if (:err, e) the evaluator
+         * stashes the err tuple and unwinds to the enclosing fn body,
+         * which returns the stashed tuple directly. */
+        struct {
+            ast_node_t *inner;
+        } try_;
     } as;
 };
 
