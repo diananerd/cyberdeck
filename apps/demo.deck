@@ -1,10 +1,10 @@
--- demo.deck — Deck 3.0 conformance hard-final test (combinatorial stress)
+-- demo.deck — Deck conformance hard-final test (combinatorial stress)
 --
 -- Purpose: exercise every edge of the language and platform specs in a
 -- single loadable application, AND push the combinatorial interactions
 -- between features to their limits. If this file parses, type-checks, and
 -- runs to its `ALL_PASS` sentinel without panic, the implementation
--- conforms to Deck 3.0 not just at the per-feature level but also at the
+-- conforms to the spec not just at the per-feature level but also at the
 -- feature-interaction level.
 --
 -- Logic is deliberately nonsensical — the goal is breadth-times-depth
@@ -73,8 +73,6 @@
   runtime:    ">= 1.0"
   max_heap:   192KB
   max_stack:  512
-  caps:
-    notifications: optional
   services:
     "storage.fs":          ">= 1"
     "storage.nvs":         ">= 1"
