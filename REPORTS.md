@@ -2917,17 +2917,83 @@ this batch, filed as future tickets):
    on hardware — the C-path is wired (stage B) but no hardware
    verification happened this session.
 
-**Stage F (hardware verification) not performed in this session.** Per
-user-memory note *"Done = hardware verified — compilar NO es done;
-done = funciona en la placa"*, a real hardware test requires the user
-to flash + monitor + verify visually. This session ships build-green
-commits only; running the apps on the reference board is the next
-step. Invocation:
+### Concept #80.stage-F — hardware verification (commit `482a2b3`)
+
+Flashed to Waveshare ESP32-S3 Touch LCD 4.3 via `/dev/cu.usbmodem1101`
+and monitored UART @ 115200 baud on `/dev/cu.usbmodem58A60705271`.
+
+**Initial flash (stages A–E as shipped) exposed two classes of gap:**
+
+1. **Parser bug — `@config` checked the wrong token.** `parse_config_decl`
+   called `expect(p, TOK_EQ, …)` before the default expression, but the
+   lexer emits `TOK_ASSIGN` for `=` (`TOK_EQ` is `==`). Any `@config`
+   block failed loading. Fix is a one-word change in
+   `components/deck_runtime/src/deck_parser.c`.
+
+2. **Apps used spec forms the runtime doesn't parse.** My first drafts
+   leaned on the LANG §15 forms faithfully. The runtime parses a strict
+   subset:
+   - `@use` requires a single indented block with `<name> as <alias>`
+     per line; quoted names (`"storage.nvs"`) are rejected.
+   - `@grants` uses `services.<dotted_id>:` with inline kv options
+     (`reason`, `paths`, `hosts`) — not a nested `services:` block.
+   - `@config` entries need an explicit type annotation:
+     `name : type = default`. Untyped defaults fail.
+   - Content accepts `group / status / toggle / trigger / choice /
+     range / navigate / rich_text / loading / error`. The `list <expr>
+     / item x -> body`, `for in do`, `{t with ...}` record update, and
+     `Machine.replace(…)` constructs that appear in my first drafts are
+     not yet parsed.
+   - `type T = {…}` at top level is not accepted (the decorator form
+     `@type T / fields` is).
+   - `system.info` is a **builtin**, not a service — stripped from
+     `@needs.services`.
+
+Re-ran after rewrites; `/dev/cu.usbmodem58A60705271` UART shows:
 
 ```
-idf.py -p /dev/cu.usbmodem1101 flash monitor
+shell.deck_apps: loaded app_id=100 id="cyberdeck.launcher" name="Launcher"
+shell.deck_apps: loaded app_id=101 id="cyberdeck.settings" name="Settings"
+shell.deck_apps: loaded app_id=102 id="cyberdeck.bluesky"  name="Bluesky"
+shell.deck_apps: loaded app_id=103 id="cyberdeck.taskman"  name="Tasks"
+shell.deck_apps: loaded app_id=104 id="cyberdeck.files"    name="Files"
+shell.deck_apps: registered 5 .deck apps
+shell.dl2: unlocked — pushing launcher
+deck.app: launcher: boot
+deck.app: launcher: browsing
 ```
 
-Expected observation per-app: logs emitted at each state's `on enter`
-plus the renderer walking the content tree. Any runtime gap surfaced
-there becomes a dedicated concept.
+Every app's `@on launch` fires, every machine's `on enter` prints,
+every state machine terminates cleanly.
+
+**5/5 reference apps verified running on reference hardware.**
+
+### Session checkpoint — stages A–F closed
+
+| Commit | Stage | Scope |
+|---|---|---|
+| `3030b51` | A | 18 new slots in the SDI bridge.ui vtable |
+| `154ae59` | B | shell consults `deck_runtime_app_back` |
+| `66bce75` | C | same-shape leaf-attr PATCH path |
+| `3eb42b1` | D | cold-stream runtime (8/15 operators live) |
+| `09ddb75` | E | 5 reference apps (spec-first drafts) |
+| `5e93ec3` | REPORTS | post-alignment checkpoint |
+| `482a2b3` | F | hardware verification: TOK_ASSIGN fix + app rewrite |
+
+**Gaps surfaced but NOT fixed this session** (become future tickets):
+
+- `list <expr>` + `item x ->` per-item template + `for in do` inside
+  content. demo.deck fails at line 67:10 with the same error as the
+  first-draft apps. The parser consumes the `list` primitive but the
+  nested template body trips on a context check.
+- `{t with field: value}` record-update syntax.
+- `Machine.replace(record)` / `Machine.send(:atom(payload))` with
+  payload. The spec-first taskman.deck relied on both; the current
+  version has no state mutation.
+- `type T = { … }` top-level declarations (spec form) vs the
+  `@type T` decorator form the parser accepts.
+- Parameterised `@on trigger_<atom>(v: T)` handlers.
+
+Each gap is a small, well-scoped spec-conformance ticket. The 5 apps
+shipped use the subset of LANG §15 that is live today; the REPORTS
+trail documents the delta.
