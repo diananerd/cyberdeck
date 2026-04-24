@@ -1,6 +1,6 @@
-# Deck 3.0 — Services Catalog
+# Deck — Services Catalog
 
-**Status:** Draft. Foundation document for OS-mediated functionality. Companion to `DECK-3.0-DRAFT.md` (language), `DECK-3.0-BUILTINS.md` (in-VM modules), `DECK-3.0-CAPABILITIES.md` (consumer protocol).
+Foundation document for OS-mediated functionality. Companion to `LANG.md` (language), `BUILTINS.md` (in-VM modules), `CAPABILITIES.md` (consumer protocol), `BRIDGE.md` (UI bridge).
 
 **Edition:** 2027.
 
@@ -14,7 +14,7 @@ This document defines:
 - **Part IV** — authoring app services: how a Deck app declares and exposes its own services for other apps.
 - **Part V** — the extension contract: how a platform adds native services or replaces existing ones.
 
-The consumer-side protocol — how apps `@use`, configure, call, and handle errors — lives in the companion document `DECK-3.0-CAPABILITIES.md`. The two are complementary: SERVICES defines what exists; CAPABILITIES defines how an app talks to what exists.
+The consumer-side protocol — how apps `@use`, configure, call, and handle errors — lives in the companion document `CAPABILITIES.md`. The two are complementary: SERVICES defines what exists; CAPABILITIES defines how an app talks to what exists.
 
 ---
 
@@ -2336,24 +2336,19 @@ Every service (native, deck-app, or language-integrated) must pass:
 
 # Part VI — Deferred for future revisions
 
-## 68 · UI bridge service — `system.bridge.ui` (deferred, planned next)
+## 68 · UI bridge — NOT a service (see `BRIDGE.md`)
 
-The single most important deferred item. The bridge service is what consumes the content tree an app produces (per §15 of `DRAFT.md`) and turns it into rendered widgets, events, and gestures. It mediates:
+Earlier drafts of this document reserved a slot for `system.bridge.ui` as "the one deferred service". That framing was wrong and is corrected here.
 
-- The DVC (Declarative View Catalog) wire format for content trees.
-- Event routing from physical input → content-handler dispatch.
-- Render lifecycle (full-tree vs delta updates).
-- Gesture inference (back, home, lock).
-- Statusbar and navbar (rendered unconditionally per `DRAFT.md` §0).
-- Theme / locale / display state propagation to widget rendering.
-- Activity stack and lifecycle bridge events (push, pop, recreate-on-rotation).
-- Modal overlays (toast, confirm, loading) routed through `system.notify` + `system.intents`.
+The UI bridge is **not** a Deck service. Apps do not `@use` the bridge, cannot call any `bridge.*` method, and cannot declare a grant on it. The bridge is a **platform component** — a native driver registered under the SDI slot `DECK_SDI_DRIVER_BRIDGE_UI` (see `BRIDGE.md §4`). Its interfaces are:
 
-This service is the bridge between the language's declarative content layer (apps' `content =` blocks) and the platform's rendering substrate (LVGL on CyberDeck; potentially e-ink, voice, or terminal on other platforms). It is **the** central platform service for any app with a UI.
+- **Content pipeline** (runtime → bridge): DVC snapshots produced by evaluating `content =` blocks.
+- **Intent pipeline** (bridge → runtime): user activations fire intents that the runtime routes to machine transitions.
+- **UI-service backends**: the bridge hosts the rendering of several Tier-3 system services — `system.notify` (toast), `system.display` (rotation, brightness, lock, sleep/wake), `system.theme` (palette swap), `system.security` (lockscreen), `system.share` (share sheet). An app calling any of those services is consuming a standard service; the bridge's involvement is invisible at the consumer's level.
 
-Why deferred: it is the largest single service in scope, and its design depends on every other service being stable. The catalog above (Tiers 1–5) is exactly that foundation — `system.bridge.ui` is built on top of `system.events` (for input), `system.intents` (for back/share/open), `system.theme` (for visual theming), `system.display` (for rotation / brightness / lock), `system.notify` (for overlays), `system.scheduler` (for animation frames), `storage.cache` (for cached layouts), and `media.image` (for media nodes). Defining it before the foundation is stable would couple it to a moving target.
+Apps that need to influence presentation indirectly do so through the services above. Nothing in the catalog exposes "the bridge" as a callable surface.
 
-Tracked separately. Will be specified in `DECK-3.0-BRIDGE.md` once Tiers 1–5 are committed and have at least one round of review.
+The full bridge contract — driver vtable, content tree decoding, inference rules, UI services, subsystems, conformance profiles — lives in `BRIDGE.md`. This catalog is complete without it; a platform can implement every service in Tiers 1–5 and still be headless (no bridge at all).
 
 ## 69 · Other deferred services
 

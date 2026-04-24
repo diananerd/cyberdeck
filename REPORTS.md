@@ -2536,3 +2536,69 @@ Now the spec pins every one of those decisions. An app author reading §17 knows
 **Why this matters (A→B)**: the layering audit in #78a established the correct skeleton, but residual words carry the old model. A reader scanning §16 would see "Tappable row" and model `navigate` as a touch concept; scanning §18 they'd see "tap-to-open" and conclude overlays are a tap thing. Words teach even when the section headers scope correctly. With verbs now reading `"activate"`/`"fires on activation"` and structural nouns reading `"affordance"`/`"activity"`/`"content"`, the spec's universal layer genuinely reads as substrate-independent. The few residual `widget` mentions all live inside explicitly-scoped spatial sections or in bridge-internal-data-structure contexts, where "widget" is the correct word for the thing being discussed.
 
 Promotion to numbered slot (replacing `10-deck-bridge-ui.md`) is now unblocked on the language / capabilities / services / builtins drafts reaching the same state collectively.
+
+### Concept #79 — Clean-slate cutover: 5 pillars ARE the spec. No transition. No legacy.
+
+**User directive**: *"No quiero transición suave a esto, quiero eliminar lo anterior en specs, y simplemente luego redirigir todo el codebase en el sentido nuevo, como si siempre hubiera sido el estándar. Una vez que se limpie lo antiguo, no debe ser 3.0, debe ser solo deck. Lo que generemos debe ser completo en si mismo, consistente internamente, sin retro compatibilidad, solo spec, no planes, no herencia legacy."*
+
+**Decision**: the `DECK-3.0-*.md` framing is over. The five pillars are the canonical Deck spec. Everything that was written as "transition to 3.0" — the numbered 01–16 specs, the app annexes, the cascade of session concepts — is deleted from the tree. The specs stand alone.
+
+**Phase A — Deleted (26 files)**:
+
+*Legacy numbered specs (14):* `01-deck-lang.md`, `02-deck-app.md`, `03-deck-os.md`, `04-deck-runtime.md`, `05-deck-os-api.md`, `06-deck-native.md`, `09-deck-shell.md`, `10-deck-bridge-ui.md`, `11-deck-implementation.md`, `12-deck-service-drivers.md`, `13-deck-cyberdeck-platform.md`, `14-deck-components.md`, `15-deck-versioning.md`, `16-deck-levels.md`.
+
+*App annexes (5):* `annex-a-launcher.md`, `annex-b-task-manager.md`, `annex-c-settings.md`, `annex-d-files.md`, `annex-xx-bluesky.md`. When these apps are built, they will be written fresh against the new spec — the obsolete-syntax versions are no longer useful as references.
+
+*Root project plans (5):* `APPS.md`, `DEVELOPMENT-PLAN.md`, `DEVELOPMENT-PLAN-DL1.md`, `DEVELOPMENT-PLAN-DL2.md`, `GROUND-STATE.md`. Plans are not spec. The project's state and next-work will be re-derived from the spec and tracked in `REPORTS.md` as usual.
+
+*Obsolete app fixtures (2):* `apps/hello.deck`, `apps/ping.deck`. `apps/demo.deck` kept; `apps/conformance/*` kept per user decision ("las de conformance creo que pueden quedarse") — they may lag the spec but are a starting point for re-alignment.
+
+**Phase B — Renamed (5 files)**: removed `DECK-3.0-` prefix from the pillars:
+- `DECK-3.0-DRAFT.md` → `LANG.md`
+- `DECK-3.0-SERVICES.md` → `SERVICES.md`
+- `DECK-3.0-CAPABILITIES.md` → `CAPABILITIES.md`
+- `DECK-3.0-BUILTINS.md` → `BUILTINS.md`
+- `DECK-3.0-BRIDGE.md` → `BRIDGE.md`
+
+**Phase C — Stripped transition framing from each pillar's header**:
+- Removed "Deck 3.0" from titles.
+- Removed "**Status:** Draft" / "Not yet authoritative" / "Does not replace X until promoted" / "Supersedes X on promotion" language.
+- Rewrote companion-pointer paragraphs to reference the renamed files.
+- Edition marker kept (`Edition: 2027`) — that is a forward-looking language-versioning concept, not a transition flag.
+
+**Phase D — Stripped internal references to the deleted files**:
+- File-name citations (`DECK-3.0-DRAFT.md`, `01-deck-lang.md`, etc.) remapped to the new pillar names or inlined where the referenced content was migrated.
+- §23 "Summary of changes from Deck 2.0" in `LANG.md` deleted (legacy-comparison section; zero ongoing value).
+- Part X "Changes from earlier drafts" in `BRIDGE.md` deleted; Part XI renumbered to Part X.
+- Part VI "Migration from earlier drafts" in `CAPABILITIES.md` deleted.
+- §68 of `SERVICES.md` rewritten from "UI bridge service — deferred" to "UI bridge — NOT a service" pointing at `BRIDGE.md`.
+- Legacy phrasings like "replaces Deck 2.0's X" rewritten to declarative form (the feature simply IS the feature; no history).
+
+**Phase E — Updated `CLAUDE.md`**:
+- Removed the "Key reference documents" table listing all 14 numbered specs + 5 annexes + 2 plan files.
+- Replaced with a 5-row table of the pillar specs (`LANG`, `SERVICES`, `CAPABILITIES`, `BUILTINS`, `BRIDGE`).
+- Added an explicit authority order note: `LANG > SERVICES > CAPABILITIES = BUILTINS = BRIDGE`.
+- Added an explicit "Implementation status vs spec" section flagging that `components/deck_runtime/`, `components/deck_bridge_ui/`, `apps/conformance/*.deck`, and `apps/demo.deck` may lag the spec — **when they do, the spec wins; align code to spec, not the reverse.**
+- Removed the "REPORTS.md as authority cascade" framing; REPORTS is now labelled as "session history, append-only; not the spec".
+
+**Artefact state after cutover**:
+
+```
+deck-lang/
+  LANG.md          — 2120 lines (was DECK-3.0-DRAFT.md; §23 legacy comparison removed)
+  SERVICES.md      — 2373 lines (§68 rewritten; refs updated)
+  CAPABILITIES.md  — 551 lines  (Part VI migration removed)
+  BUILTINS.md      — 857 lines  (refs updated)
+  BRIDGE.md        — 2009 lines (Part X changes-from-earlier-drafts removed; Part XI renumbered to Part X)
+```
+
+Total: **~7910 lines of authoritative deck spec**; zero "Draft", zero "not yet authoritative", zero references to the deleted files.
+
+**Why this matters (A→B — a different class of layering hygiene)**: calling something "3.0 draft" next to a "1.x authoritative" invites an implicit bias — readers assume the old docs are correct until promoted, and contributors default to keeping old behaviour "just in case". The cleanest way to promote is to declare **there is no previous version** — the spec is what these five docs say, and the code is catching up. By deleting the old files instead of soft-deprecating them, we remove the ambient "which is right?" question forever. Future contributors reading `deck-lang/` see exactly one spec, with no version labels, no migration tables, no legacy footnotes. The project's history lives in git; the project's standard lives in `deck-lang/`.
+
+**What this leaves open**:
+- `components/deck_runtime/`, `components/deck_bridge_ui/`, `components/deck_sdi/`, `components/deck_shell/`, `components/deck_conformance/` — layer 4/5 code — all predate the new spec. Each needs an alignment pass: concept-by-concept, spec-first, following the authority order (`LANG` changes first, then `SERVICES`, then the others). The next sessions pick up here.
+- `apps/conformance/*.deck` fixtures currently test the language as the old runtime implements it. Many will need rewrites; some may already align. A combinatorial audit against the spec is needed before claiming any conformance level.
+- `apps/demo.deck` — the hard-final combinatorial stress test — will need review against the new spec.
+- Reference apps (Launcher, Task Manager, Settings, Files, Bluesky) do not yet exist as code. They will be authored fresh against the new spec.
+- `ARCHITECTURE.md` and `CHANGELOG.md` at repo root may still reference the old docs — check and correct in a follow-up.

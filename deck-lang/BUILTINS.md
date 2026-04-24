@@ -1,6 +1,6 @@
-# Deck 3.0 — Builtin Modules
+# Deck — Builtin Modules
 
-**Status:** Draft. Companion to `DECK-3.0-DRAFT.md` and `DECK-3.0-CAPABILITIES.md`. Not yet authoritative.
+Companion to `LANG.md` (language), `SERVICES.md` (foundation + catalog), `CAPABILITIES.md` (consumer protocol), `BRIDGE.md` (UI bridge).
 
 **Edition:** 2027.
 
@@ -815,7 +815,7 @@ Useful for debugging, deserialisation (`json.parse` returns `any` whose shape is
 
 ## 22 · Adding a new builtin module
 
-A platform component may register builtins beyond this catalog through the native extension mechanism (see `12-deck-service-drivers.md` follow-up). The shape must follow Part I:
+A platform component may register builtins beyond this catalog through the native extension mechanism. The shape must follow Part I:
 
 1. Declare the module in a `.deck-builtins` manifest shipped with the component.
 2. Each method declares: identity, purity, signature, error domain (if any), panic conditions.

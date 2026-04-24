@@ -1,12 +1,12 @@
-# Deck 3.0 — Capabilities (Consumer Protocol)
+# Deck — Capabilities (Consumer Protocol)
 
-**Status:** Draft. Companion to `DECK-3.0-DRAFT.md` (language), `DECK-3.0-SERVICES.md` (foundation + catalog), `DECK-3.0-BUILTINS.md` (in-VM modules).
+Companion to `LANG.md` (language), `SERVICES.md` (foundation + catalog), `BUILTINS.md` (in-VM modules), `BRIDGE.md` (UI bridge).
 
 **Edition:** 2027.
 
 ## What this document is
 
-A **capability** is the consumer-side handle for a service. This document defines the protocol an app uses to import, configure, call, and handle errors from any service — system or app-provided, native or Deck-implemented. It does not enumerate services; for the catalog, see `DECK-3.0-SERVICES.md`.
+A **capability** is the consumer-side handle for a service. This document defines the protocol an app uses to import, configure, call, and handle errors from any service — system or app-provided, native or Deck-implemented. It does not enumerate services; for the catalog, see `SERVICES.md`.
 
 The two documents are deliberately split:
 
@@ -546,21 +546,3 @@ Builtins (no `@use`) and capabilities (with `@use`) overlap conceptually for som
 
 The principle: **pure computation is a builtin; observable side effects are a capability**. The single exceptions (`time.now`, `log.*`, `rand.*`) are documented in `BUILTINS.md` §0.
 
----
-
-## Part VI — Migration from earlier drafts
-
-The pre-3.0 drafts (`02-deck-app.md` §4, `03-deck-os.md`) used a flatter mental model where capabilities WERE the cross-boundary mechanism — there was no separate concept of services. The 3.0 reorganisation moved foundation (lifecycle, IPC, registry, catalog) into `SERVICES.md` and left `CAPABILITIES.md` as the consumer protocol only.
-
-If you are migrating an app from pre-3.0:
-
-- Every `@use <cap>` declaration stays as-is (system services with no slash) or gains the `service` keyword (app-provided, with slash).
-- Every `@needs.caps` section is renamed to `@needs.services` (the field still accepts the same shape).
-- `@grants.<cap>` becomes `@grants.services.<alias>` (key changes from cap-id to alias).
-- `@grants.<other>` for non-service grants (logging persistence, deck-level requirements) keeps its old shape; check `DRAFT.md` §10 for current schema.
-
-The change is mostly mechanical. Behaviour and call sites remain identical.
-
----
-
-**End of capabilities consumer-protocol draft. Promote, amend, or discard as a whole.**

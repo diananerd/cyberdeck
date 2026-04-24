@@ -1,6 +1,13 @@
-# Deck 3.0 — Draft Consolidated Spec
+# Deck — Language Spec
 
-**Status:** Draft. Captures all design decisions agreed across the redesign conversation, plus a minimalism pass for implementation and a full consistency review. Not yet authoritative. Does not replace `01-deck-lang.md` through `16-deck-levels.md` until promoted.
+The authoritative specification of the Deck language: lexical structure, type system, bindings, functions, expressions, annotations (`@app`, `@needs`, `@use`, `@grants`, `@config`, `@machine`, `@on`, `@service`, `@handles`, `@assets`, `@private`, `@migrate`), error model, runtime envelope.
+
+Companion documents:
+
+- `SERVICES.md` — OS foundation: service catalog, meta-spec, authoring.
+- `CAPABILITIES.md` — consumer protocol: how apps import and call services.
+- `BUILTINS.md` — in-VM modules (`math`, `text`, `list`, `map`, `stream`, `bytes`, `option`, `result`, `record`, `json`, `time`, `log`, `rand`, `type_of`).
+- `BRIDGE.md` — UI bridge: semantic-to-presentation, substrate-independent.
 
 **Edition:** 2027.
 
@@ -385,7 +392,7 @@ let :ok v          = maybe_result            -- variant; only safe if exhaustive
 
 A destructuring `let` that is not statically exhaustive (variant not covered, fixed-length mismatch) → runtime pattern error (`panic :bug`). Use `match` when the value may legitimately not match.
 
-Chained `let`s inside a body replace Deck 2.0's `where`:
+Chained `let`s inside a body are the sole binding form — there is no `where`:
 
 ```
 fn process (raw: float) -> str =
@@ -749,7 +756,7 @@ Evaluated at load. Missing or incompatible entries → `LoadError :incompatible`
 
 - `max_heap:` — app heap budget (§22.1). Default 64 KB. Accepts any `Size` literal.
 - `max_stack:` — VM stack depth, in frames (§22.5). Default 512. Integer. Platform may cap below the requested value, in which case `LoadError :resource` with the platform's maximum in `context`.
-- `deck_level:` — integer minimum conformance level (§25 open: DL matrix).
+- `deck_level:` — integer minimum conformance level (§24 open: DL matrix).
 
 ---
 
@@ -842,7 +849,7 @@ Deck offers two "may-not-have-value" shapes. The choice is semantic, not stylist
 - `T?` (sugar for `:some T | :none`) — the absence is **expected and routine**, carrying no useful diagnostic. Examples: `map.get(m, k)`, `list.head(xs)`, `Name.last()` on a named source with no emissions yet.
 - `Result T E` — the absence is **exceptional** and the caller may want to distinguish reasons. Examples: `fs.read(path)` (`:not_found` vs `:permission_denied` vs `:io`), `http.get(url)` (`:timeout` vs `:dns` vs `:status_4xx`).
 
-This distinction is binding for capabilities and standard-library builtins (the catalog audit, §25, enforces it). Apps follow the same rule by convention; mixing the two for the same conceptual operation in two places of an app's API is bad design but not a load error.
+This distinction is binding for capabilities and standard-library builtins. Apps follow the same rule by convention; mixing the two for the same conceptual operation in two places of an app's API is bad design but not a load error.
 
 ### 11.1 Level 1 — `Result T E` (recoverable)
 
@@ -960,7 +967,7 @@ config.set(:api_token, :some token)
 
 The atom argument (`:sync_every`) names a field declared in `@config`. If the atom does not match any declared field, `:err :unknown_key` at runtime (or `LoadError :unresolved` if the literal is statically known).
 
-- **Atomic and transactional**: a `config.set` either succeeds and persists the new value before returning, or fails (`:err`) and leaves the prior value intact. There is no observable intermediate state. The runtime is responsible for crash-safe persistence (write-ahead or temp-and-rename, platform-dependent — declared in `12-deck-service-drivers` SDI contract, post §25 audit).
+- **Atomic and transactional**: a `config.set` either succeeds and persists the new value before returning, or fails (`:err`) and leaves the prior value intact. There is no observable intermediate state. The runtime is responsible for crash-safe persistence (write-ahead or temp-and-rename, platform-dependent).
 - Fires `@on os.config_changed (key: atom, old: any, new: any)` **after** the body that called `config.set` completes (queued, single-threaded — §14.10).
 - Within the same body, reads after a `config.set` see the new value.
 - Error domain — `@errors config`:
@@ -1117,7 +1124,7 @@ See §15.
 
 ## 14 · `@on` — unified reactive / lifecycle
 
-Single primitive for every "when X, do Y" pattern. Replaces Deck 2.0's `@on`, `@stream`, `@task`, and `@machine watch:`.
+Single primitive for every "when X, do Y" pattern — lifecycle, reactive, timed, and OS-event handling all use `@on`.
 
 ### 14.1 Sources
 
@@ -1987,61 +1994,7 @@ One logical thread per VM. Event queue (default 32; OS-configurable per app). Ol
 
 ---
 
-## 23 · Summary of changes from Deck 2.0
-
-### 23.1 Annotations
-
-- **Removed:** `@flow`, `@stream`, `@task`, `@permissions`, `@effects`, `@doc`, `@example`, `@test`.
-- **Added:** `@needs` (replaces `@requires`), `@grants` (replaces `@permissions`), `@service`, `@migrate` (renamed from `@migration`).
-- **14 total.**
-
-### 23.2 Keywords
-
-- **Removed:** `where`, `do`, `history`, `is`, `via`, effect aliases after `!`.
-- **Added (global):** `panic`, `previous`, `current`, `with`.
-- **Contextual (new):** `service` (in `@use`), `state`, `initial`, `content` (in `@machine`), `source` (after `@on`), content- and intent-primitive names (in content bodies), handler-name tokens (`empty`, `more`, `submit`, `change`, `complete`, `link`, `image`, `cursor`, `selection`, `enter`, `leave`).
-
-### 23.3 Simplifications
-
-- **`where` → chained `let`.** No topological sort.
-- **`with { … }` postfix** for record update, reusing the record-field-literal shape (unquoted field names). No separate `record.update` builtin.
-- **`do` eliminated.** Bodies are always implicit sequences.
-- **`is` eliminated.** `== :atom` + `type_of(v) == :Name` replace.
-- **Implicit `Result` propagation → postfix `?`.** No AST rewrite pass.
-- **Stream operators as `stream.*` builtins piped with `|>`.** No `@on` operator syntax beyond `as`.
-- **Transition `before` / `after` hooks removed.** Only state-scoped `on enter` / `on leave`.
-- **`to <match_expr>` removed.** Use one event per target.
-- **Nested `@machine` / `@on` / `@type` forbidden.** Annotations are top-level per file.
-- **Intents unified.** Two shapes (input intents with `on <name> ->`; action intents with direct `->`). All 13 share one AST node type.
-- **Content primitives unified.** Every content node is one AST node type with a `kind` atom.
-- **`@on` sources unified.** 14 source forms share one AST node; the lexer handles short-name ergonomics.
-- **Capability config evaluated once at bind.** No dynamic re-application.
-- **Multi-line comments removed.** Use `--` blocks or triple-quoted docstrings.
-- **Range literal `1..10` removed.** `min:` / `max:` fields in `@config`; guards use explicit `>=` / `<=`.
-
-### 23.4 Specified for the first time
-
-- Three-level error model with postfix `?` propagation — usable in any impure body (fn, `@on`, state hook, `@service` method).
-- Structured log system with automatic trace stamping.
-- Cooperative single-threaded VM with event queue.
-- Foreground / background / service lifecycle with explicit budgets.
-- `@service` IPC contract.
-- Memory, time, stack budgets per app; `Size` literal type.
-- Suspend / resume persistence model.
-- Long-running operations as capability-exposed `Stream T`.
-- `on :name (params)` as the unified shape for every named-invocable with a signature (`@machine` transitions, `@on` events, `@service` methods).
-- Named tuples (`(f₁: T₁, f₂: T₂)`) as first-class anonymous records; used by variant payloads, intent options, `@on back` confirm returns.
-- `Bytes` opaque primitive (replaces a scalar `byte`); binary data always flows through capability buffers, never as literals; mandatory `bytes.*` builtin module.
-- `@errors <domain>` produces the type referenced as `<domain>.Error`; dotted type paths are reserved to this form.
-- Field-shorthand (`Post { uri, author }`) at construction and in `with { … }` update.
-- Cons pattern `[h, ...t]` and the full pattern vocabulary (table in §5.6).
-- Allowed-type whitelist for `@config` entries; `config.Error` declared via `@errors`.
-- `buffer: N` modifier on named `@on source` bindings.
-- **Soundness invariants:** no implicit int↔float coercion, NaN / Inf are panic-only (no in-band sentinels), `Result` propagation requires identical error domains (use `map_err` to bridge), Maranget exhaustiveness, well-foundedness on `@type` SCCs, `Stream T` linearity, pure/impure function types with stdlib HOF duplication, transitions atomic against panic and suspend, `@on watch` dependency tracking specified, `@on every` minimum 50ms on monotonic clock, top-level fn annotations required.
-
----
-
-## 24 · Implementation size notes (non-normative)
+## 23 · Implementation size notes (non-normative)
 
 **Parser:**
 - 1 rule per annotation × 14 annotations (of which 7 share a "key-value indent block" shape: `@app`, `@needs`, `@grants`, `@config`, `@assets`, `@handles`, `@migrate`).
@@ -2101,7 +2054,7 @@ No coroutines, fibers, async / await. No green threads. No cycle collector — a
 
 ---
 
-## 25 · Open for future decisions
+## 24 · Open for future decisions
 
 - Full DL1 / DL2 / DL3 feature matrix re-cast in 3.0.
 - Builtin catalog audit (reduce ~187 to target ~80; naming consistency); enforce `T?` vs `Result T E` discipline per §11.0.

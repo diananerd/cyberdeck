@@ -1,6 +1,6 @@
-# Deck 3.0 — UI Bridge
+# Deck — UI Bridge
 
-**Status:** Draft. Fifth pillar of the Deck 3.0 spec alongside `DECK-3.0-DRAFT.md` (language), `DECK-3.0-SERVICES.md` (OS foundation + service catalog), `DECK-3.0-CAPABILITIES.md` (consumer protocol), and `DECK-3.0-BUILTINS.md` (in-VM modules). Not yet authoritative. Supersedes `10-deck-bridge-ui.md` once promoted.
+Companion to `LANG.md` (language), `SERVICES.md` (OS foundation + service catalog), `CAPABILITIES.md` (consumer protocol), `BUILTINS.md` (in-VM modules).
 
 **Edition:** 2027.
 
@@ -17,8 +17,7 @@ This document defines:
 - **Part VII** — the CyberDeck reference bridge: concrete decisions for the Waveshare ESP32-S3-Touch-LCD-4.3 on LVGL 8.4.
 - **Part VIII** — conformance: DL1 / DL2 / DL3 bridge profiles.
 - **Part IX** — authoring alternative bridges: the substrate matrix (touch, voice, terminal, e-ink) and the compliance contract.
-- **Part X** — changes from Deck 2.0 / `10-deck-bridge-ui.md`.
-- **Part XI** — open questions.
+- **Part X** — open questions.
 
 ---
 
@@ -81,7 +80,7 @@ Every bridge is fully specified by seven dimensions. Nothing else belongs to a b
 |---|---|---|
 | 1 | **Identity** | A dotted driver ID (`deck.driver.bridge.ui.lvgl`, `deck.driver.bridge.ui.voice`, `deck.driver.bridge.ui.terminal`). Registered under the SDI slot `DECK_SDI_DRIVER_BRIDGE_UI`. |
 | 2 | **Substrate** | The presentation medium: `:framebuffer` (pixel display), `:eink` (partial-refresh bitmap), `:voice` (speech I/O), `:terminal` (character grid), `:headless` (pure logic, no output). |
-| 3 | **Content coverage** | Which content kinds from §15 of `DECK-3.0-DRAFT.md` the bridge can decode. Gaps degrade to a safe fallback (plain text, dropped render, "not supported" marker) and log `:warn` per first-occurrence-per-view. |
+| 3 | **Content coverage** | Which content kinds from §15 of `LANG.md` the bridge can decode. Gaps degrade to a safe fallback (plain text, dropped render, "not supported" marker) and log `:warn` per first-occurrence-per-view. |
 | 4 | **UI-service backends** | Which `system.*` services host their UI on this bridge. Typically `system.notify` (toast), `system.display` (brightness/rotation), `system.theme` (palette swap), `system.security` (lockscreen), `system.share` (share sheet). A headless or voice bridge implements a subset; a terminal bridge renders toasts as status-line text. |
 | 5 | **Input substrate** | How user input arrives: `:touch` / `:keyboard` / `:remote` / `:voice` / `:none`. Each substrate maps to a distinct inference policy for intents (e.g., a voice bridge disambiguates `choice` via prompt + readback, not an overlay list). |
 | 6 | **Conformance profile** | `:DL1` / `:DL2` / `:DL3`. Fixes the minimum content / UI-service coverage per §58. |
@@ -103,7 +102,7 @@ Flags are read-only advertisements; they do not gate content decoding.
 
 ## 4 · Driver contract (SDI)
 
-The bridge is registered via the `deck.driver.bridge.ui` SDI vtable. The v3 contract refines `12-deck-service-drivers §6.3`. The vtable is stratified into **Core** (every bridge implements), **Visual** (bridges with a raster or character output surface), **Visual-input** (bridges with on-screen text entry), and **Physical-display** (bridges with a pixel-controllable panel). A voice-only bridge implements Core plus whichever Visual methods map sensibly onto voice (often none); a terminal bridge implements Core + Visual; the CyberDeck reference bridge implements all four layers.
+The bridge is registered via the `deck.driver.bridge.ui` SDI vtable. The vtable is stratified into **Core** (every bridge implements), **Visual** (bridges with a raster or character output surface), **Visual-input** (bridges with on-screen text entry), and **Physical-display** (bridges with a pixel-controllable panel). A voice-only bridge implements Core plus whichever Visual methods map sensibly onto voice (often none); a terminal bridge implements Core + Visual; the CyberDeck reference bridge implements all four layers.
 
 ```c
 typedef struct {
@@ -172,7 +171,7 @@ Each spec struct is a flat record with primitive-typed fields (no Deck-level hea
 
 ### 5.1 Threading
 
-The bridge runs on its **own platform thread**, not on the runtime thread. Per `DECK-3.0-SERVICES.md §10.1`, every service has one logical scheduler thread; the bridge follows the same rule.
+The bridge runs on its **own platform thread**, not on the runtime thread. Per `SERVICES.md §10.1`, every service has one logical scheduler thread; the bridge follows the same rule.
 
 Cross-thread contract:
 
@@ -236,7 +235,7 @@ A single `content =` block flows through five stages:
         ▼
   Content value   DVC tree — node kinds, attributes, intent_ids
         │
-        │  serializer (§18 of 11-deck-implementation.md)
+        │  serializer (wire format — §7)
         ▼
   DVC snapshot    byte sequence with app_id, machine_id, state_id, frame_id
         │
@@ -315,7 +314,7 @@ The arrow from render back to state does not exist. That is the load-bearing inv
 
 ## 7 · DVC snapshot — wire shape
 
-The on-wire format is specified authoritatively in `11-deck-implementation.md §18`. This section restates only the semantics relevant to bridge authors.
+The on-wire format is specified below. This is the authoritative definition; bridge implementations consume exactly this.
 
 Each snapshot carries:
 
@@ -983,7 +982,7 @@ The bridge provides a set of **UI services** — autonomous overlays and subsyst
 2. **System-service calls** (e.g., `notify.toast(…)` triggers the Toast Service),
 3. **Runtime lifecycle events** (e.g., `@on launch` triggers Loading Overlay; `@on back :confirm` triggers the Confirm Dialog).
 
-UI services are not themselves services in the `DECK-3.0-SERVICES.md` sense. They are bridge-internal subsystems that **back** system services.
+UI services are not themselves services in the `SERVICES.md` sense. They are bridge-internal subsystems that **back** system services.
 
 ## 21 · Catalog
 
@@ -2059,41 +2058,7 @@ Before shipping a new bridge:
 
 ---
 
-# Part X — Changes from earlier drafts
-
-### X.1 Removed
-- `bridge.ui.*` as a Deck capability. Apps cannot `@use` the bridge. Removed from `@needs.caps` / `@grants.services`. Any app attempting to import `bridge.ui` → `LoadError :unresolved`.
-- `ui_common_column / row / card / grid / data_row / action_row / nav_row` as app-facing vocabulary. These were legacy C helpers; the equivalent bridge patterns are **inferred** from semantic primitives (§17).
-- `shell.set_statusbar(bool)` / `shell.set_navigation_bar(bool)` methods. Statusbar and navbar are rendered unconditionally; apps cannot toggle them. Future full-screen apps declare `@app.fullscreen: true` as an identity field.
-- `status_bar` / `nav_bar` content primitives. Apps never author these.
-- `@app.icon:` as bridge-inference input remains, but `icon:` / `badge:` fields on `trigger` / `navigate` are data, not content primitives.
-
-### X.2 Added
-- Part III (Inference rules) as a first-class section. The reference policy is now a documented artefact, not C code that readers must reverse-engineer.
-- Gestalt as universal design frame (§11); 4-axis rubric for spatial substrates (§12); 4-axis rubric for voice substrates (§12bis — Duration / Order / Pause / Repetition analogues of Size / Position / Space / Alignment).
-- `@on back :confirm` bridge contract (§24.3). The runtime delivers the structured confirm request to the bridge, which renders it using the same Confirm Dialog Service.
-- Substrate matrix (§61) and compliance check (§63). The bridge spec is now explicitly device-independent.
-- SDI vtable stratified by substrate scope (§4) — **Core** / **Visual** / **Visual-input** / **Physical-display** bands with a stubbing convention (`DECK_SDI_ERR_NOT_SUPPORTED` for out-of-substrate methods).
-- Modal context (§22) as the universal concept behind overlays, dialogs, and lockscreen — with spatial, voice, and terminal renderings.
-- Per-service substrate-rendering sub-sections in Part IV (Toast, Loading, Progress, Choice, Date, Lockscreen) documenting spatial / voice / terminal presentations of the same semantic contract.
-- Scope markers (`Substrate scope:` italic prefix) on every substrate-specific section so readers can trace universal-vs-reference at a glance.
-
-### X.3 Simplifications
-- Six content primitives (`:group`, `:list`, `:form`, `:loading`, `:error`, `:*_data_wrapper`) + 14 intents covers the full surface. No layout primitives remain.
-- No animation knobs. Transition effects are bridge-owned.
-- No customisable themes. Three reference themes; apps never specify colour.
-- Single snapshot format per bridge. No per-screen opt-ins. Presentation context (orientation, density, viewport geometry) is bridge-internal — never on the wire.
-
-### X.4 Kept
-- `10-deck-bridge-ui.md` §4 DVC catalog (refined wire format remains in `11-deck-implementation §18`).
-- §5 UI services catalog (entries migrated to Part IV with consistent spec structs).
-- §7 inference rules (migrated to Part III with explicit Gestalt framing).
-- §11 LVGL gotchas (migrated to §53.1).
-- All reference metrics and palette (migrated to Part VII).
-
----
-
-# Part XI — Open questions
+# Part X — Open questions
 
 1. **Animation vocabulary.** Should the bridge define a small set of animation atoms (`:push`, `:replace`, `:fade`, `:none`) that apps declare on state transitions, or should transitions remain mute? Current spec: mute. Rationale: apps don't know what "push" looks like on voice.
 2. **Per-app theme override.** Should apps be able to request a specific theme for their content (e.g., a camera app forcing dark)? Current spec: no. Rationale: user owns device-wide theme.

@@ -4,47 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Start-of-session required reading
 
-Before any corrective or implementation work, **read `REPORTS.md` at repo root top to bottom**. It holds:
-- The user's standing framing for this project (tests-pass-but-reality-breaks; combinatorial audit policy).
-- The **authority cascade** (numbered specs → annexes → root docs → core code → code over core → apps/tests). Always correct in strict top-down order.
-- Session-by-session iteration journal, append-only.
+The **authoritative spec** lives in `deck-lang/` as five pillar documents. They are self-contained, internally consistent, and stand alone — there is no "legacy" to keep compatible with. When working on anything language-, runtime-, service-, or bridge-related, consult these first.
 
-Design invariant this project enforces end-to-end: **Deck apps declare semantic intent, never layout.** Apps use the primitives in `02-deck-app §12` (`list`, `group`, `form`, `loading`, `error`, `media`, `rich_text`, `status`, `markdown`, and intents `toggle/range/choice/multiselect/text/password/pin/date/search/navigate/trigger/confirm/create/share`). The bridge infers layout, widgets, colors, spacing, gestures from the app's semantic tree plus the device context. The same `.deck` runs on an LVGL ESP32, an e-ink tablet, or a voice assistant, and each bridge makes distinct presentation decisions. Apps never write `column`, `row`, `card`, `grid`, `status_bar`, `nav_bar`, `data_row`, `action_row`, `font:`, `style:`, `variant:`, or imperative builders like `bridge.ui.label(...)`. If you see a doc or code suggesting otherwise, that's the bug — escalate via `REPORTS.md`.
+`REPORTS.md` at repo root is a session-by-session iteration journal, append-only. It records the history of how the spec got here; it is NOT the spec. Read it for context on past decisions; edit the spec itself for current work.
+
+Design invariant this project enforces end-to-end: **Deck apps declare semantic intent, never layout.** Apps use the content primitives catalogued in `LANG.md §15` (`list`, `group`, `form`, `loading`, `error`, `media`, `rich_text`, `status`, `chart`, `progress`, `markdown`, `markdown_editor`, and 14 intents: `toggle`, `range`, `choice`, `multiselect`, `text`, `password`, `pin`, `date`, `search`, `navigate`, `trigger`, `confirm`, `create`, `share`). The bridge infers layout, widgets, colors, spacing, gestures from the app's semantic tree plus the device context. The same `.deck` runs on an LVGL touchscreen, an e-ink tablet, a voice assistant, or a terminal, and each bridge makes distinct presentation decisions. Apps never write `column`, `row`, `card`, `grid`, `status_bar`, `nav_bar`, `data_row`, `action_row`, `font:`, `style:`, `variant:`, or imperative builders.
 
 ## Project Overview
 
 CyberDeck — ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-LCD-4.3 board. A modular, OS-like UI application built with ESP-IDF (v6.0.0), LVGL 8.4.0, and FreeRTOS. 800x480 RGB LCD, GT911 touch, CH422G I/O expander, PCF85063A RTC, SD card, PSRAM, 8MB flash.
 
-The long-term goal is to run apps written in **Deck** — a purpose-built embedded DSL that loads from SD card and executes in a sandboxed interpreter without reflashing. All Deck language and runtime specs live in `deck-lang/`.
+The long-term goal is to run apps written in **Deck** — a purpose-built embedded DSL that loads from SD card and executes in a sandboxed interpreter without reflashing. All Deck spec documents live in `deck-lang/`.
 
-### Key reference documents
+### The five pillar specs (`deck-lang/`)
 
 | File | What it is |
 |---|---|
-| `GROUND-STATE.md` | Full audit of the current C API surface: what's implemented, what leaks ESP-IDF types, what's missing before Deck can run |
-| `APPS.md` | Planned app catalog with storage model, services consumed, and screens for each app |
-| `deck-lang/01-deck-lang.md` | Deck core language spec — syntax, types, effects, pattern matching |
-| `deck-lang/02-deck-app.md` | Deck app model — `@app`, `@use`, `@on`, `@machine`/`@flow`, lifecycle, `@handles` |
-| `deck-lang/03-deck-os.md` | OS surface, capabilities catalog, events, security model |
-| `deck-lang/04-deck-runtime.md` | High-level runtime architecture — lexer, parser, evaluator, dispatcher |
-| `deck-lang/05-deck-os-api.md` | High-level OS services exposed to Deck apps (SQLite, NVS, FS, HTTP, MQTT, OTA) |
-| `deck-lang/06-deck-native.md` | How to extend the runtime with C capabilities and events |
-| `deck-lang/09-deck-shell.md` | OS shell integration — launcher, navigation, lifecycle, system events, service architecture |
-| `deck-lang/10-deck-bridge-ui.md` | CyberDeck LVGL bridge UI reference — component catalog, UI services, UX patterns, inference rules |
-| `deck-lang/11-deck-implementation.md` | Interpreter backend — algorithms, threading, memory, wire formats, snapshot/restore, IPC |
-| `deck-lang/12-deck-service-drivers.md` | Hardware-agnostic Service Driver Interface (SDI) — the formal C contract any platform implements to host Deck |
-| `deck-lang/13-deck-cyberdeck-platform.md` | ESP-IDF v6.0 reference implementation of the SDI on ESP32-S3 — boot, partitions, FS layout, capability mapping, power, OTA dual track |
-| `deck-lang/14-deck-components.md` | Component publishing model + cross-SoC porting guide — IDF Component Registry, repo strategy (one repo per component, git submodules), conformance suite |
-| `deck-lang/15-deck-versioning.md` | Versioning policy across the project — five version concepts (edition, surface API level, runtime semver, SDI semver, app semver), `@requires` annotation, structured load errors, runtime probing, deprecation pipeline, governance |
-| `deck-lang/16-deck-levels.md` | Progressive conformance profiles — **DL1 (Core) / DL2 (Standard) / DL3 (Full)**. Each level is a strict subset of the next; apps declare `@requires.deck_level`; platforms declare conformance in their component manifest. DL1 targets tiny MCUs (~256 KB flash), DL3 is the CyberDeck reference (8 MB). Contains the full conformance matrix: which features from specs 01–15 live at which level. |
-| **App Annexes** | The bundled OS apps, in slot order. Each is a complete Deck spec for one app. |
-| `deck-lang/annex-a-launcher.md` | Annex A — Launcher (slot 0, `system.launcher`) |
-| `deck-lang/annex-b-task-manager.md` | Annex B — Task Manager (slot 1, `system.taskman`) |
-| `deck-lang/annex-c-settings.md` | Annex C — Settings (slot 2, `system.settings`) |
-| `deck-lang/annex-d-files.md` | Annex D — Files (slot 3, `system.files`) |
-| `deck-lang/annex-xx-bluesky.md` | Annex XX — Bluesky kitchen-sink demo app (SD-resident, no fixed slot; large reference app exercising many language and OS features) |
+| `deck-lang/LANG.md` | Language spec: lexical structure, type system, bindings, functions, expressions, all 14 annotations (`@app`, `@needs`, `@use`, `@grants`, `@config`, `@machine`, `@on`, `@service`, `@handles`, `@assets`, `@private`, `@migrate`, `@type`, `@errors`), error model, runtime envelope. |
+| `deck-lang/SERVICES.md` | OS foundation: meta-spec for services, v1 catalog of 31 system services across 5 tiers (storage, network, system, high-level domain, sensors), authoring app services, extension contract. |
+| `deck-lang/CAPABILITIES.md` | Consumer protocol: how apps `@use` services, declare `@needs.services` + `@grants.services`, configure aliases, call methods by kind (query / mutation / action stream / watch stream / handle-producing), handle errors. |
+| `deck-lang/BUILTINS.md` | In-VM modules (14): `math`, `text`, `list`, `map`, `stream`, `bytes`, `option`, `result`, `record`, `json`, `time`, `log`, `rand`, `type_of`. Pure by default; `_io` HOF variants for impure callable args. |
+| `deck-lang/BRIDGE.md` | UI bridge: semantic-to-presentation contract, content pipeline (DVC snapshot → render), intent round-trip, Gestalt + 4-axis inference rules (spatial and voice rubrics), UI services (toast, confirm, loading, progress, keyboard, choice, date, share, permission, lockscreen, statusbar, navbar, badge), subsystems (rotation, theme, brightness, gesture), CyberDeck reference implementation (LVGL 8.4 on Waveshare), conformance profiles DL1/DL2/DL3, authoring alternative bridges. |
 
-When working on anything related to how apps are structured, what services they consume, or what the interpreter needs from the OS — consult `GROUND-STATE.md` first. For algorithmic detail (how the runtime actually works under the hood) consult `11-deck-implementation.md`. For the abstract SDI contract that defines what a platform must implement, consult `12-deck-service-drivers.md`. For ESP-IDF integration concretions (FreeRTOS task layout, partition table, SD layout, boot sequence, OTA dual track) consult `13-deck-cyberdeck-platform.md`. For how everything is packaged and published as IDF Components (each in its own GitHub repo) and how to port to other SoCs, consult `14-deck-components.md`. For all version concerns (compatibility check at load, error codes, who-bumps-what, deprecation policy, runtime probing API) consult `15-deck-versioning.md`. For the progressive conformance-level system (which features belong to DL1/DL2/DL3 and how apps target a minimum level) consult `16-deck-levels.md`.
+The five are mutually consistent. When in doubt about authority: `LANG` > `SERVICES` > `CAPABILITIES` = `BUILTINS` = `BRIDGE` (language has the final word; services defines what exists; the other three describe how apps consume / the runtime provides / the bridge presents).
+
+### Implementation status vs spec
+
+Layer 4 onward (runtime code, conformance fixtures, apps) may be **out of sync with the spec**. The pillar specs above are authoritative; code is catch-up. Specifically:
+
+- `components/deck_runtime/` implements an earlier state of the language and does not yet realise every feature in `LANG.md` (`@needs`, `@grants`, `@service`, `@migrate`, content fns, some contextual keywords).
+- `components/deck_bridge_ui/` implements a subset of `BRIDGE.md` — no `push_snapshot` stratified vtable yet, no @on back :confirm routing, full rebuild (no patching).
+- `apps/conformance/*.deck` fixtures test the language as the runtime currently implements it. Many will need updating to match the new spec. When they do not match, the spec wins.
+- `apps/demo.deck` is the hard-final conformance demo — exercises the most services/builtins currently wired. May also lag the spec.
+
+If code and spec disagree, **the spec is right**. Align code to spec, not the reverse.
 
 ## Build & Flash Commands
 
