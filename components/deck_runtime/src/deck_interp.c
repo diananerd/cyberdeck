@@ -3986,37 +3986,20 @@ static deck_value_t *b_os_terminate(deck_value_t **args, uint32_t n, deck_interp
 }
 
 /* ================================================================
- * bridge.ui.* — DVC tree builders (DL2 F28 Phase 2)
+ * Content rendering arena — internal only
  * ================================================================
  *
- * .deck apps build a UI tree by calling these builder builtins and then
- * pushing the root with `bridge.ui.render(root)`. Each builder returns an
- * integer "handle" (an index into a module-local node table) rather than
- * exposing the native `deck_dvc_node_t*` as a first-class Deck value — the
- * runtime doesn't have a generic opaque-pointer type and we don't need
- * one just to thread a few tree-building calls.
+ * Per BRIDGE.md §0 invariant 3 and LANG.md §0 invariant 1, apps do NOT
+ * build UI trees imperatively; they declare `content = …` in @machine
+ * states. The runtime walks the content AST (see content_render below),
+ * allocates DVC nodes in this arena, encodes to the wire format
+ * (BRIDGE.md §7), and pushes through the SDI bridge.ui driver. The
+ * arena is reset after each push — handles never outlive a render.
  *
- * Flow:
- *   let title = bridge.ui.label("Hello world")
- *   let btn   = bridge.ui.trigger("OK", 0)
- *   let col   = bridge.ui.column([title, btn])
- *   bridge.ui.render(col)
- *
- * Lifetime: s_bui_arena + s_bui_nodes live module-local (static). Each
- * call to `render()` encodes + pushes + resets the arena — so handles
- * from a previous build session become invalid. Only one build session
- * at a time (single-threaded interpreter; bridge UI runs on the LVGL
- * task but push_snapshot serialises via its own mutex).
- *
- * Error model: handles out of range, non-matching types, or table-full
- * errors all set DECK_RT_TYPE_MISMATCH or DECK_RT_NO_MEMORY on the ctx.
- * The caller sees a runtime error at the exact offending call site.
+ * This arena and its helpers are module-internal; no Deck-facing
+ * builder API exists.
  */
-#define DECK_BUI_MAX_NODES   128
-
 static deck_arena_t      s_bui_arena  = {0};
-static deck_dvc_node_t  *s_bui_nodes[DECK_BUI_MAX_NODES];
-static uint32_t          s_bui_n      = 0;
 static bool              s_bui_ready  = false;
 
 static void bui_ensure_init(void)
@@ -4029,177 +4012,6 @@ static void bui_ensure_init(void)
 static void bui_reset(void)
 {
     deck_arena_reset(&s_bui_arena);
-    s_bui_n = 0;
-}
-
-static int64_t bui_register(deck_dvc_node_t *n)
-{
-    if (!n) return -1;
-    if (s_bui_n >= DECK_BUI_MAX_NODES) return -1;
-    s_bui_nodes[s_bui_n] = n;
-    return (int64_t)s_bui_n++;
-}
-
-static deck_dvc_node_t *bui_lookup(int64_t h)
-{
-    if (h < 0 || (uint32_t)h >= s_bui_n) return NULL;
-    return s_bui_nodes[(uint32_t)h];
-}
-
-/* Copy a Deck string (which is not NUL-terminated) into the render arena
- * with a NUL byte so deck_dvc_set_str can handle it as a C string. */
-static const char *bui_strdup_from_value(deck_value_t *v)
-{
-    if (!v || v->type != DECK_T_STR) return NULL;
-    char *copy = deck_arena_alloc(&s_bui_arena, v->as.s.len + 1);
-    if (!copy) return NULL;
-    memcpy(copy, v->as.s.ptr, v->as.s.len);
-    copy[v->as.s.len] = '\0';
-    return copy;
-}
-
-/* bridge.ui.label(text) — DVC_LABEL with :value=text.  */
-static deck_value_t *b_bui_label(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.label(text:str)"); return NULL;
-    }
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.label oom"); return NULL; }
-    const char *text = bui_strdup_from_value(args[0]);
-    if (text) deck_dvc_set_str(&s_bui_arena, node, "value", text);
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
-}
-
-/* bridge.ui.trigger(text, intent_id) — DVC_TRIGGER; intent_id is an int
- * that the shell can resolve to an intent. Pass 0 for decorative buttons. */
-static deck_value_t *b_bui_trigger(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_INT) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.trigger(text:str, intent:int)"); return NULL;
-    }
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_TRIGGER);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.trigger oom"); return NULL; }
-    /* DVC schema for TRIGGER names the display string "label" (spec §18
-     * + render_trigger in deck_bridge_ui_decode reads attr_str(n,
-     * "label", ...)). Setting it under "text" silently produces a
-     * "BUTTON" default — bug caught on hardware, 2026-04-17. */
-    const char *text = bui_strdup_from_value(args[0]);
-    if (text) deck_dvc_set_str(&s_bui_arena, node, "label", text);
-    node->intent_id = (uint32_t)args[1]->as.i;
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
-}
-
-/* Shared helper: build a container node of `kind`, attach each handle in
- * the list as a child. Used for column/row/group. */
-static deck_value_t *bui_container(deck_dvc_type_t kind, const char *debug,
-                                   deck_value_t **args, deck_interp_ctx_t *c,
-                                   const char *title_attr)
-{
-    /* Args shape depends on title_attr:
-     *   NULL  → args[0] is children list
-     *   set   → args[0] is title (str), args[1] is children list */
-    uint32_t ai = 0;
-    const char *title = NULL;
-    if (title_attr) {
-        if (!args[0] || args[0]->type != DECK_T_STR) {
-            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
-                    "bridge.ui.%s(title:str, children:list)", debug);
-            return NULL;
-        }
-        title = bui_strdup_from_value(args[0]);
-        ai = 1;
-    }
-    if (!args[ai] || args[ai]->type != DECK_T_LIST) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
-                "bridge.ui.%s: children must be a list", debug);
-        return NULL;
-    }
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, kind);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.%s oom", debug); return NULL; }
-    if (title && title_attr) deck_dvc_set_str(&s_bui_arena, node, title_attr, title);
-
-    deck_value_t *list = args[ai];
-    for (uint32_t i = 0; i < list->as.list.len; i++) {
-        deck_value_t *item = list->as.list.items[i];
-        if (!item || item->type != DECK_T_INT) {
-            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
-                    "bridge.ui.%s: child %u not a handle", debug, (unsigned)i);
-            return NULL;
-        }
-        deck_dvc_node_t *child = bui_lookup(item->as.i);
-        if (!child) {
-            set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
-                    "bridge.ui.%s: child %u handle=%lld invalid",
-                    debug, (unsigned)i, (long long)item->as.i);
-            return NULL;
-        }
-        deck_dvc_add_child(&s_bui_arena, node, child);
-    }
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
-}
-
-static deck_value_t *b_bui_column(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{ (void)n; return bui_container(DVC_COLUMN, "column", args, c, NULL); }
-
-static deck_value_t *b_bui_row(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{ (void)n; return bui_container(DVC_ROW, "row", args, c, NULL); }
-
-static deck_value_t *b_bui_group(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{ (void)n; return bui_container(DVC_GROUP, "group", args, c, "title"); }
-
-/* bridge.ui.data_row(label, value) — dim-label-over-primary-value row. */
-static deck_value_t *b_bui_data_row(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)n;
-    if (!args[0] || args[0]->type != DECK_T_STR ||
-        !args[1] || args[1]->type != DECK_T_STR) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.data_row(label:str, value:str)"); return NULL;
-    }
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_DATA_ROW);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.data_row oom"); return NULL; }
-    const char *lbl = bui_strdup_from_value(args[0]);
-    const char *val = bui_strdup_from_value(args[1]);
-    if (lbl) deck_dvc_set_str(&s_bui_arena, node, "label", lbl);
-    if (val) deck_dvc_set_str(&s_bui_arena, node, "value", val);
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
-}
-
-/* bridge.ui.divider() / bridge.ui.spacer() — no args, decorative layout. */
-static deck_value_t *b_bui_divider(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)args; (void)n;
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_DIVIDER);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.divider oom"); return NULL; }
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
-}
-static deck_value_t *b_bui_spacer(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)args; (void)n;
-    bui_ensure_init();
-    deck_dvc_node_t *node = deck_dvc_node_new(&s_bui_arena, DVC_SPACER);
-    if (!node) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.spacer oom"); return NULL; }
-    int64_t h = bui_register(node);
-    if (h < 0) { set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui: node table full"); return NULL; }
-    return deck_new_int(h);
 }
 
 /* asset.path(name:str) — look up a registered @assets entry on the
@@ -4847,54 +4659,6 @@ static void content_render_state(deck_interp_ctx_t *c, deck_env_t *env, const as
     }
 }
 
-/* bridge.ui.render(root_handle) — encode the tree rooted at `root_handle`,
- * push it via the SDI, then reset the render arena. Returns unit. */
-static deck_value_t *b_bui_render(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
-{
-    (void)n;
-    if (!args[0] || args[0]->type != DECK_T_INT) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "bridge.ui.render(root:handle)"); return NULL;
-    }
-    deck_dvc_node_t *root = bui_lookup(args[0]->as.i);
-    if (!root) {
-        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0,
-                "bridge.ui.render: root handle=%lld invalid", (long long)args[0]->as.i);
-        return NULL;
-    }
-
-    /* deck_dvc_encode in sizing mode (buf=NULL) returns DECK_RT_NO_MEMORY
-     * by design — it walks the tree and updates the overflow flag for
-     * every would-be write. The sizing path is valid only if `need` ends
-     * up non-zero; that's the contract established by the dvc selftest. */
-    size_t need = 0;
-    (void)deck_dvc_encode(root, NULL, 0, &need);
-    if (need == 0) {
-        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render: encode sizing returned 0");
-        return NULL;
-    }
-    uint8_t *buf = deck_arena_alloc(&s_bui_arena, need);
-    if (!buf) {
-        set_err(c, DECK_RT_NO_MEMORY, 0, 0, "bridge.ui.render: buffer oom (%u bytes)", (unsigned)need);
-        return NULL;
-    }
-    size_t wrote = 0;
-    if (deck_dvc_encode(root, buf, need, &wrote) != DECK_RT_OK) {
-        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render: encode failed");
-        return NULL;
-    }
-    deck_sdi_err_t rc = deck_sdi_bridge_ui_push_snapshot(buf, wrote);
-    if (rc != DECK_SDI_OK) {
-        /* Non-fatal: reset and surface the error. The arena reset is
-         * important or the next build session starts with stale nodes. */
-        bui_reset();
-        set_err(c, DECK_RT_INTERNAL, 0, 0, "bridge.ui.render push: %s",
-                deck_sdi_strerror(rc));
-        return NULL;
-    }
-    bui_reset();
-    return deck_retain(deck_unit());
-}
-
 /* ---- type conversions (bare ident calls) ---- */
 /* Spec 01-deck-lang §11.1 — `str(v: any) -> str` canonical printable.
  * For atom-variant tuples produced by concept #11 (`:some x` → 2-tuple
@@ -5267,16 +5031,11 @@ static const builtin_t BUILTINS[] = {
     /* assets (DL2 F28.5) */
     { "asset.path",             b_asset_path,        1, 1 },
 
-    /* bridge.ui — DVC tree builders (DL2 F28 Phase 2) */
-    { "bridge.ui.label",        b_bui_label,         1, 1 },
-    { "bridge.ui.trigger",      b_bui_trigger,       2, 2 },
-    { "bridge.ui.column",       b_bui_column,        1, 1 },
-    { "bridge.ui.row",          b_bui_row,           1, 1 },
-    { "bridge.ui.group",        b_bui_group,         2, 2 },
-    { "bridge.ui.data_row",     b_bui_data_row,      2, 2 },
-    { "bridge.ui.divider",      b_bui_divider,       0, 0 },
-    { "bridge.ui.spacer",       b_bui_spacer,        0, 0 },
-    { "bridge.ui.render",       b_bui_render,        1, 1 },
+    /* Removed per BRIDGE.md §0 invariant 3 + LANG.md §0 invariant 1:
+     * bridge.ui.* is NOT an app-callable capability. Apps declare
+     * content = … in @machine states; runtime evaluates into a DVC
+     * snapshot; bridge (via SDI deck.driver.bridge.ui) presents. There
+     * is no builder API visible to Deck code. */
 
     { NULL, NULL, 0, 0 },
 };
