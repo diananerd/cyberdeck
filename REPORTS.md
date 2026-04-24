@@ -2602,3 +2602,88 @@ Total: **~7910 lines of authoritative deck spec**; zero "Draft", zero "not yet a
 - `apps/demo.deck` — the hard-final combinatorial stress test — will need review against the new spec.
 - Reference apps (Launcher, Task Manager, Settings, Files, Bluesky) do not yet exist as code. They will be authored fresh against the new spec.
 - `ARCHITECTURE.md` and `CHANGELOG.md` at repo root may still reference the old docs — check and correct in a follow-up.
+
+### Concept #79.stage-1 — Root docs residual cleanup (commit `2f89ed1`)
+
+Three-file cleanup flagged in #79's "What remains open" tail.
+
+- `README.md` — reverted from "v0.10.0 — DL2 certified" status page pointing at 01-06-deck-*.md + 07/08 annexes to a short authoritative-spec table (5 pillars + authority order + "code may lag spec; spec wins" note). The "DL2 certified" claim is false under the new spec (DL levels still exist but no one has claimed conformance against the 5-pillar spec yet); language removed.
+- `ARCHITECTURE.md` — rewritten from "DL1 Core target" plan-document with phase markers (F1 / F8 / "Placeholder") to current-state C firmware stack doc. Layer stack diagram kept (it's accurate); dependency rules + core decisions re-expressed per the pillar specs. References the spec pillars directly for the runtime / bridge / SDI contracts.
+- `CHANGELOG.md` — the 321-line `[Unreleased] — post-DL2` entry (F28 Phase 2 work against the old spec) replaced with a short cutover marker. Historical entries below preserved as-is; their references to deleted files are intentional git-history artefacts.
+
+Diff: 3 files, +91 / −481. Stage 1 of the staged-alignment plan now closed.
+
+### Concept #79.stages-2-3-4 — Code / fixture / demo audits (commit `95ef55f`)
+
+Three parallel audits reading the current code + fixtures + demo.deck against the 5 pillar specs. Read-only, no modifications. Output:
+
+- **`CODE-AUDIT.md`** (508 lines, per-component gap report across deck_runtime, deck_bridge_ui, deck_sdi, deck_shell, deck_conformance, board). Severities: **Block** / **Misalign** / **Dead** / **Underspec**. Headline blockers that prevent `apps/demo.deck` from running today:
+  * Parser dispatches `@requires`, not `@needs` (`deck_parser.c:2855`).
+  * `@grants`, `@service`, `@handles`, `@config`, `@migrate`, `@errors` routed to parse_opaque_block — bodies discarded.
+  * `bridge.ui.*` exposed as 9 Deck-callable builtins (`deck_interp.c:5270–5279`) violating BRIDGE §0.
+  * DVC wire envelope has no `(app_id, machine_id, state_id, frame_id)` triple → BRIDGE §9 diffing architecturally impossible.
+  * SDI bridge vtable is flat 3-method (`init`/`push_snapshot`/`clear`); BRIDGE §4 requires 4-band stratified vtable with ~20 methods.
+  * SDI registers 7 services; SERVICES catalogs 31 (24 missing).
+  * BUILTINS v1: `stream`, `json`, `rand`, `record`, full `option`/`result` modules missing.
+  * `LoadError` C enum has 21 values; LANG §11.3 fixes 9.
+  * Good news: HAL leakage is clean — `hal_*` only reaches `deck_sdi/src/drivers/`.
+- **`FIXTURE-AUDIT.md`** (134 lines, 80 fixtures triaged). 49 GREEN / 23 YELLOW / 7 RED / 0 DROP. Top-5 impact vectors: `@requires` → `@needs` (80/80); `&&/||` → `and/or` (16); bare `transition :atom` → `on :event from :src to :dst` (4); `capabilities:` → `caps:` (2); `#` → `--` comments (2). RED fixtures: app_bridge_ui, app_flow, app_machine, app_machine_hooks, err_unresolved_symbol, lang_pipe_is, lang_where. Caveat: BUILTINS/SERVICES method-name renames not re-verified — may bump some YELLOW to RED.
+- **`DEMO-AUDIT.md`** (87 lines). `apps/demo.deck` is largely aligned — written against the new annotation surface already. Only cosmetic touch-ups identified: update "Deck 3.0" header comment; drop spurious `caps.notifications` entry; verify alias correlation between `@grants.services.X` and `@use … as X`. Good reference app for Stage 10 rewrite — <30 line edits.
+
+Diff: 3 new files, +729.
+
+### Concept #79.stage-5a — Rename pass (commit `cbdcbac`)
+
+Mechanical token renames across runtime + fixtures + conformance harness. No semantic changes. Build verde.
+
+- Runtime: `AST_REQUIRES` → `AST_NEEDS`, `AST_MIGRATION` → `AST_MIGRATE`, `as.migration` → `as.migrate`, `parse_requires_decl` → `parse_needs_decl`, `parse_migration_decl` → `parse_migrate_decl`, `find_requires` → `find_needs`, dispatcher strings `"requires"/"migration"/"permissions"` → `"needs"/"migrate"/"grants"`, error messages and comments touching `@requires/@permissions/@migration` updated everywhere.
+- Fixtures: all 80 `.deck` files sed'd for the three annotation renames. `lang_requires_caps.deck` renamed to `lang_needs_services.deck`; internal probe-name strings `lang.requires.caps` → `lang.needs.services`.
+- Conformance harness: probe name in `deck_conformance.c:201` updated to match the renamed fixture.
+
+Diff: 91 files, +208 / −207. Binary size 1456832 bytes (60% free).
+
+### Concept #79.stage-5e — Remove bridge.ui.* builtins (commit `524b187`)
+
+Pure deletion. Per BRIDGE.md §0 invariant 3 and LANG.md §0 invariant 1, apps MUST NOT call any `bridge.ui.*` method. The previous runtime exposed 9 imperative tree-building builtins that allowed apps to construct DVC nodes by hand and push snapshots. Removed:
+
+- 9 registration entries in the builtin dispatch table.
+- ~230 lines of b_bui_* function bodies + the bui_container helper.
+- The bui_register / bui_lookup / bui_strdup_from_value handle-table helpers.
+- `s_bui_nodes[]`, `s_bui_n`, `DECK_BUI_MAX_NODES` — all tied to the builder handle table.
+
+Kept (internal only): the `s_bui_arena` + `bui_ensure_init` + `bui_reset` trio used by `content_render()` — the spec-conformant pipeline where the runtime walks the `content = …` AST, allocates DVC nodes in the arena, encodes + pushes via the SDI. That arena never surfaces to Deck.
+
+Diff: 1 file, +14 / −255. Binary 1454352 bytes (−2480 vs pre-removal).
+
+`app_bridge_ui.deck` and `demo.deck` still reference `bridge.ui.*` in their bodies — Stage 9 rewrites them.
+
+### Session checkpoint — what's done, what's next
+
+**Commits this session (6):**
+
+| Commit | Stage | Scope |
+|---|---|---|
+| `0fa5844` | Cutover | Deleted 14 legacy specs + 5 annexes + 5 plans; renamed 5 pillars; 2047→2073 BRIDGE lines post-cleanup |
+| `2f89ed1` | 1 | Root-doc cleanup (README, ARCHITECTURE, CHANGELOG) |
+| `95ef55f` | 2+3+4 | CODE-AUDIT / FIXTURE-AUDIT / DEMO-AUDIT |
+| `cbdcbac` | 5a | Rename @requires/@permissions/@migration (91 files) |
+| `524b187` | 5e | Remove bridge.ui.* Deck builtins |
+
+**Remaining stages in priority order:**
+
+- **Stage 5b** — structured parsers for @grants / @service / @handles / @config / @migrate / @errors (currently parse_opaque_block / parse_metadata_block). Biggest parser work. Unblocks real @service dispatch, @on back, @handles URL matching.
+- **Stage 5c** — `!` effect marker, postfix `?` operator, `T?` sugar (LANG §1.10 / §2.6). Required for every capability consumer in demo.deck.
+- **Stage 5d-i** — add json.*, rand.*, record.* builtin modules (pure, small).
+- **Stage 5d-ii** — add stream.* module (DL3; ties to @on source).
+- **Stage 5d-iii** — namespace bare unwrap/map_ok/and_then etc under option.*/result.*. Breaking change; after fixture rewrite starts.
+- **Stage 5f** — DVC wire envelope: add `(app_id, machine_id, state_id, frame_id)` identity triple (structural; small but load-bearing for BRIDGE §9).
+- **Stage 6** — SDI bridge.ui vtable stratification (4 bands × ~20 methods) per BRIDGE §4.
+- **Stage 6b** — stub 24 missing SERVICES so `@needs.services` imports resolve.
+- **Stage 6c** — prune LoadError C enum 21 → 9 per LANG §11.3.
+- **Stage 7** — `@on back :confirm` routing through Confirm Dialog.
+- **Stage 8** — bridge diff (patch vs rebuild) per BRIDGE §9.
+- **Stage 9** — fixture rewrite per FIXTURE-AUDIT (23 YELLOW + 7 RED).
+- **Stage 10** — demo.deck touch-ups per DEMO-AUDIT (<30 lines).
+- **Stage 11** — author reference apps fresh (Launcher → Task Manager → Settings → Files → Bluesky).
+
+Each remaining stage is its own concept. Build is green throughout; every stage closes with an atomic commit and hardware test (`idf.py build` passing on reference HW).
