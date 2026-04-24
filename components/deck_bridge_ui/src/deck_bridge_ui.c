@@ -60,11 +60,19 @@ static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
     }
 
     deck_dvc_node_t *root = NULL;
-    deck_err_t r = deck_dvc_decode(bytes, len, &s_render_arena, &root);
+    deck_dvc_envelope_t env = {0};
+    deck_err_t r = deck_dvc_decode(bytes, len, &s_render_arena, &env, &root);
     if (r != DECK_RT_OK || !root) {
         ESP_LOGE(TAG, "decode failed: %s", deck_err_name(r));
         return DECK_SDI_ERR_INVALID_ARG;
     }
+    /* Stage 5f: envelope is on the wire. Stage 8 wires diffing that
+     * consults (app_id, machine_id, state_id) for patch-vs-rebuild and
+     * frame_id for stale-intent discard. Until then, the envelope is
+     * parsed and logged only. */
+    ESP_LOGD(TAG, "snapshot env app=%08x machine=%08x state=%08x frame=%u",
+             (unsigned)env.app_id, (unsigned)env.machine_id,
+             (unsigned)env.state_id, (unsigned)env.frame_id);
 
     if (!deck_bridge_ui_lock(500)) {
         ESP_LOGE(TAG, "ui_lock timeout — render dropped");
@@ -132,13 +140,18 @@ deck_sdi_err_t deck_bridge_ui_selftest(void)
     deck_dvc_add_child(&arena, root, label);
     deck_dvc_set_str(&arena, label, "value", "Hello from Deck DL2");
 
-    /* Encode → push_snapshot via the driver. */
+    /* Encode → push_snapshot via the driver. Selftest envelope uses
+     * the reserved bridge-selftest identity triple. */
+    const deck_dvc_envelope_t env = {
+        .app_id = 0x2E1F5E57u, .machine_id = 0u,
+        .state_id = 0u, .frame_id = 0u,
+    };
     size_t need = 0;
-    (void)deck_dvc_encode(root, NULL, 0, &need);
+    (void)deck_dvc_encode(&env, root, NULL, 0, &need);
     uint8_t *buf = deck_arena_alloc(&arena, need);
     if (!buf) { deck_arena_reset(&arena); return DECK_SDI_ERR_NO_MEMORY; }
     size_t wrote = 0;
-    if (deck_dvc_encode(root, buf, need, &wrote) != DECK_RT_OK) {
+    if (deck_dvc_encode(&env, root, buf, need, &wrote) != DECK_RT_OK) {
         deck_arena_reset(&arena);
         return DECK_SDI_ERR_FAIL;
     }

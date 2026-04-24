@@ -32,6 +32,19 @@ extern "C" {
 #define DECK_DVC_MAGIC        0xDC0Eu
 #define DECK_DVC_VERSION      1
 
+/* BRIDGE §7 identity triple + monotonic frame counter.
+ * The bridge keys widget ownership, overlay routing, scroll position,
+ * keyboard focus and gesture context on (app_id, machine_id, state_id).
+ * frame_id is monotonic per (app_id, machine_id) and lets the bridge
+ * discard intent activations that arrive after a subsequent snapshot
+ * has invalidated them. */
+typedef struct {
+    uint32_t app_id;
+    uint32_t machine_id;
+    uint32_t state_id;
+    uint32_t frame_id;
+} deck_dvc_envelope_t;
+
 /* ---------- node type catalog (spec §18.3) ---------- */
 
 typedef enum {
@@ -148,14 +161,17 @@ const deck_dvc_attr_t *deck_dvc_find_attr(const deck_dvc_node_t *node,
 
 /* Encode a DVC tree to a flat byte buffer.
  *
- * Layout (all little-endian, packed):
+ * Layout (all little-endian, packed) — BRIDGE §7:
  *   u16 magic           = 0xDC0E
  *   u8  version         = 1
  *   u8  flags           = 0 (reserved)
- *   u32 root_offset     = bytes from start to root node
- *   nodes...            packed depth-first
+ *   u32 app_id
+ *   u32 machine_id
+ *   u32 state_id
+ *   u32 frame_id
+ *   nodes...            packed depth-first from here
  *
- * Each node (at offset `root_offset` and recursively):
+ * Each node:
  *   u16 type
  *   u16 flags
  *   u32 intent_id
@@ -174,20 +190,27 @@ const deck_dvc_attr_t *deck_dvc_find_attr(const deck_dvc_node_t *node,
  *     STR/ATOM: u32 len  u8[len] bytes (no NUL)
  *     LIST_STR: u16 count  [u32 len  u8[len] bytes] × count
  *
+ * `env` carries the BRIDGE §7 identity triple + monotonic frame counter.
+ * Passing NULL is equivalent to a zero-filled envelope (useful for
+ * selftests and one-off fixtures; real runtime snapshots must supply it).
+ *
  * Returns:
  *   DECK_RT_OK              on success; *out_len gets bytes written.
- *   DECK_RT_ERR_RUNTIME if cap is too small (sets *out_len to required size).
- *   DECK_RT_ERR_RUNTIME for any internal inconsistency.
+ *   DECK_RT_NO_MEMORY       if cap is too small (sets *out_len to required size).
+ *   DECK_RT_INTERNAL        for any internal inconsistency.
  */
-deck_err_t deck_dvc_encode(const deck_dvc_node_t *root,
+deck_err_t deck_dvc_encode(const deck_dvc_envelope_t *env,
+                           const deck_dvc_node_t *root,
                            void *out_buf, size_t cap,
                            size_t *out_len);
 
 /* Decode bytes back into a tree allocated in `arena`. *out_root is set
- * to the new root node. On error, the arena is not freed; caller may
- * reset it. */
+ * to the new root node. If `out_env` is non-NULL it receives the four-
+ * field identity triple + frame counter from the wire header. On error
+ * the arena is not freed; caller may reset it. */
 deck_err_t deck_dvc_decode(const void *bytes, size_t len,
                            deck_arena_t *arena,
+                           deck_dvc_envelope_t *out_env,
                            deck_dvc_node_t **out_root);
 
 /* Compare two trees structurally (type+flags+intent+attrs+children).

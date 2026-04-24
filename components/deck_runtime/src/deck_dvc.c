@@ -266,19 +266,22 @@ static void encode_node(writer_t *w, const deck_dvc_node_t *n)
     for (uint16_t i = 0; i < n->child_count; i++) encode_node(w, n->children[i]);
 }
 
-deck_err_t deck_dvc_encode(const deck_dvc_node_t *root,
+deck_err_t deck_dvc_encode(const deck_dvc_envelope_t *env,
+                           const deck_dvc_node_t *root,
                            void *out_buf, size_t cap,
                            size_t *out_len)
 {
     if (!out_len) return DECK_RT_INTERNAL;
     writer_t w = { .buf = out_buf, .cap = out_buf ? cap : 0, .pos = 0 };
 
-    /* Envelope header. */
+    /* BRIDGE §7 envelope header — 20 bytes. */
     w_u16(&w, DECK_DVC_MAGIC);
     w_u8 (&w, DECK_DVC_VERSION);
-    w_u8 (&w, 0);          /* flags */
-    /* root_offset is fixed — header is 8 bytes total. */
-    w_u32(&w, 8);
+    w_u8 (&w, 0);          /* flags (reserved) */
+    w_u32(&w, env ? env->app_id     : 0);
+    w_u32(&w, env ? env->machine_id : 0);
+    w_u32(&w, env ? env->state_id   : 0);
+    w_u32(&w, env ? env->frame_id   : 0);
     encode_node(&w, root);
 
     *out_len = w.pos;
@@ -431,10 +434,12 @@ static deck_dvc_node_t *decode_node(reader_t *r, deck_arena_t *arena)
 
 deck_err_t deck_dvc_decode(const void *bytes, size_t len,
                            deck_arena_t *arena,
+                           deck_dvc_envelope_t *out_env,
                            deck_dvc_node_t **out_root)
 {
     if (!bytes || !arena || !out_root) return DECK_RT_INTERNAL;
     *out_root = NULL;
+    if (out_env) memset(out_env, 0, sizeof(*out_env));
 
     reader_t r = { .buf = bytes, .len = len, .pos = 0 };
     uint16_t magic = r_u16(&r);
@@ -450,9 +455,17 @@ deck_err_t deck_dvc_decode(const void *bytes, size_t len,
         return DECK_RT_INTERNAL;
     }
     (void)r_u8(&r);                /* flags reserved */
-    uint32_t root_off = r_u32(&r);
-    if (r.bad || root_off >= len) return DECK_RT_INTERNAL;
-    r.pos = root_off;
+    uint32_t app_id     = r_u32(&r);
+    uint32_t machine_id = r_u32(&r);
+    uint32_t state_id   = r_u32(&r);
+    uint32_t frame_id   = r_u32(&r);
+    if (r.bad) return DECK_RT_INTERNAL;
+    if (out_env) {
+        out_env->app_id     = app_id;
+        out_env->machine_id = machine_id;
+        out_env->state_id   = state_id;
+        out_env->frame_id   = frame_id;
+    }
 
     deck_dvc_node_t *root = decode_node(&r, arena);
     if (r.bad || !root) return DECK_RT_INTERNAL;
@@ -537,9 +550,13 @@ deck_err_t deck_dvc_selftest(void)
     const char *opts[] = { "alpha", "beta", "gamma" };
     deck_dvc_set_list_str(&arena, choice, "options", opts, 3);
 
-    /* Encode → decode → compare. */
+    /* Encode → decode → compare. Envelope round-trip covered. */
+    const deck_dvc_envelope_t env_in = {
+        .app_id = 0xAAAA1111u, .machine_id = 0xBBBB2222u,
+        .state_id = 0xCCCC3333u, .frame_id = 7,
+    };
     size_t need = 0;
-    deck_err_t r = deck_dvc_encode(root, NULL, 0, &need);
+    deck_err_t r = deck_dvc_encode(&env_in, root, NULL, 0, &need);
     if (r != DECK_RT_NO_MEMORY) {
         ESP_LOGE(TAG, "size probe expected NO_MEMORY, got %d", (int)r);
         deck_arena_reset(&arena);
@@ -555,7 +572,7 @@ deck_err_t deck_dvc_selftest(void)
     if (!buf) { ESP_LOGE(TAG, "alloc %u failed", (unsigned)need); goto fail_oom; }
 
     size_t wrote = 0;
-    r = deck_dvc_encode(root, buf, need, &wrote);
+    r = deck_dvc_encode(&env_in, root, buf, need, &wrote);
     if (r != DECK_RT_OK || wrote != need) {
         ESP_LOGE(TAG, "encode: r=%d wrote=%u need=%u",
                  (int)r, (unsigned)wrote, (unsigned)need);
@@ -566,9 +583,19 @@ deck_err_t deck_dvc_selftest(void)
     deck_arena_t arena2 = {0};
     deck_arena_init(&arena2, 0);
     deck_dvc_node_t *root2 = NULL;
-    r = deck_dvc_decode(buf, wrote, &arena2, &root2);
+    deck_dvc_envelope_t env_out = {0};
+    r = deck_dvc_decode(buf, wrote, &arena2, &env_out, &root2);
     if (r != DECK_RT_OK || !root2) {
         ESP_LOGE(TAG, "decode: r=%d", (int)r);
+        deck_arena_reset(&arena);
+        deck_arena_reset(&arena2);
+        return DECK_RT_INTERNAL;
+    }
+    if (env_out.app_id     != env_in.app_id     ||
+        env_out.machine_id != env_in.machine_id ||
+        env_out.state_id   != env_in.state_id   ||
+        env_out.frame_id   != env_in.frame_id) {
+        ESP_LOGE(TAG, "envelope round-trip mismatch");
         deck_arena_reset(&arena);
         deck_arena_reset(&arena2);
         return DECK_RT_INTERNAL;
@@ -583,11 +610,11 @@ deck_err_t deck_dvc_selftest(void)
     }
 
     /* Bad magic must reject. */
-    uint8_t corrupted[16] = {0};
+    uint8_t corrupted[32] = {0};
     memcpy(corrupted, buf, sizeof(corrupted) < wrote ? sizeof(corrupted) : wrote);
     corrupted[0] = 0xFF;
     deck_dvc_node_t *bad = NULL;
-    r = deck_dvc_decode(corrupted, wrote, &arena2, &bad);
+    r = deck_dvc_decode(corrupted, wrote, &arena2, NULL, &bad);
     if (r == DECK_RT_OK) {
         ESP_LOGE(TAG, "decode of bad-magic should have failed");
         deck_arena_reset(&arena);

@@ -872,16 +872,21 @@ static bool s_dl2_dvc_complex(char *d, size_t dz)
     const char *opts[] = {"alpha", "beta", "gamma", "delta"};
     deck_dvc_set_list_str(&a, ch, "options", opts, 4);
 
+    const deck_dvc_envelope_t env_probe = {
+        .app_id = 0xC07FCE01u, .machine_id = 0u,
+        .state_id = 0u, .frame_id = 0u,
+    };
     size_t need = 0;
-    (void)deck_dvc_encode(root, NULL, 0, &need);
+    (void)deck_dvc_encode(&env_probe, root, NULL, 0, &need);
     uint8_t *buf = deck_arena_alloc(&a, need);
     size_t wrote = 0;
-    deck_dvc_encode(root, buf, need, &wrote);
+    deck_dvc_encode(&env_probe, root, buf, need, &wrote);
 
     deck_arena_t a2 = {0};
     deck_arena_init(&a2, 0);
     deck_dvc_node_t *r2 = NULL;
-    deck_err_t r = deck_dvc_decode(buf, wrote, &a2, &r2);
+    deck_dvc_envelope_t env_out = {0};
+    deck_err_t r = deck_dvc_decode(buf, wrote, &a2, &env_out, &r2);
     int diff = (r == DECK_RT_OK) ? deck_dvc_tree_equal(root, r2) : -1;
     deck_arena_reset(&a);
     deck_arena_reset(&a2);

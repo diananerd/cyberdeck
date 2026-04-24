@@ -211,6 +211,10 @@ struct deck_runtime_app {
     const char        *machine_state;
     deck_intent_binding_t intents[DECK_RUNTIME_MAX_INTENTS];
     uint32_t           next_intent_id;
+    /* BRIDGE §7 monotonic per-app frame counter. Incremented on every
+     * snapshot push. Spec mandates per-(app, machine) but apps rarely
+     * carry >1 machine; per-app is a conformant simplification. */
+    uint32_t           frame_counter;
 };
 
 static struct deck_runtime_app *app_from_ctx(deck_interp_ctx_t *c);
@@ -4014,6 +4018,20 @@ static void bui_reset(void)
     deck_arena_reset(&s_bui_arena);
 }
 
+/* FNV-1a 32-bit — strings → stable u32 ids for (app_id, machine_id,
+ * state_id) on the BRIDGE §7 wire envelope. The bridge treats these as
+ * opaque comparison handles. */
+static uint32_t fnv1a32(const char *s)
+{
+    uint32_t h = 2166136261u;
+    if (!s) return 0;
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
 /* asset.path(name:str) — look up a registered @assets entry on the
  * current module and return its path as a string. If the name is not
  * registered (or no @assets block exists), returns :none so callers can
@@ -4227,7 +4245,10 @@ static void content_apply_options(deck_interp_ctx_t *c, deck_env_t *env,
     }
 }
 
-static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *block)
+static void content_render(deck_interp_ctx_t *c, deck_env_t *env,
+                            const ast_node_t *block,
+                            const char *machine_name,
+                            const char *state_name)
 {
     if (!block || block->kind != AST_CONTENT_BLOCK) return;
     bui_ensure_init();
@@ -4634,26 +4655,38 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env, const ast_node
         if (node) deck_dvc_add_child(&s_bui_arena, root, node);
     }
 
-    /* Encode + push. Mirrors bridge.ui.render. */
+    /* Encode + push. BRIDGE §7 envelope carries the identity triple
+     * (app_id, machine_id, state_id) + monotonic per-app frame counter. */
+    deck_dvc_envelope_t env_hdr = {0};
+    if (app) {
+        env_hdr.app_id     = fnv1a32(app->ld.app_id);
+        env_hdr.machine_id = fnv1a32(machine_name);
+        env_hdr.state_id   = fnv1a32(state_name);
+        env_hdr.frame_id   = ++app->frame_counter;
+    }
     size_t need = 0;
-    (void)deck_dvc_encode(root, NULL, 0, &need);
+    (void)deck_dvc_encode(&env_hdr, root, NULL, 0, &need);
     if (need == 0) { bui_reset(); return; }
     uint8_t *buf = deck_arena_alloc(&s_bui_arena, need);
     if (!buf) { bui_reset(); return; }
     size_t wrote = 0;
-    if (deck_dvc_encode(root, buf, need, &wrote) != DECK_RT_OK) { bui_reset(); return; }
+    if (deck_dvc_encode(&env_hdr, root, buf, need, &wrote) != DECK_RT_OK) { bui_reset(); return; }
     deck_sdi_bridge_ui_push_snapshot(buf, wrote);
     bui_reset();
 }
 
 /* Helper — locate the content block in a state, render it with the given env. */
-static void content_render_state(deck_interp_ctx_t *c, deck_env_t *env, const ast_node_t *state)
+static void content_render_state(deck_interp_ctx_t *c, deck_env_t *env,
+                                  const ast_node_t *machine,
+                                  const ast_node_t *state)
 {
     if (!state || state->kind != AST_STATE) return;
+    const char *mname = (machine && machine->kind == AST_MACHINE)
+                           ? machine->as.machine.name : NULL;
     for (uint32_t i = 0; i < state->as.state.hooks.len; i++) {
         const ast_node_t *h = state->as.state.hooks.items[i];
         if (h && h->kind == AST_CONTENT_BLOCK) {
-            content_render(c, env, h);
+            content_render(c, env, h, mname, state->as.state.name);
             return;
         }
     }
@@ -6392,7 +6425,7 @@ static deck_err_t run_machine(const ast_node_t *machine,
         const char *ignored = NULL;
         run_state_hooks(c, state, "enter", &ignored);
         /* Concept #46 — render the initial state's declarative content. */
-        content_render_state(c, c->global, state);
+        content_render_state(c, c->global, machine, state);
         /* The machine now sits waiting for send() calls. The caller
          * (deck_runtime_app_load) records app->machine_state separately. */
         return c->err;
@@ -6406,7 +6439,7 @@ static deck_err_t run_machine(const ast_node_t *machine,
          * content on each state entry so `content =` blocks in @flow / non-
          * event-driven @machine states aren't silently dropped. Matches the
          * event-driven branch above. */
-        content_render_state(c, c->global, state);
+        content_render_state(c, c->global, machine, state);
         if (c->err != DECK_RT_OK) return c->err;
         if (!next) {
             /* No transition → terminate in this state. */
@@ -6620,7 +6653,7 @@ static deck_value_t *b_machine_send(deck_value_t **args, uint32_t n, deck_interp
         /* Concept #46 — re-render the destination state's declarative
          * content after on_enter runs, so apps see the state's UI on
          * every transition. */
-        content_render_state(c, bind_env, dst_state);
+        content_render_state(c, bind_env, machine, dst_state);
     }
 
     if (match_tn->as.machine_transition.after_body) {
