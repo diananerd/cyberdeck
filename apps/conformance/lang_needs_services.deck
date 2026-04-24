@@ -5,7 +5,7 @@
   edition: 2026
 
 -- Coverage goal: `@needs.capabilities` map form (§4A.1). Old
--- version used `capabilities: [log, math, time, http]` as a list —
+-- version used `caps: [log, math, time, http]` as a list —
 -- §4A uses a map with version constraints: `cap.path: "version-range"`
 -- (or `"any"` or `optional`). Also `deck_os: 1` must be the string
 -- `">= 1"` for range syntax.
@@ -16,7 +16,7 @@
   deck_level: 1
   deck_os:    ">= 1"
   runtime:    ">= 1.0"
-  capabilities:
+  caps:
     nvs:    ">= 1"
     fs:     ">= 1"
 

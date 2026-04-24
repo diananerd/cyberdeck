@@ -8,11 +8,11 @@
   deck_level: 1
 
 -- Coverage goal: `01-deck-lang §7.3` logical operators — spec uses
--- `and` / `or` / `not` keywords (§2.10), NOT `&&` / `||`.
+-- `and` / `or` / `not` keywords (§2.10), NOT ` and ` / ` or `.
 -- Short-circuit evaluation: `and` skips rhs if lhs is false; `or` skips
 -- rhs if lhs is true.
 --
--- Old version used `&&` / `||` — not in §2.10 keyword list. This version
+-- Old version used ` and ` / ` or ` — not in §2.10 keyword list. This version
 -- uses spec-canonical keywords exclusively. (lang_and_or_kw.deck is
 -- redundant with this; kept as a thinner companion that confirms the
 -- keyword form loads.)

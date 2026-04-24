@@ -35,9 +35,9 @@
 
   -- before / after are total ordering on Timestamps.
   let ok_ord   = time.before(t1, future)
-              && time.after(future, t1)
-              && not time.before(future, t1)
-              && not time.after(t1, future)
+ and time.after(future, t1)
+ and not time.before(future, t1)
+ and not time.after(t1, future)
 
   -- ISO-8601 round-trip.
   let iso_str  = time.to_iso(t1)
@@ -58,7 +58,7 @@
 
   -- Invalid parse returns :none.
   let ok_bad   = time.from_iso("not-a-timestamp") == :none
-              && time.parse("garbage", fmt)        == :none
+ and time.parse("garbage", fmt)        == :none
 
   -- Date decomposition returns an expected shape. Wall-clock may not
   -- be set (no SNTP on DL1), in which case the epoch falls back to
@@ -70,11 +70,11 @@
 
   -- epoch() returns the zero timestamp (UNIX 1970-01-01).
   let ep       = time.epoch()
-  let ok_ep    = ep >= 0 && time.before(ep, t1)
+  let ok_ep    = ep >= 0 and time.before(ep, t1)
 
-  let ok = ok_mono && ok_pos
-        && ok_add && ok_sub && ok_since && ok_until && ok_ord
-        && ok_iso && ok_fmt && ok_bad
-        && ok_parts && ok_ep
+  let ok = ok_mono and ok_pos
+ and ok_add and ok_sub and ok_since and ok_until and ok_ord
+ and ok_iso and ok_fmt and ok_bad
+ and ok_parts and ok_ep
 
   log.info(if ok then "DECK_CONF_OK:os.time" else "DECK_CONF_FAIL:os.time")

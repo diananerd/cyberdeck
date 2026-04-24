@@ -11,5 +11,5 @@
   let dbl = x -> x * 2
   let inc = x -> x + 1
   let sq  = x -> x * x
-  let ok = dbl(21) == 42 && inc(99) == 100 && sq(9) == 81
+  let ok = dbl(21) == 42 and inc(99) == 100 and sq(9) == 81
   log.info(if ok then "DECK_CONF_OK:lang.lambda.basic" else "DECK_CONF_FAIL:lang.lambda.basic")

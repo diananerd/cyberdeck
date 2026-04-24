@@ -1,4 +1,4 @@
-# pre-app comment
+-- pre-app comment
 @app
   name: "Conf edge.comments"
   id: "conf.edge.comments"
@@ -8,12 +8,12 @@
 @needs
   deck_level: 1
 
-# between app and on launch
+-- between app and on launch
 @on launch:
-  # leading comment inside block
+  -- leading comment inside block
   let x = 10
   let y = 20
-  # mid-block comment
+  -- mid-block comment
   let ok = x + y == 30
   log.info(if ok then "DECK_CONF_OK:edge.comments" else "DECK_CONF_FAIL:edge.comments")
-  # trailing comment at end
+  -- trailing comment at end

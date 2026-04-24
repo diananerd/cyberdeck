@@ -23,5 +23,5 @@
     | none -> true
     | some(_) -> false
     | _ -> false
-  let all_ok = ok1 && ok2
+  let all_ok = ok1 and ok2
   log.info(if all_ok then "DECK_CONF_OK:app.assets" else "DECK_CONF_FAIL:app.assets")

@@ -12,9 +12,9 @@
 -- of small positive ints — classic A→B: "1+2==3 → arithmetic works".
 @on launch:
   -- Integer add/sub/mul (positives, negatives, zero, identity).
-  let ok_add  = 1 + 2 == 3 && -1 + 1 == 0 && 0 + 0 == 0 && 100 + 0 == 100
-  let ok_sub  = 10 - 4 == 6 && 0 - 5 == -5 && 5 - 5 == 0
-  let ok_mul  = 5 * 6 == 30 && -3 * 4 == -12 && 0 * 100 == 0 && 1 * 1 == 1
+  let ok_add  = 1 + 2 == 3 and -1 + 1 == 0 and 0 + 0 == 0 and 100 + 0 == 100
+  let ok_sub  = 10 - 4 == 6 and 0 - 5 == -5 and 5 - 5 == 0
+  let ok_mul  = 5 * 6 == 30 and -3 * 4 == -12 and 0 * 100 == 0 and 1 * 1 == 1
 
   -- Integer division — §7.1: truncated toward zero.
   let ok_div_pos = 20 / 5 == 4
@@ -40,18 +40,18 @@
   let ok_prec5 = 2 * 3 + 4 * 5 == 26     -- two mults, one add
 
   -- Unary negation.
-  let ok_neg  = -(3) == -3 && -(-5) == 5 && -0 == 0
+  let ok_neg  = -(3) == -3 and -(-5) == 5 and -0 == 0
 
   -- Float + int mixing (spec-implicit promotion to float).
   let ok_mix  = match (3 + 1.0)         -- if runtime auto-promotes
                   | v when v == 4.0 -> true
                   | _                -> false
 
-  let ok = ok_add && ok_sub && ok_mul
-        && ok_div_pos && ok_div_tr && ok_div_neg
-        && ok_mod_pos && ok_mod_neg && ok_mod_zer
-        && ok_fadd && ok_fsub && ok_fmul && ok_fdiv
-        && ok_prec1 && ok_prec2 && ok_prec3 && ok_prec4 && ok_prec5
-        && ok_neg && ok_mix
+  let ok = ok_add and ok_sub and ok_mul
+ and ok_div_pos and ok_div_tr and ok_div_neg
+ and ok_mod_pos and ok_mod_neg and ok_mod_zer
+ and ok_fadd and ok_fsub and ok_fmul and ok_fdiv
+ and ok_prec1 and ok_prec2 and ok_prec3 and ok_prec4 and ok_prec5
+ and ok_neg and ok_mix
 
   log.info(if ok then "DECK_CONF_OK:lang.arith" else "DECK_CONF_FAIL:lang.arith")

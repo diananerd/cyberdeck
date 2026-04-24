@@ -6,7 +6,7 @@
 
 @needs
   deck_level: 1
-  capabilities:
+  caps:
     unknown_cap_xxx: "any"
 
 @on launch:

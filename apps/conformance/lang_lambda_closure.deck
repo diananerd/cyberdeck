@@ -20,5 +20,5 @@ fn mk_multiplier (k) = x -> x * k
   let r3 = times3(4) == 12
   let r4 = times7(6) == 42
   let r5 = add5(times3(2)) == 11
-  let ok = r1 && r2 && r3 && r4 && r5
+  let ok = r1 and r2 and r3 and r4 and r5
   log.info(if ok then "DECK_CONF_OK:lang.lambda.closure" else "DECK_CONF_FAIL:lang.lambda.closure")

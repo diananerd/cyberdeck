@@ -13,42 +13,42 @@
 -- work → ALL math works). This version fails fast on any single gap.
 @on launch:
   -- Integer helpers.
-  let ok_abs_int   = math.abs_int(-7) == 7 && math.abs_int(3) == 3 && math.abs_int(0) == 0
-  let ok_min_int   = math.min_int(3, 5) == 3 && math.min_int(-2, -9) == -9
-  let ok_max_int   = math.max_int(3, 5) == 5 && math.max_int(-2, -9) == -2
+  let ok_abs_int   = math.abs_int(-7) == 7 and math.abs_int(3) == 3 and math.abs_int(0) == 0
+  let ok_min_int   = math.min_int(3, 5) == 3 and math.min_int(-2, -9) == -9
+  let ok_max_int   = math.max_int(3, 5) == 5 and math.max_int(-2, -9) == -2
   let ok_clamp_int = math.clamp_int(15, 0, 10) == 10
-                  && math.clamp_int(-3, 0, 10) == 0
-                  && math.clamp_int( 7, 0, 10) == 7
-  let ok_gcd       = math.gcd(12, 18) == 6 && math.gcd(17, 13) == 1
-  let ok_lcm       = math.lcm(4, 6) == 12 && math.lcm(7, 5) == 35
+ and math.clamp_int(-3, 0, 10) == 0
+ and math.clamp_int( 7, 0, 10) == 7
+  let ok_gcd       = math.gcd(12, 18) == 6 and math.gcd(17, 13) == 1
+  let ok_lcm       = math.lcm(4, 6) == 12 and math.lcm(7, 5) == 35
 
   -- Float scalar & rounding.
-  let ok_abs       = math.abs(-7.25) == 7.25 && math.abs(0.0) == 0.0
-  let ok_floor     = math.floor(2.7) == 2.0 && math.floor(-2.1) == -3.0
-  let ok_ceil      = math.ceil(2.1) == 3.0  && math.ceil(-2.9) == -2.0
+  let ok_abs       = math.abs(-7.25) == 7.25 and math.abs(0.0) == 0.0
+  let ok_floor     = math.floor(2.7) == 2.0 and math.floor(-2.1) == -3.0
+  let ok_ceil      = math.ceil(2.1) == 3.0 and math.ceil(-2.9) == -2.0
   let ok_round_0   = math.round(2.4, 0) == 2.0
-                  && math.round(2.5, 0) == 3.0
-                  && math.round(-2.5, 0) == -3.0
-  let ok_round_1   = math.round(1.249, 1) == 1.2 && math.round(1.25, 1) == 1.3
+ and math.round(2.5, 0) == 3.0
+ and math.round(-2.5, 0) == -3.0
+  let ok_round_1   = math.round(1.249, 1) == 1.2 and math.round(1.25, 1) == 1.3
   let ok_sign      = math.sign(-4.0) == -1.0
-                  && math.sign( 0.0) ==  0.0
-                  && math.sign( 4.0) ==  1.0
+ and math.sign( 0.0) ==  0.0
+ and math.sign( 4.0) ==  1.0
   let ok_min       = math.min(3.1, 5.2) == 3.1
   let ok_max       = math.max(3.1, 5.2) == 5.2
   let ok_clamp     = math.clamp(15.0, 0.0, 10.0) == 10.0
-                  && math.clamp(-0.5, 0.0, 10.0) == 0.0
+ and math.clamp(-0.5, 0.0, 10.0) == 0.0
   let ok_lerp      = math.lerp(0.0, 10.0, 0.5) == 5.0
-                  && math.lerp(0.0, 10.0, 0.0) == 0.0
-                  && math.lerp(0.0, 10.0, 1.0) == 10.0
+ and math.lerp(0.0, 10.0, 0.0) == 0.0
+ and math.lerp(0.0, 10.0, 1.0) == 10.0
 
   -- Power / root.
-  let ok_sqrt      = math.sqrt(9.0) == 3.0 && math.sqrt(0.25) == 0.5
-  let ok_pow       = math.pow(2.0, 10.0) == 1024.0 && math.pow(3.0, 0.0) == 1.0
+  let ok_sqrt      = math.sqrt(9.0) == 3.0 and math.sqrt(0.25) == 0.5
+  let ok_pow       = math.pow(2.0, 10.0) == 1024.0 and math.pow(3.0, 0.0) == 1.0
 
   -- Trig (tolerance 1e-6 since float approximations).
   let near      = (a: float, b: float) -> math.abs(a - b) < 0.000001
-  let ok_sin    = near(math.sin(0.0), 0.0) && near(math.sin(math.pi / 2.0), 1.0)
-  let ok_cos    = near(math.cos(0.0), 1.0) && near(math.cos(math.pi), -1.0)
+  let ok_sin    = near(math.sin(0.0), 0.0) and near(math.sin(math.pi / 2.0), 1.0)
+  let ok_cos    = near(math.cos(0.0), 1.0) and near(math.cos(math.pi), -1.0)
   let ok_tan    = near(math.tan(0.0), 0.0)
   let ok_asin   = near(math.asin(1.0), math.pi / 2.0)
   let ok_acos   = near(math.acos(1.0), 0.0)
@@ -56,8 +56,8 @@
   let ok_atan2  = near(math.atan2(1.0, 1.0), math.pi / 4.0)
 
   -- Exp / log.
-  let ok_exp    = near(math.exp(0.0), 1.0) && near(math.exp(1.0), math.e)
-  let ok_ln     = near(math.ln(1.0), 0.0) && near(math.ln(math.e), 1.0)
+  let ok_exp    = near(math.exp(0.0), 1.0) and near(math.exp(1.0), math.e)
+  let ok_ln     = near(math.ln(1.0), 0.0) and near(math.ln(math.e), 1.0)
   let ok_log2   = near(math.log2(8.0), 3.0)
   let ok_log10  = near(math.log10(1000.0), 3.0)
 
@@ -66,22 +66,22 @@
   let ok_deg    = near(math.to_degrees(math.pi), 180.0)
 
   -- Special-value predicates.
-  let ok_nan    = not math.is_nan(1.0) && math.is_nan(math.sqrt(-1.0))
-  let ok_inf    = not math.is_inf(1.0) && math.is_inf(math.pow(10.0, 400.0))
+  let ok_nan    = not math.is_nan(1.0) and math.is_nan(math.sqrt(-1.0))
+  let ok_inf    = not math.is_inf(1.0) and math.is_inf(math.pow(10.0, 400.0))
 
   -- Constants presence + approximate values.
   let ok_pi     = math.abs(math.pi - 3.14159265) < 0.00001
   let ok_e      = math.abs(math.e  - 2.71828182) < 0.00001
   let ok_tau    = math.abs(math.tau - 2.0 * math.pi) < 0.00001
 
-  let ok = ok_abs_int && ok_min_int && ok_max_int && ok_clamp_int && ok_gcd && ok_lcm
-        && ok_abs && ok_floor && ok_ceil && ok_round_0 && ok_round_1 && ok_sign
-        && ok_min && ok_max && ok_clamp && ok_lerp
-        && ok_sqrt && ok_pow
-        && ok_sin && ok_cos && ok_tan && ok_asin && ok_acos && ok_atan && ok_atan2
-        && ok_exp && ok_ln && ok_log2 && ok_log10
-        && ok_rad && ok_deg
-        && ok_nan && ok_inf
-        && ok_pi && ok_e && ok_tau
+  let ok = ok_abs_int and ok_min_int and ok_max_int and ok_clamp_int and ok_gcd and ok_lcm
+ and ok_abs and ok_floor and ok_ceil and ok_round_0 and ok_round_1 and ok_sign
+ and ok_min and ok_max and ok_clamp and ok_lerp
+ and ok_sqrt and ok_pow
+ and ok_sin and ok_cos and ok_tan and ok_asin and ok_acos and ok_atan and ok_atan2
+ and ok_exp and ok_ln and ok_log2 and ok_log10
+ and ok_rad and ok_deg
+ and ok_nan and ok_inf
+ and ok_pi and ok_e and ok_tau
 
   log.info(if ok then "DECK_CONF_OK:os.math" else "DECK_CONF_FAIL:os.math")

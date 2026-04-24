@@ -7,16 +7,12 @@
 @needs
   deck_level: 1
 
--- REAL GATE: the sentinel fires from the LAST hook in the chain —
--- ready.on_enter — which the runtime only reaches after every prior hook
--- (boot.on_enter → boot.on_leave → @machine.before → state change →
--- @machine.after → ready.on_enter) has run without error. If any hook
--- body errors, run_machine aborts before the sentinel line.
--- Each hook logs its own distinct line so a human reading the log can
--- verify the order visually. REPORTS.md concept #4 tracks the layer-4
--- spec-canonical-order fix that will reorder these; when that lands,
--- the distinct log lines stay (order-proof is by line ordering in
--- captured output).
+-- REAL GATE: ready.on_enter only runs after boot.on_enter sent :go,
+-- boot.on_leave ran, and the :go transition's before/after bodies
+-- executed. Per LANG §13 only `state :s on enter` / `on leave` and
+-- the transition's `before:` / `after:` slots exist; @machine.before /
+-- @machine.after do not. The ordering proof is the distinct log
+-- lines below — a captured log must show them in source order.
 @on launch:
   log.info("app.machine_hooks: launch")
 
@@ -24,16 +20,16 @@
   state boot:
     on enter:
       log.info("app.machine_hooks: boot.on_enter")
+      Machine.send(:go)
     on leave:
       log.info("app.machine_hooks: boot.on_leave")
-    transition :ready
   state ready:
     on enter:
       log.info("app.machine_hooks: ready.on_enter")
       log.info("DECK_CONF_OK:app.machine_hooks")
 
-@machine.before:
-  log.info("app.machine_hooks: @machine.before")
-
-@machine.after:
-  log.info("app.machine_hooks: @machine.after")
+  on :go from :boot to :ready
+    before:
+      log.info("app.machine_hooks: transition.before")
+    after:
+      log.info("app.machine_hooks: transition.after")

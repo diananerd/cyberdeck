@@ -21,14 +21,14 @@
 @on launch:
   -- str() — converts any value to its canonical printable form.
   let ok_str = str(42)     == "42"
-            && str(-7)     == "-7"
-            && str(0)      == "0"
-            && str(3.14)   == "3.14"
-            && str(true)   == "true"
-            && str(false)  == "false"
-            && str(:ok)    == ":ok"
-            && str(:some 5) == ":some 5"
-            && str(unit)   == "unit"
+ and str(-7)     == "-7"
+ and str(0)      == "0"
+ and str(3.14)   == "3.14"
+ and str(true)   == "true"
+ and str(false)  == "false"
+ and str(:ok)    == ":ok"
+ and str(:some 5) == ":some 5"
+ and str(unit)   == "unit"
 
   -- int() — parse decimal integer from string.
   let ok_int_pos  = int("42")   == :some 42
@@ -37,41 +37,41 @@
   let ok_int_big  = int("1000000") == :some 1000000
   -- Invalid input → :none.
   let ok_int_bad  = int("abc")   == :none
-                 && int("")       == :none
-                 && int("3.5")    == :none   -- non-integer
-                 && int("  ")     == :none
-                 && int("1e5")    == :none
+ and int("")       == :none
+ and int("3.5")    == :none   -- non-integer
+ and int("  ")     == :none
+ and int("1e5")    == :none
 
   -- float() — parse decimal float from string.
   let ok_f_pos   = match float("3.5")
-                     | :some f -> f > 3.49 && f < 3.51
+                     | :some f -> f > 3.49 and f < 3.51
                      | :none    -> false
   let ok_f_neg   = match float("-0.25")
-                     | :some f -> f > -0.251 && f < -0.249
+                     | :some f -> f > -0.251 and f < -0.249
                      | :none    -> false
   let ok_f_int   = match float("0")
                      | :some f -> f == 0.0
                      | :none    -> false
   let ok_f_bad   = float("not-a-number") == :none
-                && float("")              == :none
+ and float("")              == :none
 
   -- bool() — parse "true"/"false" literals.
   let ok_bool_s  = bool("true")  == :some true
-                && bool("false") == :some false
+ and bool("false") == :some false
   let ok_bool_bad= bool("nope")  == :none
-                && bool("")      == :none
-                && bool("TRUE")  == :none    -- case-sensitive per spec
+ and bool("")      == :none
+ and bool("TRUE")  == :none    -- case-sensitive per spec
 
   -- Round-trip via str + parse.
   let ok_rt_int  = int(str(1337))   == :some 1337
   let ok_rt_neg  = int(str(-42))    == :some -42
   let ok_rt_bool = bool(str(true))  == :some true
-                && bool(str(false)) == :some false
+ and bool(str(false)) == :some false
 
   let ok = ok_str
-        && ok_int_pos && ok_int_neg && ok_int_zero && ok_int_big && ok_int_bad
-        && ok_f_pos && ok_f_neg && ok_f_int && ok_f_bad
-        && ok_bool_s && ok_bool_bad
-        && ok_rt_int && ok_rt_neg && ok_rt_bool
+ and ok_int_pos and ok_int_neg and ok_int_zero and ok_int_big and ok_int_bad
+ and ok_f_pos and ok_f_neg and ok_f_int and ok_f_bad
+ and ok_bool_s and ok_bool_bad
+ and ok_rt_int and ok_rt_neg and ok_rt_bool
 
   log.info(if ok then "DECK_CONF_OK:os.conv" else "DECK_CONF_FAIL:os.conv")

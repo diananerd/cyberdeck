@@ -32,18 +32,18 @@
 
   -- CPU freq: typical range 80–520 MHz on ESP32 family; sanity check.
   let freq      = system.info.cpu_freq_mhz()
-  let ok_freq   = freq >= 40 && freq <= 2000
+  let ok_freq   = freq >= 40 and freq <= 2000
 
   -- Versions record: structural presence.
   let v         = system.info.versions()
   let ok_ver    = v.edition_current >= 2025
-              && v.deck_os          >= 1
-              && text.len(v.runtime) > 0
-              && v.sdi_major        >= 1
-              && v.app_id           == "conf.os.info"
+ and v.deck_os          >= 1
+ and text.len(v.runtime) > 0
+ and v.sdi_major        >= 1
+ and v.app_id           == "conf.os.info"
 
-  let ok = ok_level && ok_heap
-        && ok_devid && ok_model && ok_osname && ok_osver
-        && ok_aid && ok_avers && ok_up && ok_freq && ok_ver
+  let ok = ok_level and ok_heap
+ and ok_devid and ok_model and ok_osname and ok_osver
+ and ok_aid and ok_avers and ok_up and ok_freq and ok_ver
 
   log.info(if ok then "DECK_CONF_OK:os.info" else "DECK_CONF_FAIL:os.info")

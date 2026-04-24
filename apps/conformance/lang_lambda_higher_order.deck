@@ -20,5 +20,5 @@ fn compose (f, g) = x -> f(g(x))
   let r3 = twice(dbl, 3) == 12
   let r4 = inc_then_dbl(4) == 10
   let r5 = apply(x -> x * x * x, 3) == 27
-  let ok = r1 && r2 && r3 && r4 && r5
+  let ok = r1 and r2 and r3 and r4 and r5
   log.info(if ok then "DECK_CONF_OK:lang.lambda.higher_order" else "DECK_CONF_FAIL:lang.lambda.higher_order")

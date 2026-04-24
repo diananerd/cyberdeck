@@ -40,11 +40,11 @@
 
   -- Append.
   let ok_append = fs.append(probe, "!") == :ok unit
-              && fs.read(probe) == :ok "hello deck!"
+ and fs.read(probe) == :ok "hello deck!"
 
   -- write_bytes round-trip.
   let ok_wbytes = fs.write_bytes(probe, [0xDE, 0xAD, 0xBE, 0xEF]) == :ok unit
-              && fs.read_bytes(probe) == :ok [0xDE, 0xAD, 0xBE, 0xEF]
+ and fs.read_bytes(probe) == :ok [0xDE, 0xAD, 0xBE, 0xEF]
 
   -- mkdir + write into subdir + list. SPIFFS is a flat filesystem so
   -- mkdir typically returns :err :not_supported / :err :io. Accept any
@@ -69,13 +69,13 @@
   -- back to :err, the corresponding target may not exist (in which case
   -- the delete returns :err :not_found, which is still fine).
   let del_probe2_rc = fs.delete(probe2)
-  let ok_del1   = not moved or (del_probe2_rc == :ok unit && not fs.exists(probe2))
+  let ok_del1   = not moved or (del_probe2_rc == :ok unit and not fs.exists(probe2))
                             or match del_probe2_rc | :err _ -> true | _ -> false
   let del_sub_rc = fs.delete(subfile)
-  let ok_del2   = not can_dir or (del_sub_rc == :ok unit && not fs.exists(subfile))
+  let ok_del2   = not can_dir or (del_sub_rc == :ok unit and not fs.exists(subfile))
                              or match del_sub_rc | :err _ -> true | _ -> false
   let del_dir_rc = fs.delete(subdir)
-  let ok_del3   = not can_dir or (del_dir_rc == :ok unit && not fs.exists(subdir))
+  let ok_del3   = not can_dir or (del_dir_rc == :ok unit and not fs.exists(subdir))
                              or match del_dir_rc | :err _ -> true | _ -> false
 
   -- Error paths: reading nonexistent yields :err :not_found; deleting
@@ -87,11 +87,11 @@
                     | :err :not_found -> true
                     | _                -> false
 
-  let ok = ok_write && ok_exists && ok_missing
-        && ok_read && ok_rbytes && ok_append && ok_wbytes
-        && ok_mkdir && ok_wsub && ok_list && ok_move
-        && ok_del1 && ok_del2 && ok_del3
-        && ok_enf && ok_denf
+  let ok = ok_write and ok_exists and ok_missing
+ and ok_read and ok_rbytes and ok_append and ok_wbytes
+ and ok_mkdir and ok_wsub and ok_list and ok_move
+ and ok_del1 and ok_del2 and ok_del3
+ and ok_enf and ok_denf
 
   log.info(if ok then "DECK_CONF_OK:os.fs" else "DECK_CONF_FAIL:os.fs")
 

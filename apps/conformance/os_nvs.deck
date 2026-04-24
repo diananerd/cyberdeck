@@ -21,29 +21,29 @@
 
   -- String round-trip.
   let ok_s = nvs.set("str_k", "hello") == :ok unit
-         && nvs.get("str_k") == :some "hello"
+ and nvs.get("str_k") == :some "hello"
 
   -- Int round-trip (positive, negative, zero, large).
   let ok_i = nvs.set_int("int_pos",  1337) == :ok unit
-         && nvs.get_int("int_pos") == :some 1337
-         && nvs.set_int("int_neg", -42) == :ok unit
-         && nvs.get_int("int_neg") == :some -42
-         && nvs.set_int("int_zero", 0) == :ok unit
-         && nvs.get_int("int_zero") == :some 0
+ and nvs.get_int("int_pos") == :some 1337
+ and nvs.set_int("int_neg", -42) == :ok unit
+ and nvs.get_int("int_neg") == :some -42
+ and nvs.set_int("int_zero", 0) == :ok unit
+ and nvs.get_int("int_zero") == :some 0
 
   -- Float round-trip.
   let ok_f = nvs.set_float("f_k", 3.14) == :ok unit
-         && nvs.get_float("f_k") == :some 3.14
+ and nvs.get_float("f_k") == :some 3.14
 
   -- Bool round-trip.
   let ok_b = nvs.set_bool("b_t", true)  == :ok unit
-         && nvs.get_bool("b_t") == :some true
-         && nvs.set_bool("b_f", false) == :ok unit
-         && nvs.get_bool("b_f") == :some false
+ and nvs.get_bool("b_t") == :some true
+ and nvs.set_bool("b_f", false) == :ok unit
+ and nvs.get_bool("b_f") == :some false
 
   -- Bytes round-trip.
   let ok_bs = nvs.set_bytes("bytes_k", [0xDE, 0xAD, 0xBE, 0xEF]) == :ok unit
-          && nvs.get_bytes("bytes_k") == :some [0xDE, 0xAD, 0xBE, 0xEF]
+ and nvs.get_bytes("bytes_k") == :some [0xDE, 0xAD, 0xBE, 0xEF]
 
   -- keys() enumerates what we just wrote.
   let ok_keys = match nvs.keys()
@@ -53,13 +53,13 @@
 
   -- Missing key returns :none (not :err).
   let ok_miss = nvs.get("absent_key")       == :none
-             && nvs.get_int("absent_key")   == :none
-             && nvs.get_float("absent_key") == :none
-             && nvs.get_bool("absent_key")  == :none
-             && nvs.get_bytes("absent_key") == :none
+ and nvs.get_int("absent_key")   == :none
+ and nvs.get_float("absent_key") == :none
+ and nvs.get_bool("absent_key")  == :none
+ and nvs.get_bytes("absent_key") == :none
 
   -- delete removes the key; subsequent get is :none.
-  let ok_del = nvs.delete("str_k") == :ok unit && nvs.get("str_k") == :none
+  let ok_del = nvs.delete("str_k") == :ok unit and nvs.get("str_k") == :none
 
   -- delete of missing key: runtime may return :ok or :err :not_found —
   -- we accept either (spec omitted :not_found in §05 but §03 includes
@@ -77,13 +77,13 @@
 
   -- clear() wipes the namespace.
   let ok_clear = nvs.clear() == :ok unit
-              && match nvs.keys()
+ and match nvs.keys()
                    | :ok [] -> true
                    | _       -> false
 
-  let ok = ok_s && ok_i && ok_f && ok_b && ok_bs
-        && ok_keys && ok_miss
-        && ok_del && ok_del_missing
-        && ok_invalid && ok_clear
+  let ok = ok_s and ok_i and ok_f and ok_b and ok_bs
+ and ok_keys and ok_miss
+ and ok_del and ok_del_missing
+ and ok_invalid and ok_clear
 
   log.info(if ok then "DECK_CONF_OK:os.nvs" else "DECK_CONF_FAIL:os.nvs")

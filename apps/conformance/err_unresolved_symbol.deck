@@ -7,6 +7,10 @@
 @needs
   deck_level: 1
 
+-- REAL GATE: references a state (:ghost) that does not appear in the
+-- state list. LANG §13.3 loads `on :event from :src to :dst` and the
+-- loader verifies that src and dst both resolve to declared states;
+-- :ghost therefore produces LoadError :unresolved.
 @on launch:
   log.info("boot")
 
@@ -14,7 +18,9 @@
   state boot:
     on enter:
       log.info("boot")
-    transition :ghost
+      Machine.send(:go)
   state ready:
     on enter:
       log.info("ready")
+
+  on :go from :boot to :ghost

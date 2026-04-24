@@ -13,18 +13,18 @@
 -- range. A→B: "scalars parse → all literals work" (false).
 @on launch:
   -- Integer.
-  let ok_int  = 42 == 42 && -7 == -7 && 0 == 0
-             && 1_000_000 == 1000000
-             && 0x7F == 127 && 0b1010 == 10
+  let ok_int  = 42 == 42 and -7 == -7 and 0 == 0
+ and 1_000_000 == 1000000
+ and 0x7F == 127 and 0b1010 == 10
 
   -- Float.
-  let ok_flt  = 3.14 > 3.13 && 3.14 < 3.15
-             && 0.0 == 0.0
-             && -0.5 == -0.5
-             && 1e3 == 1000.0 && 2.5e-1 == 0.25
+  let ok_flt  = 3.14 > 3.13 and 3.14 < 3.15
+ and 0.0 == 0.0
+ and -0.5 == -0.5
+ and 1e3 == 1000.0 and 2.5e-1 == 0.25
 
   -- Bool.
-  let ok_bool = true && not false
+  let ok_bool = true and not false
 
   -- Unit.
   let ok_unit = unit == unit
@@ -32,13 +32,13 @@
   -- String.
   let s       = "hello"
   let ok_str  = text.len(s) == 5
-             && "" == ""
-             && text.len("") == 0
+ and "" == ""
+ and text.len("") == 0
 
   -- Atom (plain).
   let ok_atom = :ok == :ok
-             && :ok != :err
-             && :some != :none
+ and :ok != :err
+ and :some != :none
 
   -- Atom variant (with payload).
   let v1      = :some 42
@@ -47,25 +47,25 @@
   let ok_atv  = match v1 | :some n -> n == 42         | _ -> false
   let ok_atv2 = match v2 | :err :timeout -> true       | _ -> false
   let ok_atv3 = match v3
-                  | :active s -> s.temp == 25.0 && s.max == 30.0
+                  | :active s -> s.temp == 25.0 and s.max == 30.0
                   | _         -> false
 
   -- List.
   let ok_list = [1, 2, 3] == [1, 2, 3]
-             && [] == []
-             && ["a", "b"] != ["a"]
+ and [] == []
+ and ["a", "b"] != ["a"]
 
   -- Tuple.
   let ok_tup  = (1, "two", 3.0) == (1, "two", 3.0)
 
   -- Map.
   let m       = {"a": 1, "b": 2}
-  let ok_map  = m.a == 1 && m.b == 2
+  let ok_map  = m.a == 1 and m.b == 2
 
   -- String interpolation.
   let name    = "Deck"
   let ok_interp = "Hello, {name}!" == "Hello, Deck!"
-               && "Value: {1 + 2}" == "Value: 3"
+ and "Value: {1 + 2}" == "Value: 3"
 
   -- Multi-line string.
   let multi   = """
@@ -73,14 +73,14 @@ line one
 line two
 """
   let ok_multi = text.contains(multi, "line one")
-              && text.contains(multi, "line two")
+ and text.contains(multi, "line two")
 
   -- Duration literals.
   let dur_a = 1s > 0
   let dur_b = 1m > 1s
   let dur_c = 1h > 1m
   let dur_d = 500ms > 0ms
-  let ok_dur  = dur_a && dur_b && dur_c && dur_d
+  let ok_dur  = dur_a and dur_b and dur_c and dur_d
   log.info("literals probe: dur_a={dur_a} dur_b={dur_b} dur_c={dur_c} dur_d={dur_d}")
 
   -- NOTE: range literals `0..5` per spec §2.9 are NOT iterables —
@@ -91,11 +91,11 @@ line two
   -- by pattern-guard tests and @config fixtures elsewhere.
   let ok_range = list.len(list.tabulate(5, i -> i)) == 5
 
-  let ok = ok_int && ok_flt && ok_bool && ok_unit && ok_str
-        && ok_atom && ok_atv && ok_atv2 && ok_atv3
-        && ok_list && ok_tup && ok_map
-        && ok_interp && ok_multi
-        && ok_dur && ok_range
+  let ok = ok_int and ok_flt and ok_bool and ok_unit and ok_str
+ and ok_atom and ok_atv and ok_atv2 and ok_atv3
+ and ok_list and ok_tup and ok_map
+ and ok_interp and ok_multi
+ and ok_dur and ok_range
 
   log.info("literals probe: int={ok_int} flt={ok_flt} bool={ok_bool} unit={ok_unit} str={ok_str}")
   log.info("literals probe: atom={ok_atom} atv={ok_atv} atv2={ok_atv2} atv3={ok_atv3}")

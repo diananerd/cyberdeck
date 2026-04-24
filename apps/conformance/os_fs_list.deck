@@ -26,7 +26,7 @@
         -- filesystems that don't track mtime).
         let ok_shape = all_entries_valid(entries, true)
 
-        let ok = ok_nonempty && ok_shape
+        let ok = ok_nonempty and ok_shape
         log.info(if ok then "DECK_CONF_OK:os.fs.list" else "DECK_CONF_FAIL:os.fs.list")
 
 fn all_entries_valid (es, acc) =

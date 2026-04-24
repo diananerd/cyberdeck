@@ -7,7 +7,7 @@
 @needs
   deck_level: 1
 
-fn fetch (url) !http = url
+fn fetch (url) ! = url
 
 @on launch:
   log.info(fetch("nope"))
