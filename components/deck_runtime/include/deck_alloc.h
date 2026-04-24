@@ -91,6 +91,11 @@ deck_value_t *deck_new_fn(const char *name,
                           const struct ast_node *body,
                           struct deck_env *closure);
 
+/* Stage D — cold-stream constructor. Retains `list`. Caller keeps
+ * ownership of its own reference to `list` (deck_release-s it as usual).
+ * The stream holds an additional retain on the same list. */
+deck_value_t *deck_new_stream_from_list(deck_value_t *list);
+
 /* --- Refcount primitives --- */
 
 /* Increment refcount. No-op for immortals. Returns v for chaining. */

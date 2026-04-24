@@ -5059,20 +5059,210 @@ static deck_value_t *b_record_field(deck_value_t **args, uint32_t n, deck_interp
     return deck_new_some(v);
 }
 
-/* ---- stream.* (Stage 5d-ii) --------------------------------------
+/* ---- stream.* (Stage D — cold-stream runtime) --------------------
  *
- * BUILTINS §12 — stream pipeline operators. Full support requires a
- * DECK_T_STREAM runtime type + a scheduler; those are DL3 features
- * not yet implemented. Stubs exist so `stream.X` method references
- * resolve at parse/lookup time — any call panics :bug with a clear
- * message. This is the honest state: apps that touch Streams fail
- * at runtime rather than load.
+ * BUILTINS §12. Streams are DL3 values in the spec; v1 here uses a
+ * "cold" representation — a retained list of already-emitted items —
+ * so composition operators (map/filter/scan/take/…) work end-to-end
+ * even without the full tick scheduler. Time-based operators
+ * (throttle/debounce/delay) and multi-source operators
+ * (merge/combine/buffer/window) still require per-stream state and
+ * timer ticks, which belong to DL3; they panic :bug with a clear
+ * message naming the missing piece.
+ *
+ * Apps do not construct streams from lists directly — streams come
+ * from services (capabilities) via @on source <stream>. The cold
+ * combinators apply when a service emits a terminated batch that the
+ * runtime represents with deck_new_stream_from_list.
  */
-static deck_value_t *b_stream_unimpl(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+
+static bool stream_check(deck_value_t *v, deck_interp_ctx_t *c, const char *m)
+{
+    if (v && v->type == DECK_T_STREAM) return true;
+    set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s: expected stream", m);
+    return false;
+}
+
+static deck_value_t *stream_items(deck_value_t *s)
+{
+    /* Returns a borrowed ref to the inner list (never NULL — empty
+     * streams carry an empty list). */
+    return s->as.stream.list;
+}
+
+static deck_value_t *stream_from_new_list(deck_value_t *owned_list)
+{
+    /* Wrap a newly-created list (which the caller holds one ref on) in
+     * a stream value and release the list ref so the stream owns it
+     * outright. */
+    deck_value_t *s = deck_new_stream_from_list(owned_list);
+    deck_release(owned_list);
+    return s;
+}
+
+static deck_value_t *b_stream_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.map")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(len);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *ca[1] = { src->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(out); return NULL; }
+        deck_list_push(out, r);
+        deck_release(r);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_filter(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.filter")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *ca[1] = { src->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(out); return NULL; }
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (keep) deck_list_push(out, src->as.list.items[i]);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_each(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.each")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *ca[1] = { src->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) return NULL;
+        deck_release(r);
+    }
+    /* Passthrough — the stream flows unchanged downstream. */
+    return deck_retain(args[0]);
+}
+
+static deck_value_t *b_stream_distinct(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!stream_check(args[0], c, "stream.distinct")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    deck_value_t *prev = NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *cur = src->as.list.items[i];
+        if (!prev || !values_equal(prev, cur)) {
+            deck_list_push(out, cur);
+            prev = cur;
+        }
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_skip(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.skip")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.skip(n:int)"); return NULL;
+    }
+    int64_t k = args[1]->as.i;
+    if (k < 0) {
+        set_err(c, DECK_RT_ABORTED, 0, 0, "stream.skip: n must be >= 0"); return NULL;
+    }
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    uint32_t start = (k >= len) ? len : (uint32_t)k;
+    deck_value_t *out = deck_new_list(len - start);
+    if (!out) return NULL;
+    for (uint32_t i = start; i < len; i++) {
+        deck_list_push(out, src->as.list.items[i]);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_take(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.take")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_INT) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.take(n:int)"); return NULL;
+    }
+    int64_t k = args[1]->as.i;
+    if (k < 0) {
+        set_err(c, DECK_RT_ABORTED, 0, 0, "stream.take: n must be >= 0"); return NULL;
+    }
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    uint32_t stop = (k >= len) ? len : (uint32_t)k;
+    deck_value_t *out = deck_new_list(stop);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < stop; i++) {
+        deck_list_push(out, src->as.list.items[i]);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_take_while(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.take_while")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *ca[1] = { src->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[1], ca, 1);
+        if (!r) { deck_release(out); return NULL; }
+        bool keep = deck_is_truthy(r);
+        deck_release(r);
+        if (!keep) break;
+        deck_list_push(out, src->as.list.items[i]);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_scan(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.scan")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(len);
+    if (!out) return NULL;
+    deck_value_t *acc = deck_retain(args[1]);
+    for (uint32_t i = 0; i < len; i++) {
+        deck_value_t *ca[2] = { acc, src->as.list.items[i] };
+        deck_value_t *r = call_fn_value_c(c, args[2], ca, 2);
+        if (!r) { deck_release(acc); deck_release(out); return NULL; }
+        deck_release(acc);
+        acc = r;           /* owned */
+        deck_list_push(out, r);
+    }
+    deck_release(acc);
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_need_scheduler(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)args; (void)n;
     set_err(c, DECK_RT_ABORTED, 0, 0,
-            "stream.* is DL3; runtime does not yet carry DECK_T_STREAM");
+            "stream time/merge operator requires DL3 tick scheduler "
+            "(not available in cold-stream runtime)");
     return NULL;
 }
 
@@ -5568,28 +5758,30 @@ static const builtin_t BUILTINS[] = {
     { "result.map",           b_map_ok,      2, 2 },
     { "result.and_then",      b_and_then,    2, 2 },
 
-    /* Stage 5d-ii — stream.* (BUILTINS §12). DECK_T_STREAM is DL3 and
-     * not yet carried by the runtime; these are stubs that panic :bug
-     * on call. Registered here so method-name lookup resolves and
-     * apps fail at the call site (clear error) rather than load. */
-    { "stream.map",             b_stream_unimpl,     2, 2 },
-    { "stream.filter",          b_stream_unimpl,     2, 2 },
-    { "stream.each",            b_stream_unimpl,     2, 2 },
-    { "stream.distinct",        b_stream_unimpl,     1, 1 },
-    { "stream.skip",            b_stream_unimpl,     2, 2 },
-    { "stream.take",            b_stream_unimpl,     2, 2 },
-    { "stream.take_while",      b_stream_unimpl,     2, 2 },
-    { "stream.scan",            b_stream_unimpl,     3, 3 },
-    { "stream.throttle",        b_stream_unimpl,     2, 2 },
-    { "stream.debounce",        b_stream_unimpl,     2, 2 },
-    { "stream.delay",           b_stream_unimpl,     2, 2 },
-    { "stream.merge",           b_stream_unimpl,     2, 2 },
-    { "stream.combine",         b_stream_unimpl,     2, 2 },
-    { "stream.buffer",          b_stream_unimpl,     2, 2 },
-    { "stream.window",          b_stream_unimpl,     2, 2 },
-    { "stream.map_io",          b_stream_unimpl,     2, 2 },
-    { "stream.filter_io",       b_stream_unimpl,     2, 2 },
-    { "stream.each_io",         b_stream_unimpl,     2, 2 },
+    /* Stage D — stream.* (BUILTINS §12). Cold (list-backed) runtime:
+     * composition operators materialize eagerly; time-based + multi-
+     * source operators still need the DL3 tick scheduler and report
+     * :bug with a descriptive message. _io variants share impl with
+     * the pure ones (purity is a typecheck concern, not a runtime
+     * distinction — both loop over the captured list). */
+    { "stream.map",             b_stream_map,              2, 2 },
+    { "stream.filter",          b_stream_filter,           2, 2 },
+    { "stream.each",            b_stream_each,             2, 2 },
+    { "stream.distinct",        b_stream_distinct,         1, 1 },
+    { "stream.skip",            b_stream_skip,             2, 2 },
+    { "stream.take",            b_stream_take,             2, 2 },
+    { "stream.take_while",      b_stream_take_while,       2, 2 },
+    { "stream.scan",            b_stream_scan,             3, 3 },
+    { "stream.throttle",        b_stream_need_scheduler,   2, 2 },
+    { "stream.debounce",        b_stream_need_scheduler,   2, 2 },
+    { "stream.delay",           b_stream_need_scheduler,   2, 2 },
+    { "stream.merge",           b_stream_need_scheduler,   2, 2 },
+    { "stream.combine",         b_stream_need_scheduler,   2, 2 },
+    { "stream.buffer",          b_stream_need_scheduler,   2, 2 },
+    { "stream.window",          b_stream_need_scheduler,   2, 2 },
+    { "stream.map_io",          b_stream_map,              2, 2 },
+    { "stream.filter_io",       b_stream_filter,           2, 2 },
+    { "stream.each_io",         b_stream_each,             2, 2 },
 
     { NULL, NULL, 0, 0 },
 };

@@ -15,6 +15,7 @@ const char *deck_type_name(deck_type_t t)
         case DECK_T_TUPLE:    return "tuple";
         case DECK_T_OPTIONAL: return "optional";
         case DECK_T_FN:       return "fn";
+        case DECK_T_STREAM:   return "stream";
         default:              return "unknown";
     }
 }

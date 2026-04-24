@@ -33,6 +33,10 @@ typedef enum {
     DECK_T_TUPLE,      /* fixed arity */
     DECK_T_OPTIONAL,   /* some(inner) | none (inner NULL) */
     DECK_T_FN,         /* DL2 F21.1 — user-defined function value */
+    DECK_T_STREAM,     /* BUILTINS §12 — reactive pipeline value; v1 is a
+                          cold (list-backed) representation. Time-based
+                          operators (throttle/debounce/delay/merge/…)
+                          still require the DL3 tick scheduler. */
 } deck_type_t;
 
 const char *deck_type_name(deck_type_t t);
@@ -77,6 +81,17 @@ typedef struct {
     deck_value_t *inner;   /* NULL = none */
 } deck_opt_t;
 
+/* Stream value — v1 cold representation: wraps a retained list whose
+ * items have already been pulled from the source. Every `stream.*`
+ * combinator walks the full list eagerly and returns a new stream.
+ * The DL3 tick-scheduler (stream.throttle/debounce/delay/merge/combine/
+ * buffer/window) still panics :bug — those require per-stream state
+ * and timer ticks that are not part of the v1 runtime. */
+typedef struct {
+    deck_value_t *list;       /* retained — items already emitted */
+    bool          terminated; /* cold streams are always terminated */
+} deck_stream_t;
+
 /* DL2 F21.1: function value. All pointers point into the runtime arena
  * — releasing the value frees only the deck_value_t struct, not the AST
  * or environment (which live for the arena's lifetime). */
@@ -105,6 +120,7 @@ struct deck_value {
         deck_tuple_t      tuple;
         deck_opt_t        opt;
         deck_fn_t         fn;
+        deck_stream_t     stream;
     } as;
 };
 
@@ -127,6 +143,7 @@ static inline bool deck_is_truthy(const deck_value_t *v) {
         case DECK_T_OPTIONAL: return v->as.opt.inner != NULL;
         case DECK_T_ATOM:     return true;
         case DECK_T_FN:       return true;
+        case DECK_T_STREAM:   return true;
         default:              return false;
     }
 }

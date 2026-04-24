@@ -323,6 +323,17 @@ deck_value_t *deck_new_fn(const char *name,
     return val;
 }
 
+/* Stream constructor — cold (list-backed) representation. Retains the
+ * list; caller typically releases its own reference afterwards. */
+deck_value_t *deck_new_stream_from_list(deck_value_t *list)
+{
+    deck_value_t *val = alloc_value(DECK_T_STREAM);
+    if (!val) return NULL;
+    val->as.stream.list       = list ? deck_retain(list) : NULL;
+    val->as.stream.terminated = true;
+    return val;
+}
+
 /* --- refcount ----------------------------------------------------- */
 
 deck_value_t *deck_retain(deck_value_t *v)
@@ -372,6 +383,12 @@ static void release_children(deck_value_t *v)
         case DECK_T_FN:
             deck_env_release(v->as.fn.closure);
             v->as.fn.closure = NULL;
+            break;
+        case DECK_T_STREAM:
+            if (v->as.stream.list) {
+                deck_release(v->as.stream.list);
+                v->as.stream.list = NULL;
+            }
             break;
         default: break; /* primitives + interned atoms/strs have no children */
     }
