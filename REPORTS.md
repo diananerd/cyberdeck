@@ -2657,9 +2657,37 @@ Diff: 1 file, +14 / −255. Binary 1454352 bytes (−2480 vs pre-removal).
 
 `app_bridge_ui.deck` and `demo.deck` still reference `bridge.ui.*` in their bodies — Stage 9 rewrites them.
 
+### Concept #79.stage-6c — Prune LoadError C enum 21 → 9 (commit `17412d2`)
+
+LANG §11.3 fixes the LoadError domain at exactly nine variants:
+`:lex :parse :type :unresolved :incompatible :exhaustive :permission :resource :internal`. The runtime carried 21 over-specified enum values. Collapse:
+
+- `CAPABILITY_MISSING`, `CAPABILITY_INCOMPAT`, `INCOMPATIBLE_EDITION`, `INCOMPATIBLE_SURFACE`, `INCOMPATIBLE_RUNTIME`, `LEVEL_BELOW_REQUIRED`, `LEVEL_UNKNOWN`, `LEVEL_INCONSISTENT` → `DECK_LOAD_INCOMPATIBLE`
+- `PERMISSION_DENIED`, `SIGNATURE_INVALID`, `UNKNOWN_SIGNER` → `DECK_LOAD_PERMISSION`
+- `BUNDLE_CORRUPT`, `MIGRATION_FAILED`, `NO_MEMORY` → `DECK_LOAD_RESOURCE`
+- `UNRESOLVED_SYMBOL` → `DECK_LOAD_UNRESOLVED`
+- `PATTERN_NOT_EXHAUSTIVE` → `DECK_LOAD_EXHAUSTIVE`
+- `LEX_ERROR`/`PARSE_ERROR`/`TYPE_ERROR` → `DECK_LOAD_LEX`/`PARSE`/`TYPE` (atom names).
+
+Diff: 14 files, +158 / −190. Build green, binary 1453808 bytes.
+
+### Concept #79.stage-5f — DVC wire envelope identity triple (commit `0ea204e`)
+
+BRIDGE §7 mandates every snapshot carry `(app_id, machine_id, state_id, frame_id)` on the wire. Without it, §9 diffing is architecturally impossible — the bridge cannot key widget ownership, overlay routing, scroll position, keyboard focus across `push_snapshot` calls, and cannot discard intent activations invalidated by a subsequent snapshot.
+
+Wire header grew 8 → 20 bytes: `magic u16 | version u8 | flags u8 | app_id u32 | machine_id u32 | state_id u32 | frame_id u32`. The prior `root_offset` field was removed — the spec has no such field. `deck_dvc_encode` / `deck_dvc_decode` take a new `deck_dvc_envelope_t` parameter. IDs are FNV-1a of `app->ld.app_id`, machine name, state atom. `frame_id` is a monotonic per-app counter (spec mandates per-(app, machine); per-app is a conformant simplification since apps rarely carry >1 machine). Selftest and conformance probes round-trip the envelope and assert equality.
+
+Diff: 5 files, +140 / −39. Binary 1454400 bytes (+592 vs 6c).
+
+### Concept #79.stage-10 — demo.deck touch-ups (commit `a1362db`)
+
+Two cosmetic fixes per DEMO-AUDIT: header comment drops the "Deck 3.0" version label (there is no 3.0); remove the spurious `@needs.caps.notifications: optional` entry (notifications is the `system.notify` service, already in `@needs.services`). Alias correlation between `@grants.services.X` and `@use ... as X` verified clean.
+
+Diff: 1 file, +2 / −4.
+
 ### Session checkpoint — what's done, what's next
 
-**Commits this session (6):**
+**Commits closed to date (9):**
 
 | Commit | Stage | Scope |
 |---|---|---|
@@ -2668,22 +2696,22 @@ Diff: 1 file, +14 / −255. Binary 1454352 bytes (−2480 vs pre-removal).
 | `95ef55f` | 2+3+4 | CODE-AUDIT / FIXTURE-AUDIT / DEMO-AUDIT |
 | `cbdcbac` | 5a | Rename @requires/@permissions/@migration (91 files) |
 | `524b187` | 5e | Remove bridge.ui.* Deck builtins |
+| `17412d2` | 6c | Prune LoadError C enum 21 → 9 |
+| `0ea204e` | 5f | DVC wire envelope identity triple |
+| `a1362db` | 10 | demo.deck touch-ups |
 
-**Remaining stages in priority order:**
+**Remaining stages in priority order (10 left):**
 
-- **Stage 5b** — structured parsers for @grants / @service / @handles / @config / @migrate / @errors (currently parse_opaque_block / parse_metadata_block). Biggest parser work. Unblocks real @service dispatch, @on back, @handles URL matching.
+- **Stage 5b** — structured parsers for @grants / @service / @handles / @config / @errors (currently parse_opaque_block / parse_metadata_block). Biggest parser work. Unblocks real @service dispatch, @on back, @handles URL matching.
 - **Stage 5c** — `!` effect marker, postfix `?` operator, `T?` sugar (LANG §1.10 / §2.6). Required for every capability consumer in demo.deck.
 - **Stage 5d-i** — add json.*, rand.*, record.* builtin modules (pure, small).
 - **Stage 5d-ii** — add stream.* module (DL3; ties to @on source).
 - **Stage 5d-iii** — namespace bare unwrap/map_ok/and_then etc under option.*/result.*. Breaking change; after fixture rewrite starts.
-- **Stage 5f** — DVC wire envelope: add `(app_id, machine_id, state_id, frame_id)` identity triple (structural; small but load-bearing for BRIDGE §9).
-- **Stage 6** — SDI bridge.ui vtable stratification (4 bands × ~20 methods) per BRIDGE §4.
-- **Stage 6b** — stub 24 missing SERVICES so `@needs.services` imports resolve.
-- **Stage 6c** — prune LoadError C enum 21 → 9 per LANG §11.3.
-- **Stage 7** — `@on back :confirm` routing through Confirm Dialog.
-- **Stage 8** — bridge diff (patch vs rebuild) per BRIDGE §9.
-- **Stage 9** — fixture rewrite per FIXTURE-AUDIT (23 YELLOW + 7 RED).
-- **Stage 10** — demo.deck touch-ups per DEMO-AUDIT (<30 lines).
-- **Stage 11** — author reference apps fresh (Launcher → Task Manager → Settings → Files → Bluesky).
+- **Stage 6** — SDI bridge.ui vtable stratification (4 bands × ~20 methods) per BRIDGE §4. (Unblocked by 5f.)
+- **Stage 6b** — stub 24 missing SERVICES so `@needs.services` imports resolve. (Blocked by 5b.)
+- **Stage 7** — `@on back :confirm` routing through Confirm Dialog. (Blocked by 5b.)
+- **Stage 8** — bridge diff (patch vs rebuild) per BRIDGE §9. (Blocked by 5f ✓ and 6.)
+- **Stage 9** — fixture rewrite per FIXTURE-AUDIT (23 YELLOW + 7 RED). (Blocked by 5b, 5c, 5d-i, 5d-ii, 6b.)
+- **Stage 11** — author reference apps fresh (Launcher → Task Manager → Settings → Files → Bluesky). Separate from the 13-stage alignment plan.
 
 Each remaining stage is its own concept. Build is green throughout; every stage closes with an atomic commit and hardware test (`idf.py build` passing on reference HW).
