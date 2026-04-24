@@ -93,10 +93,27 @@ static deck_sdi_err_t bui_clear_impl(void *ctx)
     return DECK_SDI_OK;
 }
 
+static deck_sdi_err_t bui_confirm_impl(void *ctx,
+                                        const char *title, const char *message,
+                                        const char *ok_label, const char *cancel_label,
+                                        deck_sdi_bridge_ui_cb_t on_ok,
+                                        deck_sdi_bridge_ui_cb_t on_cancel,
+                                        void *user_data)
+{
+    (void)ctx;
+    if (!deck_bridge_ui_lvgl_is_ready()) return DECK_SDI_ERR_FAIL;
+    if (!deck_bridge_ui_lock(200))       return DECK_SDI_ERR_BUSY;
+    deck_bridge_ui_overlay_confirm_cb(title, message, ok_label, cancel_label,
+                                       on_ok, on_cancel, user_data);
+    deck_bridge_ui_unlock();
+    return DECK_SDI_OK;
+}
+
 static const deck_sdi_bridge_ui_vtable_t s_vtable = {
     .init          = bui_init_impl,
     .push_snapshot = bui_push_snapshot_impl,
     .clear         = bui_clear_impl,
+    .confirm       = bui_confirm_impl,
 };
 
 deck_sdi_err_t deck_bridge_ui_register_lvgl(void)

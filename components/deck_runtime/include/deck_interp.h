@@ -172,6 +172,30 @@ deck_err_t deck_runtime_app_intent_v(deck_runtime_app_t *app,
                                       const deck_intent_val_t *vals,
                                       uint32_t n_vals);
 
+/* LANG §14.8 — @on back routing.
+ *
+ * Fires @on back on the app (if present) and interprets the returned
+ * BackResult. Unlike app_dispatch, the body's return value is not
+ * discarded — it steers the gesture:
+ *
+ *   :handled             → DECK_BACK_HANDLED    (shell consumes)
+ *   :unhandled           → DECK_BACK_UNHANDLED  (shell delegates to OS)
+ *   :confirm (prompt:,   → DECK_BACK_CONFIRMED  (shell shows the dialog
+ *             confirm:,     via the bridge; the user's choice asynchronously
+ *             cancel:)      maps to the :handled/:unhandled atom carried
+ *                           in the chosen (str, atom) pair)
+ *
+ * If the handler is missing, returns DECK_BACK_UNHANDLED. If the body
+ * panics, returns DECK_BACK_UNHANDLED (§14.8 panic rule). */
+typedef enum {
+    DECK_BACK_HANDLED = 0,
+    DECK_BACK_UNHANDLED,
+    DECK_BACK_CONFIRMED,
+    DECK_BACK_ERROR,
+} deck_back_result_t;
+
+deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app);
+
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */
 void deck_runtime_app_unload(deck_runtime_app_t *app);

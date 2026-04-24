@@ -74,6 +74,19 @@ deck_sdi_err_t deck_sdi_bridge_ui_clear(void)
 { void *c; const deck_sdi_bridge_ui_vtable_t *v = bui_vt(&c);
   return v ? v->clear(c) : DECK_SDI_ERR_NOT_FOUND; }
 
+deck_sdi_err_t deck_sdi_bridge_ui_confirm(const char *title, const char *message,
+                                           const char *ok_label,
+                                           const char *cancel_label,
+                                           deck_sdi_bridge_ui_cb_t on_ok,
+                                           deck_sdi_bridge_ui_cb_t on_cancel,
+                                           void *user_data)
+{
+    void *c; const deck_sdi_bridge_ui_vtable_t *v = bui_vt(&c);
+    if (!v || !v->confirm) return DECK_SDI_ERR_NOT_FOUND;
+    return v->confirm(c, title, message, ok_label, cancel_label,
+                      on_ok, on_cancel, user_data);
+}
+
 /* ---------- selftest ---------- */
 
 deck_sdi_err_t deck_sdi_bridge_ui_selftest(void)

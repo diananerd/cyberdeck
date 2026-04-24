@@ -18,6 +18,10 @@
 extern "C" {
 #endif
 
+/* Stage 7 — callbacks carried by a confirm-dialog request. Either may
+ * be NULL; the bridge fires exactly one of them when the user picks. */
+typedef void (*deck_sdi_bridge_ui_cb_t)(void *user_data);
+
 typedef struct {
     /* Init the UI layer (display/touch already up). Idempotent. */
     deck_sdi_err_t (*init)(void *ctx);
@@ -28,6 +32,16 @@ typedef struct {
 
     /* Clear the rendered tree (post-app-terminate cleanup). */
     deck_sdi_err_t (*clear)(void *ctx);
+
+    /* BRIDGE UI service (§Part IV) — confirm dialog. Routes
+     * @on back :confirm payloads. Labels / prompt are caller-owned
+     * const strings (the bridge copies what it needs). */
+    deck_sdi_err_t (*confirm)(void *ctx,
+                               const char *title, const char *message,
+                               const char *ok_label, const char *cancel_label,
+                               deck_sdi_bridge_ui_cb_t on_ok,
+                               deck_sdi_bridge_ui_cb_t on_cancel,
+                               void *user_data);
 } deck_sdi_bridge_ui_vtable_t;
 
 /* Skeleton implementation — accepts snapshots, logs byte count, no
@@ -39,6 +53,12 @@ deck_sdi_err_t deck_sdi_bridge_ui_register_skeleton(void);
 deck_sdi_err_t deck_sdi_bridge_ui_init(void);
 deck_sdi_err_t deck_sdi_bridge_ui_push_snapshot(const void *bytes, size_t len);
 deck_sdi_err_t deck_sdi_bridge_ui_clear(void);
+deck_sdi_err_t deck_sdi_bridge_ui_confirm(const char *title, const char *message,
+                                           const char *ok_label,
+                                           const char *cancel_label,
+                                           deck_sdi_bridge_ui_cb_t on_ok,
+                                           deck_sdi_bridge_ui_cb_t on_cancel,
+                                           void *user_data);
 
 /* Selftest: init + push 0-length snapshot returns INVALID_ARG;
  * push small dummy buffer returns OK. */

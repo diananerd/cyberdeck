@@ -7571,6 +7571,141 @@ deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
     return app->ctx.err;
 }
 
+/* Stage 7 — @on back value-interpreting dispatcher. */
+
+/* Extract a named-tuple payload field by name from a Deck value. The
+ * payload may arrive as a map (atom or str keys) when the runtime
+ * represents named tuples that way, or as a 2-tuple (:ctor, payload)
+ * whose second element is the actual map. Returns retained value or
+ * NULL if absent. */
+static deck_value_t *named_tuple_field(deck_value_t *v, const char *name)
+{
+    if (!v) return NULL;
+    deck_value_t *m = v;
+    if (m->type == DECK_T_TUPLE && m->as.tuple.arity == 2 &&
+        m->as.tuple.items[1]) {
+        m = m->as.tuple.items[1];
+    }
+    if (m->type != DECK_T_MAP) return NULL;
+    deck_value_t *akey = deck_new_atom(name);
+    deck_value_t *vv = akey ? deck_map_get(m, akey) : NULL;
+    if (akey) deck_release(akey);
+    if (vv) return deck_retain(vv);
+    deck_value_t *skey = deck_new_str_cstr(name);
+    vv = skey ? deck_map_get(m, skey) : NULL;
+    if (skey) deck_release(skey);
+    return vv ? deck_retain(vv) : NULL;
+}
+
+/* (str, atom) pair-string extraction. Returns interned atom name (stable
+ * pointer) or NULL if the value isn't a 2-tuple of str+atom. */
+static const char *pair_atom(deck_value_t *v)
+{
+    if (!v || v->type != DECK_T_TUPLE || v->as.tuple.arity != 2) return NULL;
+    deck_value_t *a = v->as.tuple.items[1];
+    if (!a || a->type != DECK_T_ATOM) return NULL;
+    return a->as.atom;
+}
+static const char *pair_label(deck_value_t *v)
+{
+    if (!v || v->type != DECK_T_TUPLE || v->as.tuple.arity != 2) return NULL;
+    deck_value_t *s = v->as.tuple.items[0];
+    if (!s || s->type != DECK_T_STR) return NULL;
+    return s->as.s.ptr;
+}
+
+/* Confirm dialog async callback state. The dialog is owned by the
+ * bridge; these callbacks just record which atom the user's choice
+ * maps to so the shell can complete the gesture. */
+typedef struct {
+    const char *confirm_atom;   /* interned: "handled" / "unhandled" */
+    const char *cancel_atom;
+} back_confirm_state_t;
+
+static deck_back_result_t s_back_resolved = DECK_BACK_UNHANDLED;
+
+static void back_confirm_on_ok(void *user)
+{
+    back_confirm_state_t *s = user;
+    if (s && s->confirm_atom && strcmp(s->confirm_atom, "handled") == 0)
+        s_back_resolved = DECK_BACK_HANDLED;
+    else
+        s_back_resolved = DECK_BACK_UNHANDLED;
+    free(s);
+}
+static void back_confirm_on_cancel(void *user)
+{
+    back_confirm_state_t *s = user;
+    if (s && s->cancel_atom && strcmp(s->cancel_atom, "handled") == 0)
+        s_back_resolved = DECK_BACK_HANDLED;
+    else
+        s_back_resolved = DECK_BACK_UNHANDLED;
+    free(s);
+}
+
+deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app)
+{
+    if (!app || !app->in_use) return DECK_BACK_ERROR;
+    const ast_node_t *on = find_on_event(app->ld.module, "back");
+    if (!on || !on->as.on.body) return DECK_BACK_UNHANDLED;
+
+    app->ctx.err = DECK_RT_OK;
+    app->ctx.err_line = 0;
+    app->ctx.err_col = 0;
+    app->ctx.err_msg[0] = '\0';
+    app->ctx.depth = 0;
+
+    deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global, on->as.on.body);
+    if (!r || app->ctx.err != DECK_RT_OK) {
+        if (r) deck_release(r);
+        /* §14.8 — panic in @on back is treated as :unhandled. */
+        return DECK_BACK_UNHANDLED;
+    }
+
+    deck_back_result_t result = DECK_BACK_UNHANDLED;
+
+    if (r->type == DECK_T_ATOM) {
+        if (strcmp(r->as.atom, "handled") == 0)        result = DECK_BACK_HANDLED;
+        else if (strcmp(r->as.atom, "unhandled") == 0) result = DECK_BACK_UNHANDLED;
+    } else if (r->type == DECK_T_TUPLE && r->as.tuple.arity == 2 &&
+               r->as.tuple.items[0] && r->as.tuple.items[0]->type == DECK_T_ATOM &&
+               strcmp(r->as.tuple.items[0]->as.atom, "confirm") == 0) {
+        /* (:confirm, {prompt: str, confirm: (str, atom), cancel: (str, atom)}) */
+        deck_value_t *prompt_v  = named_tuple_field(r, "prompt");
+        deck_value_t *confirm_v = named_tuple_field(r, "confirm");
+        deck_value_t *cancel_v  = named_tuple_field(r, "cancel");
+        const char *prompt_s = prompt_v && prompt_v->type == DECK_T_STR
+                                   ? prompt_v->as.s.ptr : "";
+        const char *ok_label  = pair_label(confirm_v);
+        const char *cx_label  = pair_label(cancel_v);
+        const char *ok_atom   = pair_atom(confirm_v);
+        const char *cx_atom   = pair_atom(cancel_v);
+
+        if (prompt_s && ok_label && cx_label && ok_atom && cx_atom) {
+            back_confirm_state_t *st = malloc(sizeof(*st));
+            if (st) {
+                st->confirm_atom = ok_atom;
+                st->cancel_atom  = cx_atom;
+                s_back_resolved = DECK_BACK_UNHANDLED;
+                deck_sdi_bridge_ui_confirm(
+                    "CONFIRM", prompt_s, ok_label, cx_label,
+                    back_confirm_on_ok, back_confirm_on_cancel, st);
+                /* Dialog is async: the shell treats :confirm as HANDLED
+                 * (consume the gesture); the callback above decides the
+                 * downstream action once the user picks. */
+                result = DECK_BACK_CONFIRMED;
+            }
+        }
+
+        if (prompt_v)  deck_release(prompt_v);
+        if (confirm_v) deck_release(confirm_v);
+        if (cancel_v)  deck_release(cancel_v);
+    }
+
+    deck_release(r);
+    return result;
+}
+
 void deck_runtime_app_unload(deck_runtime_app_t *app)
 {
     if (!app || !app->in_use) return;
