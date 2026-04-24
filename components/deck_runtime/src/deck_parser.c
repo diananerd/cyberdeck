@@ -2911,7 +2911,7 @@ static ast_node_t *parse_config_decl(deck_parser_t *p)
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after @config field")) return NULL;
         if (!skip_type_annotation(p)) return NULL;
-        if (!expect(p, TOK_EQ, "expected '=' before @config default")) return NULL;
+        if (!expect(p, TOK_ASSIGN, "expected '=' before @config default")) return NULL;
         defs[ne] = deck_parser_parse_expr(p);
         if (!defs[ne]) return NULL;
         offs[ne] = opts.len;

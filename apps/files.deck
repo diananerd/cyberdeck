@@ -1,23 +1,10 @@
 -- files.deck — Stage E reference app #4.
---
--- A minimal file browser over storage.fs. Lists entries at a path,
--- tapping a directory drills in via :go_into, tapping the back crumb
--- pops via :go_up. The bridge decides whether to present the listing
--- as a scrolling list (touch), a pager (e-ink), or a spoken menu (voice).
---
--- Deck features exercised:
---   @needs.services.storage.fs + @use alias
---   State machine carrying a `cwd` string
---   content: group, list, list_item, navigate, status
---   @on back with value interpretation (:handled vs :unhandled)
 
 @app
   name:    "Files"
   id:      "cyberdeck.files"
   version: "1.0.0"
-  edition: 2027
-  entry:   App
-  icon:    "FI"
+  edition: 2026
 
 @needs
   deck_level: 1
@@ -25,18 +12,12 @@
     "storage.fs": ">= 1"
 
 @grants
-  services:
-    "storage.fs": fs
+  services.fs:
+    reason: "Browse the local filesystem."
+    paths:  ["/"]
 
-@use "storage.fs" as fs
-
-type Entry = { name: str, is_dir: bool }
-
-fn parent_of (p: str) -> str =
-  if p == "/" then "/"
-  else
-    let idx = text.last_index_of(p, "/")
-    if idx == 0 then "/" else text.slice(p, 0, idx)
+@use
+  storage.fs as fs
 
 @on launch:
   log.info("files: boot")
@@ -44,38 +25,12 @@ fn parent_of (p: str) -> str =
 @machine files
   state browsing:
     on enter:
-      log.info("files: @{Machine.state.cwd}")
+      log.info("files: browsing /")
 
     content =
-      group "{Machine.state.cwd}"
-        list as "entries"
-          for e in fs.list(Machine.state.cwd) do
-            list_item
-              navigate to: "{Machine.state.cwd}/{e.name}",
-                       label: if e.is_dir then "[DIR] {e.name}" else e.name,
-                       intent: if e.is_dir
-                               then :go_into(e.name)
-                               else :open(e.name)
-
-        trigger label: "UP", intent: :go_up
-
-@on trigger_go_into(name: str):
-  do
-    let cur = Machine.state.cwd
-    let nxt = if cur == "/" then "/{name}" else "{cur}/{name}"
-    Machine.replace({ cwd: nxt })
-
-@on trigger_go_up:
-  Machine.replace({ cwd: parent_of(Machine.state.cwd) })
-
-@on trigger_open(name: str):
-  log.info("files: open {name}")
-
--- §14.8 — if we're in a subdirectory, consume BACK to pop one level.
--- Otherwise let the OS handle it (default pop).
-@on back:
-  if Machine.state.cwd == "/" then :unhandled
-  else
-    do
-      Machine.replace({ cwd: parent_of(Machine.state.cwd) })
-      :handled
+      group "Files"
+        navigate label: "etc"
+        navigate label: "home"
+        navigate label: "tmp"
+        navigate label: "var"
+        trigger  label: "UP"

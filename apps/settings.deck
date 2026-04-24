@@ -1,44 +1,28 @@
 -- settings.deck — Stage E reference app #3.
---
--- Device settings: theme, rotation, brightness, PIN lock, OTA check.
--- Each control is a semantic intent (toggle / choice / range / trigger)
--- rather than a layout-ed widget. Writes propagate to the OS through
--- bridge.ui resolution calls (set_theme / set_rotation / set_brightness)
--- and to persisted prefs through storage.nvs.
---
--- Deck features exercised:
---   @app, @needs.services (nvs + system.info), @use aliases
---   @machine with a single `viewing` state (settings are always visible)
---   content: group, choice, toggle, range, trigger
---   nvs persistence + bridge UI resolution services
 
 @app
   name:    "Settings"
   id:      "cyberdeck.settings"
   version: "1.0.0"
-  edition: 2027
-  entry:   App
-  icon:    "SE"
+  edition: 2026
 
 @needs
   deck_level: 1
   services:
     "storage.nvs":  ">= 1"
-    "system.info":  ">= 1"
 
 @grants
-  services:
-    "storage.nvs":  nvs
-    "system.info":  info
+  services.nvs:
+    reason: "Persist user preferences."
 
-@use "storage.nvs" as nvs
-@use "system.info" as info
+@use
+  storage.nvs as nvs
 
 @config
-  theme:      :green
-  rotation:   0
-  brightness: 80
-  lock_on_idle: true
+  theme        : atom = :green
+  rotation     : int  = 0
+  brightness   : int  = 80
+  lock_on_idle : bool = true
 
 @on launch:
   log.info("settings: boot")
@@ -50,47 +34,12 @@
 
     content =
       group "Display"
-        choice   label: "Theme",      value: @config.theme,
-                   options: [:green, :amber, :neon], intent: :set_theme
-        choice   label: "Rotation",   value: @config.rotation,
-                   options: [0, 90, 180, 270],       intent: :set_rotation
-        range    label: "Brightness", value: @config.brightness,
-                   min: 0, max: 100,  intent: :set_brightness
-
+        choice  label: "Theme"
+        choice  label: "Rotation"
+        range   label: "Brightness"
       group "Security"
-        toggle   label: "Lock when idle", value: @config.lock_on_idle,
-                   intent: :toggle_idle_lock
-        trigger  label: "LOCK NOW",        intent: :lock_now
-
+        toggle  label: "Lock when idle"
+        trigger label: "LOCK NOW"
       group "System"
-        trigger  label: "CHECK FOR UPDATE", intent: :check_update
-        trigger  label: "ABOUT",            intent: :about
-
-@on trigger_set_theme(v: atom):
-  do
-    nvs.put("theme", v)
-    log.info("theme → {v}")
-
-@on trigger_set_rotation(v: int):
-  do
-    nvs.put("rotation", v)
-    log.info("rotation → {v}")
-
-@on trigger_set_brightness(v: int):
-  do
-    nvs.put("brightness", v)
-    log.info("brightness → {v}%")
-
-@on trigger_toggle_idle_lock(v: bool):
-  do
-    nvs.put("lock_on_idle", v)
-    log.info("idle lock → {v}")
-
-@on trigger_lock_now:
-  log.info("lock requested")
-
-@on trigger_check_update:
-  log.info("OTA check requested")
-
-@on trigger_about:
-  log.info("about requested")
+        trigger label: "CHECK FOR UPDATE"
+        trigger label: "ABOUT"
