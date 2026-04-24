@@ -26,7 +26,7 @@ deck_err_t ast_list_push(deck_arena_t *a, ast_list_t *l, ast_node_t *n)
     if (l->len >= l->cap) {
         uint32_t new_cap = l->cap ? l->cap * 2 : 4;
         ast_node_t **buf = deck_arena_alloc(a, new_cap * sizeof(ast_node_t *));
-        if (!buf) return DECK_LOAD_NO_MEMORY;
+        if (!buf) return DECK_LOAD_RESOURCE;
         if (l->items) memcpy(buf, l->items, l->len * sizeof(ast_node_t *));
         l->items = buf;
         l->cap   = new_cap;

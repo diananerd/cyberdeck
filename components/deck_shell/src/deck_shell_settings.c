@@ -215,7 +215,7 @@ static deck_err_t settings_intent_resolver(const deck_shell_intent_t *intent)
                                           &s_display_cbs, NULL);
             return DECK_RT_OK;
     }
-    return DECK_LOAD_UNRESOLVED_SYMBOL;
+    return DECK_LOAD_UNRESOLVED;
 }
 
 deck_err_t deck_shell_settings_register(void)

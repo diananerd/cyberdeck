@@ -64,7 +64,7 @@ deck_err_t deck_shell_boot(void)
     if (rr != DECK_SDI_OK) {
         ESP_LOGE(TAG, "fs.read %s failed: %s", path, deck_sdi_strerror(rr));
         heap_caps_free(buf);
-        return DECK_LOAD_LEX_ERROR;
+        return DECK_LOAD_LEX;
     }
     buf[n] = '\0';
     ESP_LOGI(TAG, "launching %s (%u bytes)", path, (unsigned)n);

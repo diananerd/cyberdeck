@@ -34,7 +34,7 @@ static void set_err(deck_parser_t *p, deck_err_t code, const char *msg)
 
 static bool expect(deck_parser_t *p, deck_tok_t t, const char *msg)
 {
-    if (p->cur.type != t) { set_err(p, DECK_LOAD_PARSE_ERROR, msg); return false; }
+    if (p->cur.type != t) { set_err(p, DECK_LOAD_PARSE, msg); return false; }
     advance(p);
     return true;
 }
@@ -177,7 +177,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                         case '0': esc = '\0'; break;
                         default: esc = src[i + 1]; break;
                     }
-                    if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE_ERROR, "interp string too long"); return NULL; }
+                    if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE, "interp string too long"); return NULL; }
                     text_buf[tk++] = esc;
                     i += 2;
                     continue;
@@ -194,7 +194,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                         if (depth > 0) j++;
                     }
                     if (depth != 0) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR, "unterminated interpolation");
+                        set_err(p, DECK_LOAD_PARSE, "unterminated interpolation");
                         return NULL;
                     }
                     /* Recursively parse the inner expression source. */
@@ -202,7 +202,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     deck_parser_init(&inner, p->arena, src + start, j - start);
                     ast_node_t *expr = deck_parser_parse_expr(&inner);
                     if (!expr || deck_parser_err_code(&inner) != DECK_LOAD_OK) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                        set_err(p, DECK_LOAD_PARSE,
                                 deck_parser_err_msg(&inner) ?
                                 deck_parser_err_msg(&inner) :
                                 "bad expression in interpolation");
@@ -221,7 +221,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     i = j + 1;   /* past the `}` */
                     continue;
                 }
-                if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE_ERROR, "interp string too long"); return NULL; }
+                if (tk + 1 >= sizeof(text_buf)) { set_err(p, DECK_LOAD_PARSE, "interp string too long"); return NULL; }
                 text_buf[tk++] = c;
                 i++;
             }
@@ -348,7 +348,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                 if (!at(p, TOK_RBRACE)) {
                     for (;;) {
                         if (!at(p, TOK_IDENT)) {
-                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                            set_err(p, DECK_LOAD_PARSE,
                                     "expected field name in record construction");
                             return NULL;
                         }
@@ -414,7 +414,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     advance(p);
                     if (at(p, TOK_RPAREN)) break;
                     if (!at(p, TOK_IDENT)) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                        set_err(p, DECK_LOAD_PARSE,
                                 "named-field group expects `name: value` pairs");
                         return NULL;
                     }
@@ -479,7 +479,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     for (uint32_t i = 0; i < np; i++) {
                         ast_node_t *item = src->items[i];
                         if (!item || item->kind != AST_IDENT) {
-                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                            set_err(p, DECK_LOAD_PARSE,
                                     "lambda parameter list must contain only identifiers");
                             return NULL;
                         }
@@ -487,7 +487,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     }
                 } else {
                     if (!first || first->kind != AST_IDENT) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                        set_err(p, DECK_LOAD_PARSE,
                                 "lambda parameter list must contain only identifiers");
                         return NULL;
                     }
@@ -596,14 +596,14 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             ast_node_t *fnn = parse_fn_decl(p);
             if (!fnn) return NULL;
             if (fnn->as.fndef.name) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "named fn declarations are only allowed at top level");
                 return NULL;
             }
             return parse_postfix(p, fnn);
         }
         default:
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected expression");
+            set_err(p, DECK_LOAD_PARSE, "expected expression");
             return NULL;
     }
     if (!n) return NULL;
@@ -618,7 +618,7 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
             /* DL2 F21.5: `.0`, `.1`, ... is tuple-field access. */
             if (at(p, TOK_INT)) {
                 if (p->cur.as.i < 0) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR, "tuple index must be non-negative");
+                    set_err(p, DECK_LOAD_PARSE, "tuple index must be non-negative");
                     return NULL;
                 }
                 ast_node_t *n = mknode(p, AST_TUPLE_GET); if (!n) return NULL;
@@ -635,7 +635,7 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
              * #44/#47/#58). Accept it plus any other keyword that has a
              * meaningful use as a capability method name. */
             if (!at(p, TOK_IDENT) && !at(p, TOK_KW_SEND)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "expected field name or index after '.'");
                 return NULL;
             }
@@ -674,7 +674,7 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
                     if (c->as.call.args.len == 0) {
                         all_named = (name != NULL);
                     } else if ((name != NULL) != all_named) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                        set_err(p, DECK_LOAD_PARSE,
                                 "cannot mix positional and named args in one call (spec §6.6)");
                         return NULL;
                     }
@@ -683,7 +683,7 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
                     ast_list_push(p->arena, &c->as.call.args, arg);
                     if (all_named) {
                         if (n_named >= 16) {
-                            set_err(p, DECK_LOAD_PARSE_ERROR,
+                            set_err(p, DECK_LOAD_PARSE,
                                     "too many named args (max 16)");
                             return NULL;
                         }
@@ -784,11 +784,11 @@ static ast_node_t *parse_where_postfix(deck_parser_t *p, ast_node_t *body)
         if (!expect(p, TOK_INDENT, "expected indented `where` bindings")) return NULL;
         while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
             if (n >= 16) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "too many `where` bindings (max 16)");
+                set_err(p, DECK_LOAD_PARSE, "too many `where` bindings (max 16)");
                 return NULL;
             }
             if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in `where` binding");
+                set_err(p, DECK_LOAD_PARSE, "expected name in `where` binding");
                 return NULL;
             }
             names[n] = p->cur.text;
@@ -806,11 +806,11 @@ static ast_node_t *parse_where_postfix(deck_parser_t *p, ast_node_t *body)
         /* Inline single or comma-separated. */
         for (;;) {
             if (n >= 16) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "too many `where` bindings (max 16)");
+                set_err(p, DECK_LOAD_PARSE, "too many `where` bindings (max 16)");
                 return NULL;
             }
             if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected name in `where` binding");
+                set_err(p, DECK_LOAD_PARSE, "expected name in `where` binding");
                 return NULL;
             }
             names[n] = p->cur.text;
@@ -925,7 +925,7 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
         if (!at(p, TOK_RPAREN)) {
             for (;;) {
                 if (n_subs >= 8) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR, "variant pattern: too many subs (max 8)");
+                    set_err(p, DECK_LOAD_PARSE, "variant pattern: too many subs (max 8)");
                     return NULL;
                 }
                 ast_node_t *s = parse_pattern(p);
@@ -977,7 +977,7 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             if (!at(p, TOK_RBRACKET)) {
                 for (;;) {
                     if (n_subs >= 16) {
-                        set_err(p, DECK_LOAD_PARSE_ERROR,
+                        set_err(p, DECK_LOAD_PARSE,
                                 "list pattern: too many elements (max 16)");
                         return NULL;
                     }
@@ -1057,7 +1057,7 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             uint32_t n_subs = 0;
             for (;;) {
                 if (n_subs >= 16) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                    set_err(p, DECK_LOAD_PARSE,
                             "tuple pattern: too many elements (max 16)");
                     return NULL;
                 }
@@ -1076,7 +1076,7 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             return n;
         }
         default:
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected pattern");
+            set_err(p, DECK_LOAD_PARSE, "expected pattern");
             return NULL;
     }
 }
@@ -1111,7 +1111,7 @@ static ast_node_t *parse_match(deck_parser_t *p)
                 if (!guard) return NULL;
             }
             if (!at(p, TOK_ARROW)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "expected '->' in match arm (spec 01-deck-lang §8)");
                 return NULL;
             }
@@ -1155,7 +1155,7 @@ static ast_node_t *parse_match(deck_parser_t *p)
             if (!guard) return NULL;
         }
         if (!at(p, TOK_ARROW)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "expected '->' in match arm (spec 01-deck-lang §8); "
                     "the legacy '=>' arrow is no longer accepted");
             return NULL;
@@ -1244,18 +1244,18 @@ static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t
     const char *names[16];
     uint32_t n_names = 0;
     if (at(p, TOK_RPAREN)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "let destructuring pattern cannot be empty");
         return NULL;
     }
     for (;;) {
         if (n_names >= 16) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "let destructuring: too many elements (max 16)");
             return NULL;
         }
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "let destructuring: only plain ident binders supported at this layer");
             return NULL;
         }
@@ -1266,7 +1266,7 @@ static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t
     }
     if (!expect(p, TOK_RPAREN, "expected ')' closing let destructuring pattern")) return NULL;
     if (n_names == 1) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "let destructuring pattern must contain at least 2 elements");
         return NULL;
     }
@@ -1316,7 +1316,7 @@ static ast_node_t *parse_let_stmt(deck_parser_t *p)
     /* Spec §5.1 destructuring path — `let (a, b) = …`. */
     if (at(p, TOK_LPAREN)) return parse_let_destructure(p, ln, co);
     ast_node_t *n = ast_new(p->arena, AST_LET, ln, co); if (!n) return NULL;
-    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected name after 'let'"); return NULL; }
+    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected name after 'let'"); return NULL; }
     n->as.let.name = p->cur.text;
     advance(p);
     /* Spec §5.1 — optional `: Type` annotation on let bindings. The
@@ -1336,7 +1336,7 @@ static ast_node_t *parse_send_stmt(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_SEND); if (!n) return NULL;
     advance(p); /* send */
-    if (!at(p, TOK_ATOM)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected atom after 'send'"); return NULL; }
+    if (!at(p, TOK_ATOM)) { set_err(p, DECK_LOAD_PARSE, "expected atom after 'send'"); return NULL; }
     n->as.send.event = p->cur.text;
     advance(p);
     return n;
@@ -1346,7 +1346,7 @@ static ast_node_t *parse_transition_stmt(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_TRANSITION); if (!n) return NULL;
     advance(p); /* transition */
-    if (!at(p, TOK_ATOM)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected atom after 'transition'"); return NULL; }
+    if (!at(p, TOK_ATOM)) { set_err(p, DECK_LOAD_PARSE, "expected atom after 'transition'"); return NULL; }
     n->as.transition.target = p->cur.text;
     advance(p);
     return n;
@@ -1473,7 +1473,7 @@ static bool parse_scalar_fields(deck_parser_t    *p,
     uint32_t n = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name");
+            set_err(p, DECK_LOAD_PARSE, "expected field name");
             return false;
         }
         const char *name = p->cur.text;
@@ -1491,12 +1491,12 @@ static bool parse_scalar_fields(deck_parser_t    *p,
             if (strcmp(owner, "@app") == 0 &&
                 (strcmp(name, "needs") == 0 ||
                  strcmp(name, "requires") == 0)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "`needs:` must be a top-level `@needs` "
                         "annotation (LANG §8), not a nested "
                         "field inside @app");
             } else {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "nested blocks are not allowed in this context");
             }
             return false;
@@ -1521,7 +1521,7 @@ static bool parse_needs_fields(deck_parser_t   *p,
     uint32_t n = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name in @needs");
+            set_err(p, DECK_LOAD_PARSE, "expected field name in @needs");
             return false;
         }
         const char *name = p->cur.text;
@@ -1532,7 +1532,7 @@ static bool parse_needs_fields(deck_parser_t   *p,
         while (at(p, TOK_DOT)) {
             advance(p);
             if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "expected ident after '.' in @needs key");
                 return false;
             }
@@ -1618,7 +1618,7 @@ static ast_node_t *parse_use_decl(deck_parser_t *p)
         if (at(p, TOK_IDENT) && p->cur.text && strcmp(p->cur.text, "as") == 0) {
             advance(p);
             if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "expected alias after `as` in @use entry");
                 return NULL;
             }
@@ -1660,7 +1660,7 @@ static ast_node_t *parse_use_decl(deck_parser_t *p)
     if (!expect(p, TOK_DEDENT, "expected dedent closing @use block")) return NULL;
 
     if (n_entries == 0) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "@use block is empty; spec §4 requires at least one entry");
         return NULL;
     }
@@ -1684,13 +1684,13 @@ static bool parse_dotted_or_relative(deck_parser_t *p, char *scratch,
 {
     uint32_t k = 0;
     if (at(p, TOK_DOT)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "relative module paths in @use (spec §4.2) are not yet "
                 "supported by this runtime; use dotted capability paths");
         return false;
     }
     if (!at(p, TOK_IDENT)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "expected capability path in @use entry");
         return false;
     }
@@ -1699,7 +1699,7 @@ static bool parse_dotted_or_relative(deck_parser_t *p, char *scratch,
     while (at(p, TOK_DOT)) {
         advance(p);
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "expected ident after '.' in @use path");
             return false;
         }
@@ -1731,7 +1731,7 @@ static ast_node_t *parse_on_decl(deck_parser_t *p)
     ast_node_t *n = mknode(p, AST_ON); if (!n) return NULL;
     advance(p); /* @on */
     if (!at(p, TOK_IDENT)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR, "expected event name after @on");
+        set_err(p, DECK_LOAD_PARSE, "expected event name after @on");
         return NULL;
     }
     /* Dotted path: os.wifi_changed, hardware.button, etc. */
@@ -1741,7 +1741,7 @@ static ast_node_t *parse_on_decl(deck_parser_t *p)
     while (at(p, TOK_DOT)) {
         advance(p);
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "expected ident after '.' in @on event path");
             return NULL;
         }
@@ -1762,12 +1762,12 @@ static ast_node_t *parse_on_decl(deck_parser_t *p)
         if (!at(p, TOK_RPAREN)) {
             for (;;) {
                 if (np >= 16) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                    set_err(p, DECK_LOAD_PARSE,
                             "@on parameter clause: too many fields (max 16)");
                     return NULL;
                 }
                 if (!at(p, TOK_IDENT)) {
-                    set_err(p, DECK_LOAD_PARSE_ERROR,
+                    set_err(p, DECK_LOAD_PARSE,
                             "expected field name in @on parameter clause");
                     return NULL;
                 }
@@ -1843,18 +1843,18 @@ static ast_node_t *parse_assets_decl(deck_parser_t *p)
 
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (k >= DECK_ASSETS_MAX) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @assets entries (max 32)");
+            set_err(p, DECK_LOAD_PARSE, "too many @assets entries (max 32)");
             return NULL;
         }
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected asset name");
+            set_err(p, DECK_LOAD_PARSE, "expected asset name");
             return NULL;
         }
         names[k] = p->cur.text;
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after asset name")) return NULL;
         if (!at(p, TOK_STRING)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected string literal path for asset");
+            set_err(p, DECK_LOAD_PARSE, "expected string literal path for asset");
             return NULL;
         }
         paths[k] = p->cur.text;
@@ -1906,7 +1906,7 @@ static ast_node_t *parse_flow_decl(deck_parser_t *p)
 {
     ast_node_t *m = mknode(p, AST_MACHINE); if (!m) return NULL;
     advance(p); /* @flow */
-    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected flow name"); return NULL; }
+    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected flow name"); return NULL; }
     m->as.machine.name = p->cur.text;
     advance(p);
     /* Allow optional colon for symmetry with @machine syntax. */
@@ -1924,18 +1924,18 @@ static ast_node_t *parse_flow_decl(deck_parser_t *p)
 
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (n_steps >= DECK_FLOW_MAX_STEPS) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @flow steps (max 32)");
+            set_err(p, DECK_LOAD_PARSE, "too many @flow steps (max 32)");
             return NULL;
         }
         /* `step <name>:` */
         if (!at(p, TOK_IDENT) || strcmp(p->cur.text, "step") != 0) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "expected 'step' in @flow body");
             return NULL;
         }
         advance(p); /* step */
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected step name"); return NULL;
+            set_err(p, DECK_LOAD_PARSE, "expected step name"); return NULL;
         }
         ast_node_t *state = ast_new(p->arena, AST_STATE, p->cur.line, p->cur.col);
         if (!state) return NULL;
@@ -1958,7 +1958,7 @@ static ast_node_t *parse_flow_decl(deck_parser_t *p)
     }
     if (!expect(p, TOK_DEDENT, "expected dedent closing @flow body")) return NULL;
     if (n_steps == 0) {
-        set_err(p, DECK_LOAD_PARSE_ERROR, "@flow must have at least one step");
+        set_err(p, DECK_LOAD_PARSE, "@flow must have at least one step");
         return NULL;
     }
 
@@ -2004,16 +2004,16 @@ static ast_node_t *parse_migrate_decl(deck_parser_t *p)
 
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (k >= DECK_MIGRATION_MAX) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @migrate entries (max 16)");
+            set_err(p, DECK_LOAD_PARSE, "too many @migrate entries (max 16)");
             return NULL;
         }
         if (!at(p, TOK_IDENT) || strcmp(p->cur.text, "from") != 0) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'from' in @migrate body");
+            set_err(p, DECK_LOAD_PARSE, "expected 'from' in @migrate body");
             return NULL;
         }
         advance(p); /* from */
         if (!at(p, TOK_INT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected integer version after 'from'");
+            set_err(p, DECK_LOAD_PARSE, "expected integer version after 'from'");
             return NULL;
         }
         versions[k] = p->cur.as.i;
@@ -2084,7 +2084,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
         st->as.state.name = p->cur.text;
         advance(p);
     } else {
-        set_err(p, DECK_LOAD_PARSE_ERROR, "expected state name");
+        set_err(p, DECK_LOAD_PARSE, "expected state name");
         return NULL;
     }
     /* Spec 02-deck-app §8.3 — optional payload clause `(field: Type, …)`.
@@ -2120,7 +2120,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
      * allowed per §8.3 — a state with no on-enter/leave/transition hooks
      * is terminal / composed-via-parent. */
     if (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "unexpected token after state declaration");
         return NULL;
     }
@@ -2132,7 +2132,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
         if (at(p, TOK_KW_ON)) {
             advance(p);
             if (!at(p, TOK_KW_ENTER) && !at(p, TOK_KW_LEAVE)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'enter' or 'leave'"); return NULL;
+                set_err(p, DECK_LOAD_PARSE, "expected 'enter' or 'leave'"); return NULL;
             }
             const char *kind = at(p, TOK_KW_ENTER) ? "enter" : "leave";
             advance(p);
@@ -2475,7 +2475,7 @@ static ast_node_t *parse_state_decl(deck_parser_t *p)
              * evaluator distinguishes by AST kind. */
             ast_list_push(p->arena, &st->as.state.hooks, cb);
         } else {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "expected `on`, `transition`, or `content =` in state body");
             return NULL;
         }
@@ -2488,7 +2488,7 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
 {
     ast_node_t *m = mknode(p, AST_MACHINE); if (!m) return NULL;
     advance(p); /* @machine */
-    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected machine name"); return NULL; }
+    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected machine name"); return NULL; }
     m->as.machine.name = p->cur.text;
     advance(p);
     if (!expect(p, TOK_NEWLINE, "expected newline after machine name")) return NULL;
@@ -2509,12 +2509,12 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
             strcmp(p->cur.text, "initial") == 0) {
             advance(p); /* initial */
             if (!at(p, TOK_ATOM)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "expected `:atom` after `initial` in @machine body");
                 return NULL;
             }
             if (m->as.machine.initial_state) {
-                set_err(p, DECK_LOAD_PARSE_ERROR,
+                set_err(p, DECK_LOAD_PARSE,
                         "@machine declares `initial` more than once");
                 return NULL;
             }
@@ -2597,7 +2597,7 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
             }
             continue;
         }
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "expected `state`, `initial`, or `transition` in @machine body");
         return NULL;
     }
@@ -2649,7 +2649,7 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
         n->as.fndef.name = p->cur.text;
         advance(p);
     } else {
-        set_err(p, DECK_LOAD_PARSE_ERROR,
+        set_err(p, DECK_LOAD_PARSE,
                 "expected function name or '(' after 'fn'");
         return NULL;
     }
@@ -2660,11 +2660,11 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     if (!at(p, TOK_RPAREN)) {
         for (;;) {
             if (n_params >= 16) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "too many parameters (max 16)");
+                set_err(p, DECK_LOAD_PARSE, "too many parameters (max 16)");
                 return NULL;
             }
             if (!at(p, TOK_IDENT)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "expected parameter name");
+                set_err(p, DECK_LOAD_PARSE, "expected parameter name");
                 return NULL;
             }
             params_buf[n_params++] = p->cur.text;
@@ -2695,11 +2695,11 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     while (at(p, TOK_BANG)) {
         advance(p);
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected effect alias after '!'");
+            set_err(p, DECK_LOAD_PARSE, "expected effect alias after '!'");
             return NULL;
         }
         if (n_effects >= 8) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "too many effect annotations (max 8)");
+            set_err(p, DECK_LOAD_PARSE, "too many effect annotations (max 8)");
             return NULL;
         }
         effects_buf[n_effects++] = p->cur.text;
@@ -2805,7 +2805,7 @@ static ast_node_t *parse_type_decl(deck_parser_t *p)
 {
     advance(p); /* @type */
     if (!at(p, TOK_IDENT)) {
-        set_err(p, DECK_LOAD_PARSE_ERROR, "expected type name after @type");
+        set_err(p, DECK_LOAD_PARSE, "expected type name after @type");
         return NULL;
     }
     ast_node_t *n = mknode(p, AST_TYPE_DEF); if (!n) return NULL;
@@ -2818,8 +2818,8 @@ static ast_node_t *parse_type_decl(deck_parser_t *p)
     const char *fields[32];
     uint32_t nf = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
-        if (nf >= 32) { set_err(p, DECK_LOAD_PARSE_ERROR, "too many fields (max 32)"); return NULL; }
-        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name"); return NULL; }
+        if (nf >= 32) { set_err(p, DECK_LOAD_PARSE, "too many fields (max 32)"); return NULL; }
+        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected field name"); return NULL; }
         fields[nf++] = p->cur.text;
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after field name")) return NULL;
@@ -2845,7 +2845,7 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         ast_node_t *fnn = parse_fn_decl(p);
         if (!fnn) return NULL;
         if (!fnn->as.fndef.name) {
-            set_err(p, DECK_LOAD_PARSE_ERROR,
+            set_err(p, DECK_LOAD_PARSE,
                     "anonymous fn (lambda) is not allowed at top level");
             return NULL;
         }
@@ -2891,22 +2891,22 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
             advance(p);
             while (at(p, TOK_NEWLINE)) advance(p);
             if (!at(p, TOK_KW_FN)) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "@private must precede a fn declaration");
+                set_err(p, DECK_LOAD_PARSE, "@private must precede a fn declaration");
                 return NULL;
             }
             ast_node_t *fnn = parse_fn_decl(p);
             if (!fnn) return NULL;
             if (!fnn->as.fndef.name) {
-                set_err(p, DECK_LOAD_PARSE_ERROR, "@private cannot precede an anonymous fn");
+                set_err(p, DECK_LOAD_PARSE, "@private cannot precede an anonymous fn");
                 return NULL;
             }
             fnn->as.fndef.is_private = true;
             return fnn;
         }
-        set_err(p, DECK_LOAD_PARSE_ERROR, "unknown top-level decorator");
+        set_err(p, DECK_LOAD_PARSE, "unknown top-level decorator");
         return NULL;
     }
-    set_err(p, DECK_LOAD_PARSE_ERROR, "expected @app, @use, @on, @machine, or fn at top level");
+    set_err(p, DECK_LOAD_PARSE, "expected @app, @use, @on, @machine, or fn at top level");
     return NULL;
 }
 

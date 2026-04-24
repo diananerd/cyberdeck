@@ -17,7 +17,7 @@ static deck_value_t *run_expr(const char *src, deck_err_t *err_out)
     deck_arena_init(&arena, 0);
     deck_parser_init(&p, &arena, src, (uint32_t)strlen(src));
     ast_node_t *root = deck_parser_parse_expr(&p);
-    if (!root) { *err_out = DECK_LOAD_PARSE_ERROR; deck_arena_reset(&arena); return NULL; }
+    if (!root) { *err_out = DECK_LOAD_PARSE; deck_arena_reset(&arena); return NULL; }
     deck_interp_ctx_t c;
     deck_interp_init(&c, &arena);
     deck_value_t *r = deck_interp_run(&c, c.global, root);

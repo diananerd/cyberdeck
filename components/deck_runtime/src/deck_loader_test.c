@@ -67,27 +67,27 @@ static const loader_case_t CASES[] = {
     /* --- stage 1: parse errors --- */
     { "err_parse_bad",
       "@app\n  name \"X\"\n",
-      DECK_LOAD_PARSE_ERROR, 1 },
+      DECK_LOAD_PARSE, 1 },
 
     /* --- stage 3: missing metadata --- */
     { "err_no_app",
       "@on launch:\n"
       "  log.info(\"x\")\n",
-      DECK_LOAD_TYPE_ERROR, 3 },
+      DECK_LOAD_TYPE, 3 },
 
     { "err_missing_id",
       "@app\n"
       "  name: \"X\"\n"
       "  version: \"1.0.0\"\n"
       "  edition: 2026\n",
-      DECK_LOAD_TYPE_ERROR, 3 },
+      DECK_LOAD_TYPE, 3 },
 
     { "err_missing_edition",
       "@app\n"
       "  name: \"X\"\n"
       "  id: \"y\"\n"
       "  version: \"1.0.0\"\n",
-      DECK_LOAD_TYPE_ERROR, 3 },
+      DECK_LOAD_TYPE, 3 },
 
     /* --- stage 2: unresolved transition target --- */
     { "err_bad_transition",
@@ -95,14 +95,14 @@ static const loader_case_t CASES[] = {
       "\n@machine m\n"
       "  state a:\n"
       "    transition :nowhere\n",
-      DECK_LOAD_UNRESOLVED_SYMBOL, 2 },
+      DECK_LOAD_UNRESOLVED, 2 },
 
     /* --- stage 4: unknown capability --- */
     { "err_unknown_cap",
       APP_HEADER_DL1
       "\n@on launch:\n"
       "  wifi.scan()\n",
-      DECK_LOAD_CAPABILITY_MISSING, 4 },
+      DECK_LOAD_INCOMPATIBLE, 4 },
 
     /* --- stage 5: non-exhaustive match --- */
     { "err_nonexhaustive",
@@ -111,7 +111,7 @@ static const loader_case_t CASES[] = {
       "  match 1\n"
       "    | 0 -> log.info(\"zero\")\n"
       "    | 1 -> log.info(\"one\")\n",
-      DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, 5 },
+      DECK_LOAD_EXHAUSTIVE, 5 },
 
     /* --- stage 6: deck_level below required --- */
     { "err_level_below",
@@ -122,7 +122,7 @@ static const loader_case_t CASES[] = {
       "  edition: 2026\n"
       "\n@needs\n"
       "  deck_level: 3\n",
-      DECK_LOAD_LEVEL_BELOW_REQUIRED, 6 },
+      DECK_LOAD_INCOMPATIBLE, 6 },
 
     /* --- stage 6: unknown deck_level --- */
     { "err_level_unknown",
@@ -133,7 +133,7 @@ static const loader_case_t CASES[] = {
       "  edition: 2026\n"
       "\n@needs\n"
       "  deck_level: 99\n",
-      DECK_LOAD_LEVEL_UNKNOWN, 6 },
+      DECK_LOAD_INCOMPATIBLE, 6 },
 
     /* --- stage 6: incompatible edition --- */
     { "err_bad_edition",
@@ -144,7 +144,7 @@ static const loader_case_t CASES[] = {
       "  edition: 2099\n"
       "\n@needs\n"
       "  deck_level: 1\n",
-      DECK_LOAD_INCOMPATIBLE_EDITION, 6 },
+      DECK_LOAD_INCOMPATIBLE, 6 },
 
     /* --- stage 4: legal caps all green --- */
     { "ok_all_caps",

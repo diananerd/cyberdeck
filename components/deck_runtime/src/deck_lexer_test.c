@@ -240,7 +240,7 @@ deck_err_t deck_lexer_run_selftest(void)
     if (fail) {
         ESP_LOGE(TAG, "lexer selftest: %u/%u pass, %u fail",
                  (unsigned)pass, (unsigned)N_CASES, (unsigned)fail);
-        return DECK_LOAD_LEX_ERROR;
+        return DECK_LOAD_LEX;
     }
     ESP_LOGI(TAG, "lexer selftest: PASS (%u cases)", (unsigned)N_CASES);
     return DECK_RT_OK;

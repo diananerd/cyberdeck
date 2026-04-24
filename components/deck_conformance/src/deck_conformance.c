@@ -202,25 +202,25 @@ static deck_test_t DECK_TESTS[] = {
 
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
-      DECK_LOAD_LEVEL_BELOW_REQUIRED, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.pattern_not_exhaustive", "/conformance/err_match_noexh.deck", NULL,
-      DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_EXHAUSTIVE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.type_mismatch", "/conformance/err_type_mismatch.deck", NULL,
       DECK_RT_TYPE_MISMATCH, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.parse_error", "/conformance/err_parse_error.deck", NULL,
-      DECK_LOAD_PARSE_ERROR, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_PARSE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.unresolved_symbol", "/conformance/err_unresolved_symbol.deck", NULL,
-      DECK_LOAD_UNRESOLVED_SYMBOL, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_UNRESOLVED, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.capability_missing", "/conformance/err_capability_missing.deck", NULL,
-      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.level_unknown", "/conformance/err_level_unknown.deck", NULL,
-      DECK_LOAD_LEVEL_UNKNOWN, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.incompatible_edition", "/conformance/err_edition.deck", NULL,
-      DECK_LOAD_INCOMPATIBLE_EDITION, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.incompatible_surface", "/conformance/err_deck_os.deck", NULL,
-      DECK_LOAD_INCOMPATIBLE_SURFACE, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.type_error_missing_id", "/conformance/err_missing_id.deck", NULL,
-      DECK_LOAD_TYPE_ERROR, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_TYPE, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.divide_by_zero_int", "/conformance/err_div_zero_int.deck", NULL,
       DECK_RT_DIVIDE_BY_ZERO, false, 0, 0, 0, 0, {0}, 0 },
     { "errors.modulo_by_zero_int", "/conformance/err_mod_zero_int.deck", NULL,
@@ -236,11 +236,11 @@ static deck_test_t DECK_TESTS[] = {
 
     /* DL2 F23 — fn declares !alias but no matching @use. */
     { "errors.effect_undeclared", "/conformance/err_effect_undeclared.deck", NULL,
-      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
 
     /* DL2 F23.5 — @needs.capabilities lists an unknown cap. */
     { "errors.required_cap_unknown", "/conformance/err_required_cap_unknown.deck", NULL,
-      DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, 0, {0}, 0 },
+      DECK_LOAD_INCOMPATIBLE, false, 0, 0, 0, 0, {0}, 0 },
 
     /* DL2 F28 Phase 2 — bridge.ui.* tree builders + render. Deliberately
      * the last entry in the array: render dispatches real LVGL work on
@@ -741,7 +741,7 @@ static bool s_heap_pressure_recovers(char *d, size_t dz)
      * thing that MUST NOT happen is `rc == OK && sentinel hit` (pressure
      * was ignored) or a crash. */
     bool got_pressure_err = (rc == DECK_RT_NO_MEMORY ||
-                              rc == DECK_LOAD_PARSE_ERROR);
+                              rc == DECK_LOAD_PARSE);
     bool sentinel_hit = strstr(s_log_cap,
                                 "DECK_CONF_OK:lang.strings") != NULL;
     bool pressure_exercised = got_pressure_err || !sentinel_hit;

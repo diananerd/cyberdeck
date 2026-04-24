@@ -128,7 +128,7 @@ static void check_transition_targets(deck_loader_t *l, const ast_node_t *machine
             const ast_node_t *h = st->as.state.hooks.items[j];
             if (h && h->kind == AST_TRANSITION) {
                 if (!state_has_name(machine, h->as.transition.target)) {
-                    set_err(l, DECK_LOAD_UNRESOLVED_SYMBOL, 2,
+                    set_err(l, DECK_LOAD_UNRESOLVED, 2,
                             h->line, h->col,
                             "transition target :%s not a state in machine '%s'",
                             h->as.transition.target,
@@ -158,27 +158,27 @@ static void stage3_type_check(deck_loader_t *l)
 {
     const ast_node_t *app = find_app(l->module);
     if (!app) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 3, 1, 1,
+        set_err(l, DECK_LOAD_TYPE, 3, 1, 1,
                 "program has no @app declaration");
         return;
     }
     if (!l->app_id || !*l->app_id) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 3, app->line, app->col,
+        set_err(l, DECK_LOAD_TYPE, 3, app->line, app->col,
                 "@app.id is required and must be a string");
         return;
     }
     if (!l->app_name) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 3, app->line, app->col,
+        set_err(l, DECK_LOAD_TYPE, 3, app->line, app->col,
                 "@app.name is required and must be a string");
         return;
     }
     if (!l->app_version) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 3, app->line, app->col,
+        set_err(l, DECK_LOAD_TYPE, 3, app->line, app->col,
                 "@app.version is required and must be a string");
         return;
     }
     if (l->edition == 0) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 3, app->line, app->col,
+        set_err(l, DECK_LOAD_TYPE, 3, app->line, app->col,
                 "@app.edition is required and must be an int literal");
         return;
     }
@@ -243,7 +243,7 @@ static void check_call_cap(deck_loader_t *l, const ast_node_t *call)
     while (root && root->kind == AST_DOT) root = root->as.dot.obj;
     if (!root || root->kind != AST_IDENT) return;
     if (lookup_cap(root->as.s)) return;
-    set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, fn->line, fn->col,
+    set_err(l, DECK_LOAD_INCOMPATIBLE, 4, fn->line, fn->col,
             "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map, bridge, asset)",
             root->as.s ? root->as.s : "?");
 }
@@ -369,7 +369,7 @@ static void check_fn_effects(deck_loader_t *l, const ast_node_t *fn)
     for (uint32_t i = 0; i < fn->as.fndef.n_effects; i++) {
         const char *eff = fn->as.fndef.effects[i];
         if (!use_declared(l->module, eff)) {
-            set_err(l, DECK_LOAD_CAPABILITY_MISSING, 4, fn->line, fn->col,
+            set_err(l, DECK_LOAD_INCOMPATIBLE, 4, fn->line, fn->col,
                     "fn '%s' declares !%s but no matching @use",
                     fn->as.fndef.name ? fn->as.fndef.name : "<anon>",
                     eff ? eff : "?");
@@ -462,7 +462,7 @@ static void walk_check_match(deck_loader_t *l, const ast_node_t *n)
     if (!n || l->err != DECK_LOAD_OK) return;
     if (n->kind == AST_MATCH) {
         if (!match_has_wildcard(n)) {
-            set_err(l, DECK_LOAD_PATTERN_NOT_EXHAUSTIVE, 5, n->line, n->col,
+            set_err(l, DECK_LOAD_EXHAUSTIVE, 5, n->line, n->col,
                     "match is not exhaustive: no wildcard arm");
             return;
         }
@@ -554,7 +554,7 @@ static void check_required_capabilities(deck_loader_t *l)
     if (!caps || !caps->value) return;
     const ast_node_t *block = caps->value;
     if (block->kind != AST_NEEDS) {
-        set_err(l, DECK_LOAD_TYPE_ERROR, 6, block->line, block->col,
+        set_err(l, DECK_LOAD_TYPE, 6, block->line, block->col,
                 "@needs.capabilities must be an indented block of "
                 "`name: \"version_range\"` entries (see 02-deck-app §4A)");
         return;
@@ -563,14 +563,14 @@ static void check_required_capabilities(deck_loader_t *l)
         const ast_app_field_t *f = &block->as.app.fields[i];
         const char *name = f->name;
         if (!name) {
-            set_err(l, DECK_LOAD_TYPE_ERROR, 6,
+            set_err(l, DECK_LOAD_TYPE, 6,
                     f->value ? f->value->line : 0,
                     f->value ? f->value->col  : 0,
                     "@needs.capabilities entry missing name");
             return;
         }
         if (!cap_advertised(name)) {
-            set_err(l, DECK_LOAD_CAPABILITY_MISSING, 6,
+            set_err(l, DECK_LOAD_INCOMPATIBLE, 6,
                     f->value ? f->value->line : 0,
                     f->value ? f->value->col  : 0,
                     "@needs.capabilities lists '%s' which is not advertised",
@@ -591,25 +591,25 @@ static void stage6_compat(deck_loader_t *l)
 
     if (l->edition != runtime_ed) {
         /* Runtime supports a single edition at a time; accept exact match only. */
-        set_err(l, DECK_LOAD_INCOMPATIBLE_EDITION, 6, 1, 1,
+        set_err(l, DECK_LOAD_INCOMPATIBLE, 6, 1, 1,
                 "app edition %d not supported (runtime: %d)",
                 l->edition, runtime_ed);
         return;
     }
     if (l->required_deck_level < 1 || l->required_deck_level > 3) {
-        set_err(l, DECK_LOAD_LEVEL_UNKNOWN, 6, 1, 1,
+        set_err(l, DECK_LOAD_INCOMPATIBLE, 6, 1, 1,
                 "@needs.deck_level %d is not a valid conformance level (1..3)",
                 l->required_deck_level);
         return;
     }
     if (l->required_deck_level > runtime_level) {
-        set_err(l, DECK_LOAD_LEVEL_BELOW_REQUIRED, 6, 1, 1,
+        set_err(l, DECK_LOAD_INCOMPATIBLE, 6, 1, 1,
                 "app requires deck_level %d; runtime provides %d",
                 l->required_deck_level, runtime_level);
         return;
     }
     if (l->required_deck_os > runtime_os) {
-        set_err(l, DECK_LOAD_INCOMPATIBLE_SURFACE, 6, 1, 1,
+        set_err(l, DECK_LOAD_INCOMPATIBLE, 6, 1, 1,
                 "app requires deck_os %d; runtime provides %d",
                 l->required_deck_os, runtime_os);
         return;
@@ -635,7 +635,7 @@ deck_err_t deck_loader_load(deck_loader_t *l, const char *src, uint32_t len)
     deck_parser_init(&p, l->arena, src, len);
     ast_node_t *mod = deck_parser_parse_module(&p);
     if (!mod || deck_parser_err_code(&p) != DECK_LOAD_OK) {
-        set_err(l, deck_parser_err_code(&p) ? deck_parser_err_code(&p) : DECK_LOAD_PARSE_ERROR,
+        set_err(l, deck_parser_err_code(&p) ? deck_parser_err_code(&p) : DECK_LOAD_PARSE,
                 1,
                 deck_parser_err_line(&p), deck_parser_err_col(&p),
                 "%s", deck_parser_err_msg(&p) ? deck_parser_err_msg(&p) : "parse failed");

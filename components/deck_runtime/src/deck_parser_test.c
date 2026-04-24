@@ -306,7 +306,7 @@ deck_err_t deck_parser_run_selftest(void)
     if (fail) {
         ESP_LOGE(TAG, "parser selftest: %u/%u pass, %u fail",
                  (unsigned)pass, (unsigned)N_CASES, (unsigned)fail);
-        return DECK_LOAD_PARSE_ERROR;
+        return DECK_LOAD_PARSE;
     }
     ESP_LOGI(TAG, "parser selftest: PASS (%u cases)", (unsigned)N_CASES);
     return DECK_RT_OK;

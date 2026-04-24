@@ -16,27 +16,16 @@ const char *deck_err_name(deck_err_t err)
         case DECK_RT_ABORTED:                  return "aborted";
         case DECK_RT_INTERNAL:                 return "internal";
 
-        case DECK_LOAD_OK:                     return "load_ok";
-        case DECK_LOAD_LEX_ERROR:              return "lex_error";
-        case DECK_LOAD_PARSE_ERROR:            return "parse_error";
-        case DECK_LOAD_TYPE_ERROR:             return "type_error";
-        case DECK_LOAD_UNRESOLVED_SYMBOL:      return "unresolved_symbol";
-        case DECK_LOAD_CAPABILITY_MISSING:     return "missing_capability";
-        case DECK_LOAD_CAPABILITY_INCOMPAT:    return "incompatible_capability";
-        case DECK_LOAD_PATTERN_NOT_EXHAUSTIVE: return "pattern_not_exhaustive";
-        case DECK_LOAD_INCOMPATIBLE_EDITION:   return "incompatible_edition";
-        case DECK_LOAD_INCOMPATIBLE_SURFACE:   return "incompatible_surface";
-        case DECK_LOAD_INCOMPATIBLE_RUNTIME:   return "incompatible_runtime";
-        case DECK_LOAD_LEVEL_BELOW_REQUIRED:   return "level_below_required";
-        case DECK_LOAD_LEVEL_UNKNOWN:          return "level_unknown";
-        case DECK_LOAD_LEVEL_INCONSISTENT:     return "level_inconsistent";
-        case DECK_LOAD_PERMISSION_DENIED:      return "permission_denied";
-        case DECK_LOAD_SIGNATURE_INVALID:      return "signature_invalid";
-        case DECK_LOAD_UNKNOWN_SIGNER:         return "unknown_signer";
-        case DECK_LOAD_BUNDLE_CORRUPT:         return "bundle_corrupt";
-        case DECK_LOAD_MIGRATION_FAILED:       return "migration_failed";
-        case DECK_LOAD_NO_MEMORY:              return "load_no_memory";
-        case DECK_LOAD_INTERNAL:               return "load_internal";
+        case DECK_LOAD_OK:                     return "ok";
+        case DECK_LOAD_LEX:                    return "lex";
+        case DECK_LOAD_PARSE:                  return "parse";
+        case DECK_LOAD_TYPE:                   return "type";
+        case DECK_LOAD_UNRESOLVED:             return "unresolved";
+        case DECK_LOAD_INCOMPATIBLE:           return "incompatible";
+        case DECK_LOAD_EXHAUSTIVE:             return "exhaustive";
+        case DECK_LOAD_PERMISSION:             return "permission";
+        case DECK_LOAD_RESOURCE:               return "resource";
+        case DECK_LOAD_INTERNAL:               return "internal";
         default:                               return "unknown";
     }
 }
@@ -58,25 +47,14 @@ const char *deck_err_message(deck_err_t err)
         case DECK_RT_INTERNAL:                 return "runtime internal error";
 
         case DECK_LOAD_OK:                     return "load completed";
-        case DECK_LOAD_LEX_ERROR:              return "lexical error";
-        case DECK_LOAD_PARSE_ERROR:            return "parse error";
-        case DECK_LOAD_TYPE_ERROR:             return "type check failed";
-        case DECK_LOAD_UNRESOLVED_SYMBOL:      return "symbol not found in scope";
-        case DECK_LOAD_CAPABILITY_MISSING:     return "required capability has no driver";
-        case DECK_LOAD_CAPABILITY_INCOMPAT:    return "capability version does not satisfy app";
-        case DECK_LOAD_PATTERN_NOT_EXHAUSTIVE: return "match is not exhaustive";
-        case DECK_LOAD_INCOMPATIBLE_EDITION:   return "app edition not supported by runtime";
-        case DECK_LOAD_INCOMPATIBLE_SURFACE:   return "app surface API level not satisfied";
-        case DECK_LOAD_INCOMPATIBLE_RUNTIME:   return "app runtime version not satisfied";
-        case DECK_LOAD_LEVEL_BELOW_REQUIRED:   return "app requires a higher DL level than this runtime provides";
-        case DECK_LOAD_LEVEL_UNKNOWN:          return "app declares an unknown DL level";
-        case DECK_LOAD_LEVEL_INCONSISTENT:     return "app uses capabilities above its declared DL level";
-        case DECK_LOAD_PERMISSION_DENIED:      return "permission denied by user or policy";
-        case DECK_LOAD_SIGNATURE_INVALID:      return "bundle signature does not validate";
-        case DECK_LOAD_UNKNOWN_SIGNER:         return "bundle signer not recognized";
-        case DECK_LOAD_BUNDLE_CORRUPT:         return "bundle hash mismatch";
-        case DECK_LOAD_MIGRATION_FAILED:       return "@migrate step failed";
-        case DECK_LOAD_NO_MEMORY:              return "insufficient heap to load app";
+        case DECK_LOAD_LEX:                    return "lexical error";
+        case DECK_LOAD_PARSE:                  return "parse error";
+        case DECK_LOAD_TYPE:                   return "type check failed";
+        case DECK_LOAD_UNRESOLVED:             return "symbol not found in scope";
+        case DECK_LOAD_INCOMPATIBLE:           return "app or capability is incompatible with this runtime";
+        case DECK_LOAD_EXHAUSTIVE:             return "match is not exhaustive";
+        case DECK_LOAD_PERMISSION:             return "permission denied or signature invalid";
+        case DECK_LOAD_RESOURCE:               return "missing or corrupt bundle resource";
         case DECK_LOAD_INTERNAL:               return "load internal error";
         default:                               return "unknown error";
     }

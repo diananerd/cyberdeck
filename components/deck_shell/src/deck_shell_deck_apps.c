@@ -217,7 +217,7 @@ static deck_err_t deck_app_intent_resolver(const deck_shell_intent_t *intent)
     for (uint32_t i = 0; i < s_n_loaded; i++) {
         if (s_slots[i].app_id == intent->app_id) { slot = &s_slots[i]; break; }
     }
-    if (!slot || !slot->handle) return DECK_LOAD_UNRESOLVED_SYMBOL;
+    if (!slot || !slot->handle) return DECK_LOAD_UNRESOLVED;
 
     deck_sdi_err_t pr = deck_bridge_ui_activity_push(
         intent->app_id, intent->screen_id, &s_deck_app_cbs, slot->handle);
@@ -268,7 +268,7 @@ static deck_err_t load_one(loaded_slot_t *slot, uint16_t app_id, const char *pat
     if (rr != DECK_SDI_OK) {
         ESP_LOGW(TAG, "fs.read %s: %s", path, deck_sdi_strerror(rr));
         heap_caps_free(buf);
-        return DECK_LOAD_LEX_ERROR;
+        return DECK_LOAD_LEX;
     }
     buf[n] = '\0';
 

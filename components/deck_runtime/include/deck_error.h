@@ -4,10 +4,11 @@
  *
  * Two families:
  *   RT_OK, RT_* — runtime/eval errors during execution
- *   LOAD_*     — structured load errors raised by loader stages 0-9
+ *   LOAD_*     — structured load errors raised by the loader
  *
- * Catalog from deck-lang/15-deck-versioning.md §9.3 + DL-level errors from
- * deck-lang/16-deck-levels.md §10.
+ * LoadErrorKind is fixed by LANG.md §11.3 at exactly nine variants:
+ *   :lex :parse :type :unresolved :incompatible :exhaustive
+ *   :permission :resource :internal
  */
 
 #include <stdbool.h>
@@ -31,31 +32,20 @@ typedef enum {
     DECK_RT_ABORTED,               /* user called abort/panic */
     DECK_RT_INTERNAL,              /* defect in runtime */
 
-    /* --- load-time --- */
+    /* --- load-time — LANG §11.3 canonical nine --- */
     DECK_LOAD_OK = 100,
-    DECK_LOAD_LEX_ERROR,
-    DECK_LOAD_PARSE_ERROR,
-    DECK_LOAD_TYPE_ERROR,
-    DECK_LOAD_UNRESOLVED_SYMBOL,
-    DECK_LOAD_CAPABILITY_MISSING,
-    DECK_LOAD_CAPABILITY_INCOMPAT,
-    DECK_LOAD_PATTERN_NOT_EXHAUSTIVE,
-    DECK_LOAD_INCOMPATIBLE_EDITION,
-    DECK_LOAD_INCOMPATIBLE_SURFACE,
-    DECK_LOAD_INCOMPATIBLE_RUNTIME,
-    DECK_LOAD_LEVEL_BELOW_REQUIRED,
-    DECK_LOAD_LEVEL_UNKNOWN,
-    DECK_LOAD_LEVEL_INCONSISTENT,
-    DECK_LOAD_PERMISSION_DENIED,
-    DECK_LOAD_SIGNATURE_INVALID,
-    DECK_LOAD_UNKNOWN_SIGNER,
-    DECK_LOAD_BUNDLE_CORRUPT,
-    DECK_LOAD_MIGRATION_FAILED,
-    DECK_LOAD_NO_MEMORY,
+    DECK_LOAD_LEX,
+    DECK_LOAD_PARSE,
+    DECK_LOAD_TYPE,
+    DECK_LOAD_UNRESOLVED,
+    DECK_LOAD_INCOMPATIBLE,
+    DECK_LOAD_EXHAUSTIVE,
+    DECK_LOAD_PERMISSION,
+    DECK_LOAD_RESOURCE,
     DECK_LOAD_INTERNAL,
 } deck_err_t;
 
-/* Canonical atom-style name as in the spec ("type_mismatch", "missing_capability"). */
+/* Canonical atom-style name ("type_mismatch", "incompatible"). */
 const char *deck_err_name(deck_err_t err);
 
 /* One-line human description. */

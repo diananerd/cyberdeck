@@ -52,7 +52,7 @@ deck_err_t deck_shell_intent_navigate(const deck_shell_intent_t *intent)
         }
     }
     ESP_LOGW(TAG, "no resolver for app_id=%u", (unsigned)intent->app_id);
-    return DECK_LOAD_UNRESOLVED_SYMBOL;
+    return DECK_LOAD_UNRESOLVED;
 }
 
 void deck_shell_navbar_back(void)
