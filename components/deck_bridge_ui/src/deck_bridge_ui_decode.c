@@ -60,6 +60,15 @@ static int64_t attr_i64(const deck_dvc_node_t *n, const char *atom, int64_t fall
 /* Forward decl. */
 static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n);
 
+/* Pre-order widget recording for the PATCH path. Each primary widget
+ * created by render_* is appended to the patch recorder so a later
+ * same-shape snapshot can update leaves in place. */
+static inline lv_obj_t *record(const deck_dvc_node_t *n, lv_obj_t *obj)
+{
+    deck_bridge_ui_patch_record(n, obj);
+    return obj;
+}
+
 /* ---------- Concept #60 field registry ----------
  *
  * Each input widget emitted as a descendant of a DVC_FORM registers itself
@@ -670,25 +679,25 @@ static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
 {
     if (!n) return NULL;
     switch ((deck_dvc_type_t)n->type) {
-        case DVC_GROUP:    return render_group(parent, n);
-        case DVC_COLUMN:   return render_column(parent, n);
-        case DVC_FORM:     return render_form(parent, n);
+        case DVC_GROUP:    return record(n, render_group(parent, n));
+        case DVC_COLUMN:   return record(n, render_column(parent, n));
+        case DVC_FORM:     return record(n, render_form(parent, n));
         case DVC_LIST:
-        case DVC_LIST_ITEM: return render_column(parent, n);
-        case DVC_ROW:      return render_row(parent, n);
-        case DVC_LABEL:    return render_label(parent, n);
-        case DVC_DATA_ROW: return render_data_row(parent, n);
+        case DVC_LIST_ITEM: return record(n, render_column(parent, n));
+        case DVC_ROW:      return record(n, render_row(parent, n));
+        case DVC_LABEL:    return record(n, render_label(parent, n));
+        case DVC_DATA_ROW: return record(n, render_data_row(parent, n));
         case DVC_TRIGGER:
-        case DVC_NAVIGATE: return render_trigger(parent, n);
-        case DVC_TEXT:     return render_text_input(parent, n, false);
-        case DVC_PASSWORD: return render_text_input(parent, n, true);
+        case DVC_NAVIGATE: return record(n, render_trigger(parent, n));
+        case DVC_TEXT:     return record(n, render_text_input(parent, n, false));
+        case DVC_PASSWORD: return record(n, render_text_input(parent, n, true));
         case DVC_TOGGLE:
-        case DVC_SWITCH:   return render_toggle(parent, n);
-        case DVC_SLIDER:   return render_slider(parent, n);
-        case DVC_CHOICE:   return render_choice(parent, n);
-        case DVC_PROGRESS: return render_progress(parent, n);
-        case DVC_SPACER:   return render_spacer(parent, n);
-        case DVC_DIVIDER:  return render_divider(parent, n);
+        case DVC_SWITCH:   return record(n, render_toggle(parent, n));
+        case DVC_SLIDER:   return record(n, render_slider(parent, n));
+        case DVC_CHOICE:   return record(n, render_choice(parent, n));
+        case DVC_PROGRESS: return record(n, render_progress(parent, n));
+        case DVC_SPACER:   return record(n, render_spacer(parent, n));
+        case DVC_DIVIDER:  return record(n, render_divider(parent, n));
         case DVC_EMPTY:    return NULL;
         default:
             /* Unknown / not-yet-implemented type — placeholder label. */

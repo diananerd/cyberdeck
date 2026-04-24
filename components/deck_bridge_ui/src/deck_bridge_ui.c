@@ -28,10 +28,6 @@
 
 static const char *TAG = "bridge_ui";
 
-/* Reusable decode arena. Reset on each render so memory stays bounded. */
-static deck_arena_t s_render_arena = {0};
-static bool         s_arena_inited = false;
-
 void deck_bridge_ui_clear_screen(void)
 {
     lv_obj_t *scr = lv_scr_act();
@@ -49,9 +45,14 @@ static deck_sdi_err_t bui_init_impl(void *ctx)
     return deck_bridge_ui_lvgl_init();
 }
 
-/* BRIDGE §9 diffing state. Last envelope seen per (app_id, machine_id).
- * The table is tiny — apps rarely run >1 concurrently in the reference
- * bridge, so a flat 4-slot array is enough. */
+/* BRIDGE §9 diffing state. Per-(app_id, machine_id) slot carries two
+ * arenas (alternating) so the previous tree survives decode-reset of
+ * the new one, plus a pre-order widget map captured at the last
+ * REBUILD/REPLACE/PUSH render. If a subsequent snapshot lands on the
+ * same identity triple AND deck_dvc_tree_same_shape(old, new) == 0, the
+ * bridge invokes the PATCH path — updating leaf attrs in place without
+ * destroying the widget tree. Any unsupported leaf diff bails to
+ * REBUILD as a conformant fallback. */
 typedef enum {
     BRIDGE_DIFF_PUSH = 0,      /* new activity */
     BRIDGE_DIFF_REPLACE,       /* same (app, machine), different state */
@@ -60,62 +61,129 @@ typedef enum {
 } bridge_diff_action_t;
 
 #define BRIDGE_DIFF_SLOTS 4
-static struct {
+typedef struct {
     bool     used;
     uint32_t app_id;
     uint32_t machine_id;
     uint32_t state_id;
     uint32_t frame_id;
-} s_diff_slots[BRIDGE_DIFF_SLOTS];
+    deck_arena_t arenas[2];       /* ping-pong: new decodes land in the
+                                      OTHER one; cached tree in arena_cur */
+    bool arenas_inited;
+    uint8_t arena_cur;            /* 0 or 1 */
+    deck_dvc_node_t *cached_root; /* lives in arenas[arena_cur]; NULL until first render */
+    deck_bridge_ui_patch_entry_t *entries;
+    size_t n_entries;
+} bridge_slot_t;
 
-static bridge_diff_action_t bridge_diff_decide(const deck_dvc_envelope_t *env,
-                                                const deck_dvc_node_t *root,
-                                                bool *out_stale)
+static bridge_slot_t s_slots[BRIDGE_DIFF_SLOTS];
+
+static int bridge_slot_find_or_alloc(const deck_dvc_envelope_t *env, bool *created)
 {
-    (void)root;  /* Tree-shape comparison would consult root for PATCH
-                   detection; current bridge always does full rebuild on
-                   state changes, so shape equality downgrades to REBUILD
-                   with the same outcome. Reserved for future. */
-    *out_stale = false;
-    int hit = -1;
     int empty = -1;
     for (int i = 0; i < BRIDGE_DIFF_SLOTS; i++) {
-        if (!s_diff_slots[i].used) { if (empty < 0) empty = i; continue; }
-        if (s_diff_slots[i].app_id == env->app_id &&
-            s_diff_slots[i].machine_id == env->machine_id) {
-            hit = i; break;
+        if (!s_slots[i].used) { if (empty < 0) empty = i; continue; }
+        if (s_slots[i].app_id == env->app_id &&
+            s_slots[i].machine_id == env->machine_id) {
+            *created = false;
+            return i;
         }
     }
-    if (hit < 0) {
-        /* First snapshot for this (app, machine) — push as a new activity. */
-        int slot = (empty >= 0) ? empty : 0;   /* evict slot 0 if full */
-        s_diff_slots[slot].used       = true;
-        s_diff_slots[slot].app_id     = env->app_id;
-        s_diff_slots[slot].machine_id = env->machine_id;
-        s_diff_slots[slot].state_id   = env->state_id;
-        s_diff_slots[slot].frame_id   = env->frame_id;
+    int slot = (empty >= 0) ? empty : 0;   /* evict slot 0 if full */
+    if (s_slots[slot].entries) {
+        free(s_slots[slot].entries);
+        s_slots[slot].entries = NULL;
+        s_slots[slot].n_entries = 0;
+    }
+    memset(&s_slots[slot], 0, sizeof(s_slots[slot]));
+    s_slots[slot].used       = true;
+    s_slots[slot].app_id     = env->app_id;
+    s_slots[slot].machine_id = env->machine_id;
+    *created = true;
+    return slot;
+}
+
+static deck_arena_t *bridge_slot_working_arena(bridge_slot_t *slot)
+{
+    if (!slot->arenas_inited) {
+        deck_arena_init(&slot->arenas[0], 4 * 1024);
+        deck_arena_init(&slot->arenas[1], 4 * 1024);
+        slot->arenas_inited = true;
+        slot->arena_cur = 0;
+    }
+    /* The NEW tree decodes into the arena that is NOT currently holding
+     * the cached tree. First time: arenas[1]. */
+    uint8_t target = slot->arena_cur ^ 1;
+    deck_arena_reset(&slot->arenas[target]);
+    return &slot->arenas[target];
+}
+
+static void bridge_slot_commit_new_tree(bridge_slot_t *slot,
+                                         deck_dvc_node_t *new_root)
+{
+    /* The new tree now becomes the cached one; its arena is the one we
+     * just decoded into (arena_cur ^ 1). Flip the pointer. */
+    slot->arena_cur   ^= 1;
+    slot->cached_root  = new_root;
+}
+
+static bridge_diff_action_t bridge_slot_decide(bridge_slot_t *slot,
+                                                const deck_dvc_envelope_t *env,
+                                                const deck_dvc_node_t *new_root,
+                                                bool first_time,
+                                                bool *out_stale)
+{
+    *out_stale = false;
+    if (first_time) {
+        slot->state_id = env->state_id;
+        slot->frame_id = env->frame_id;
         return BRIDGE_DIFF_PUSH;
     }
-    /* Stale-snapshot guard: frame_id must be monotonically increasing
-     * per (app, machine). An older frame_id means the runtime looped
-     * — drop it to avoid overwriting newer state. */
-    if (env->frame_id < s_diff_slots[hit].frame_id) {
+    if (env->frame_id < slot->frame_id) {
         *out_stale = true;
         return BRIDGE_DIFF_REBUILD;
     }
     bridge_diff_action_t act;
-    if (env->state_id != s_diff_slots[hit].state_id) {
+    if (env->state_id != slot->state_id) {
         act = BRIDGE_DIFF_REPLACE;
+    } else if (slot->cached_root &&
+               deck_dvc_tree_same_shape(slot->cached_root, new_root) == 0) {
+        act = BRIDGE_DIFF_PATCH;
     } else {
-        /* Same identity triple — patch vs rebuild. BRIDGE §9 allows
-         * "rebuild everywhere" as conformant; we take it. Future
-         * refinement: compare tree shapes via deck_dvc_tree_equal and
-         * flip to PATCH when shapes match. */
         act = BRIDGE_DIFF_REBUILD;
     }
-    s_diff_slots[hit].state_id = env->state_id;
-    s_diff_slots[hit].frame_id = env->frame_id;
+    slot->state_id = env->state_id;
+    slot->frame_id = env->frame_id;
     return act;
+}
+
+/* After a successful PATCH, the recorded entries[] still point at the
+ * OLD tree's nodes — which is about to be freed when the arena rotates.
+ * Walk the new tree pre-order and overwrite entries[i].node so the next
+ * patch operates on valid pointers. Shape equality guarantees counts
+ * match; we bail to n_entries on mismatch (next snapshot triggers
+ * REBUILD on a stale-entries check). */
+static void bridge_remap_entries_to_new(bridge_slot_t *slot,
+                                         const deck_dvc_node_t *new_root);
+
+static void bridge_remap_walk(const deck_dvc_node_t *n,
+                               deck_bridge_ui_patch_entry_t *entries,
+                               size_t cap, size_t *idx)
+{
+    if (!n || *idx >= cap) return;
+    entries[*idx].node = n;
+    (*idx)++;
+    for (uint16_t i = 0; i < n->child_count; i++) {
+        bridge_remap_walk(n->children[i], entries, cap, idx);
+    }
+}
+
+static void bridge_remap_entries_to_new(bridge_slot_t *slot,
+                                         const deck_dvc_node_t *new_root)
+{
+    if (!slot->entries || !slot->n_entries) return;
+    size_t idx = 0;
+    bridge_remap_walk(new_root, slot->entries, slot->n_entries, &idx);
 }
 
 static const char *bridge_diff_name(bridge_diff_action_t a)
@@ -129,6 +197,22 @@ static const char *bridge_diff_name(bridge_diff_action_t a)
     return "?";
 }
 
+static deck_sdi_err_t bridge_do_rebuild_render(bridge_slot_t *slot,
+                                                const deck_dvc_node_t *new_root)
+{
+    /* Replace the recorded widget map — cap hint from previous count so
+     * realloc churn is minimal on steady-state frame cadence. */
+    size_t cap_hint = slot->n_entries ? slot->n_entries : 16;
+    deck_bridge_ui_patch_begin(cap_hint);
+    deck_sdi_err_t rv = deck_bridge_ui_render(new_root);
+    deck_bridge_ui_patch_entry_t *entries = NULL;
+    size_t n = deck_bridge_ui_patch_snapshot(&entries);
+    if (slot->entries) free(slot->entries);
+    slot->entries   = entries;
+    slot->n_entries = n;
+    return rv;
+}
+
 static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
                                               const void *bytes, size_t len)
 {
@@ -136,26 +220,43 @@ static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
     if (!bytes || len == 0)             return DECK_SDI_ERR_INVALID_ARG;
     if (!deck_bridge_ui_lvgl_is_ready()) return DECK_SDI_ERR_FAIL;
 
-    if (!s_arena_inited) {
-        deck_arena_init(&s_render_arena, 4 * 1024);
-        s_arena_inited = true;
-    } else {
-        deck_arena_reset(&s_render_arena);
-    }
+    /* Peek envelope to find the slot; decoding into the correct arena
+     * requires slot lookup first. Do a two-step: first decode the
+     * envelope alone would require a new API; instead decode into a
+     * scratch arena (slot 0's spare) and once we know the slot, keep
+     * that working arena. Simpler: decode into arenas[1] of a transient
+     * scratch, then reparent to the target slot. To avoid copies, we
+     * lookup the slot by peeking the envelope from the first 20 bytes
+     * of the wire header (app_id lives there). */
 
-    deck_dvc_node_t *root = NULL;
+    if (len < 20) return DECK_SDI_ERR_INVALID_ARG;
+    const uint8_t *hb = (const uint8_t *)bytes;
+    /* header: magic u16 | version u8 | flags u8 | app_id u32 | machine_id u32 | state u32 | frame u32 (LE) */
+    deck_dvc_envelope_t peek = {0};
+    peek.app_id     = (uint32_t)hb[4]  | ((uint32_t)hb[5]  << 8) | ((uint32_t)hb[6]  << 16) | ((uint32_t)hb[7]  << 24);
+    peek.machine_id = (uint32_t)hb[8]  | ((uint32_t)hb[9]  << 8) | ((uint32_t)hb[10] << 16) | ((uint32_t)hb[11] << 24);
+    peek.state_id   = (uint32_t)hb[12] | ((uint32_t)hb[13] << 8) | ((uint32_t)hb[14] << 16) | ((uint32_t)hb[15] << 24);
+    peek.frame_id   = (uint32_t)hb[16] | ((uint32_t)hb[17] << 8) | ((uint32_t)hb[18] << 16) | ((uint32_t)hb[19] << 24);
+
+    bool first = false;
+    int slot_idx = bridge_slot_find_or_alloc(&peek, &first);
+    bridge_slot_t *slot = &s_slots[slot_idx];
+
+    deck_arena_t *work = bridge_slot_working_arena(slot);
+    deck_dvc_node_t *new_root = NULL;
     deck_dvc_envelope_t env = {0};
-    deck_err_t r = deck_dvc_decode(bytes, len, &s_render_arena, &env, &root);
-    if (r != DECK_RT_OK || !root) {
+    deck_err_t r = deck_dvc_decode(bytes, len, work, &env, &new_root);
+    if (r != DECK_RT_OK || !new_root) {
         ESP_LOGE(TAG, "decode failed: %s", deck_err_name(r));
         return DECK_SDI_ERR_INVALID_ARG;
     }
 
     bool stale = false;
-    bridge_diff_action_t act = bridge_diff_decide(&env, root, &stale);
+    bridge_diff_action_t act = bridge_slot_decide(slot, &env, new_root, first, &stale);
     if (stale) {
         ESP_LOGW(TAG, "stale snapshot frame=%u (already past) — dropping",
                  (unsigned)env.frame_id);
+        /* The failed-decode arena stays scratch; next push resets it. */
         return DECK_SDI_OK;
     }
     ESP_LOGD(TAG, "snapshot app=%08x machine=%08x state=%08x frame=%u — %s",
@@ -167,8 +268,29 @@ static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
         ESP_LOGE(TAG, "ui_lock timeout — render dropped");
         return DECK_SDI_ERR_BUSY;
     }
-    deck_sdi_err_t rv = deck_bridge_ui_render(root);
+
+    deck_sdi_err_t rv = DECK_SDI_OK;
+    if (act == BRIDGE_DIFF_PATCH) {
+        int prc = deck_bridge_ui_patch_apply(slot->cached_root, new_root,
+                                              slot->entries, slot->n_entries);
+        if (prc == 0) {
+            /* Success — entries still reference OLD tree; remap to NEW
+             * before we rotate arenas and free the old. */
+            bridge_remap_entries_to_new(slot, new_root);
+        } else {
+            /* Bail to REBUILD. */
+            ESP_LOGD(TAG, "patch bailed (code=%d) — rebuilding", prc);
+            rv = bridge_do_rebuild_render(slot, new_root);
+        }
+    } else {
+        rv = bridge_do_rebuild_render(slot, new_root);
+    }
     deck_bridge_ui_unlock();
+
+    /* Commit the new tree as cached (rotates arena_cur). The OLD tree's
+     * arena is the one we will reset on the NEXT push, so it remains
+     * valid until then — safe to return. */
+    bridge_slot_commit_new_tree(slot, new_root);
     return rv;
 }
 

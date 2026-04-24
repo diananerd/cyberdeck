@@ -217,6 +217,16 @@ deck_err_t deck_dvc_decode(const void *bytes, size_t len,
  * Returns 0 on equal, nonzero on mismatch. Used by selftests. */
 int deck_dvc_tree_equal(const deck_dvc_node_t *a, const deck_dvc_node_t *b);
 
+/* Compare two trees for "same shape" — every node at every position has
+ * matching type, flags, intent_id, child_count, attr_count, and matching
+ * attr atoms + types (but NOT attr values). Used by the bridge to
+ * decide PATCH vs REBUILD: two same-shape snapshots differ only in
+ * leaf-attribute values (label text, slider position, toggle state)
+ * and can be updated in-place without recreating the widget tree.
+ *
+ * Returns 0 on same shape, nonzero on mismatch. */
+int deck_dvc_tree_same_shape(const deck_dvc_node_t *a, const deck_dvc_node_t *b);
+
 /* Selftest: build a small tree, encode → decode → equal. */
 deck_err_t deck_dvc_selftest(void);
 

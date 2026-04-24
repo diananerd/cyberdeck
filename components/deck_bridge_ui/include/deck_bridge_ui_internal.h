@@ -22,6 +22,38 @@ bool deck_bridge_ui_lvgl_is_ready(void);
  * Wipes the active screen contents and rebuilds widgets from `root`. */
 deck_sdi_err_t deck_bridge_ui_render(const deck_dvc_node_t *root);
 
+/* ---- PATCH path (BRIDGE §9) ----
+ *
+ * The render engine records every primary widget it creates in a
+ * pre-order widget map, which the PATCH path later walks in parallel
+ * with the old + new trees. If both trees are same_shape (see
+ * deck_dvc_tree_same_shape) the patch path updates leaf attribute
+ * values (label text, slider/progress/toggle state) in place instead
+ * of rebuilding the widget tree.
+ *
+ * Orchestration:
+ *   deck_bridge_ui_patch_begin(cap)  — start recording into an array
+ *   deck_bridge_ui_patch_record(n,w) — called by renderers per widget
+ *   deck_bridge_ui_patch_snapshot()  — finalize; return ownership to
+ *                                       caller (widgets[], count)
+ *   deck_bridge_ui_patch_apply(old, new, widgets, n) — apply leaf-attr
+ *     diffs to the widgets. Returns 0 on success, nonzero if any diff
+ *     is unsupported — caller then performs a full REBUILD.
+ */
+
+typedef struct {
+    const deck_dvc_node_t *node;
+    lv_obj_t              *obj;
+} deck_bridge_ui_patch_entry_t;
+
+void    deck_bridge_ui_patch_begin(size_t cap_hint);
+void    deck_bridge_ui_patch_record(const deck_dvc_node_t *n, lv_obj_t *obj);
+size_t  deck_bridge_ui_patch_snapshot(deck_bridge_ui_patch_entry_t **out);
+int     deck_bridge_ui_patch_apply(const deck_dvc_node_t *old_root,
+                                    const deck_dvc_node_t *new_root,
+                                    const deck_bridge_ui_patch_entry_t *entries,
+                                    size_t n_entries);
+
 /* Wipe the active screen — clears all children of lv_scr_act(). */
 void deck_bridge_ui_clear_screen(void);
 

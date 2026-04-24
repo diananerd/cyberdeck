@@ -520,6 +520,30 @@ int deck_dvc_tree_equal(const deck_dvc_node_t *a, const deck_dvc_node_t *b)
     return 0;
 }
 
+int deck_dvc_tree_same_shape(const deck_dvc_node_t *a, const deck_dvc_node_t *b)
+{
+    if (!a && !b) return 0;
+    if (!a || !b) return 1;
+    if (a->type != b->type)               return 10;
+    if (a->flags != b->flags)             return 11;
+    if (a->intent_id != b->intent_id)     return 12;
+    if (a->attr_count != b->attr_count)   return 13;
+    if (a->child_count != b->child_count) return 14;
+    for (uint16_t i = 0; i < a->attr_count; i++) {
+        const deck_dvc_attr_t *aa = &a->attrs[i];
+        const deck_dvc_attr_t *bb = &b->attrs[i];
+        if (strcmp(aa->atom, bb->atom) != 0) return 20;
+        if (aa->type != bb->type)            return 21;
+        if (aa->type == DVC_ATTR_LIST_STR &&
+            aa->value.list_str.count != bb->value.list_str.count) return 22;
+    }
+    for (uint16_t i = 0; i < a->child_count; i++) {
+        int rc = deck_dvc_tree_same_shape(a->children[i], b->children[i]);
+        if (rc) return rc;
+    }
+    return 0;
+}
+
 /* ---------- selftest ---------- */
 
 deck_err_t deck_dvc_selftest(void)
