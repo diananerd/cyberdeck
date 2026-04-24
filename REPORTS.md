@@ -2721,3 +2721,213 @@ Diff: 1 file, +2 / −4.
 Build is green throughout; the runtime, bridge, loader, fixtures and demo.deck all align to the five-pillar spec where the spec is authoritative and declare their known gaps where they cannot.
 
 Each remaining stage is its own concept. Build is green throughout; every stage closes with an atomic commit and hardware test (`idf.py build` passing on reference HW).
+
+---
+
+## Post-alignment follow-up batch (Stages A–E)
+
+Session scope: the five follow-up items the alignment checkpoint named as
+"not part of the 13-stage plan" — all closed in a single commit chain.
+
+### Concept #80.stage-A — bridge.ui vtable wired end-to-end (commit `3030b51`)
+
+Stage 6 stratified the SDI bridge.ui vtable into 4 bands × 22 methods
+but only 4 slots (`init`, `push_snapshot`, `clear`, `confirm`) had
+bodies. This fills the remaining 18 slots with functional
+implementations so `@use "bridge.ui"` resolution methods return OK
+instead of NOT_SUPPORTED.
+
+New overlays in `deck_bridge_ui_overlays.c`:
+- `progress_show/set/hide` — `lv_bar` on a backdrop; negative pct runs
+  an 80 ms marquee tick.
+- `choice_show` — modal list of rows, tap → `on_pick(index)`.
+- `multiselect_show` — toggles + DONE button. SDI multiselect cb is a
+  plain completion ping (no selection payload); the overlay owns the
+  selection state, adapter frees it.
+- `keyboard_show/hide` — LVGL keyboard + textarea on `lv_layer_top`.
+  Kind atom (`text`/`text_lower`/`number`/`pin`/`special`) picks the
+  keymap; READY and CANCEL both dismiss.
+
+Visibility toggles in statusbar.c / navbar.c: `set_visible(bool)`
+flips `LV_OBJ_FLAG_HIDDEN` so the dock keeps its refresh timer alive.
+
+Shell-injected handlers (`set_lock_handler` / `set_theme_handler`)
+avoid a `deck_shell ↔ deck_bridge_ui` cycle. The shell registers them
+at boot; `set_locked(true)` routes to `deck_shell_lockscreen_lock`,
+`set_theme(atom)` stores the atom and notifies the handler for a
+future repaint. `set_brightness` threads through
+`hal_backlight_set(level > 0.01)` — on/off until PWM dimming lands in
+the HAL. `set_rotation` delegates to the existing rotation wrapper.
+`set_badge` logs (reference bridge has no per-app pill surface).
+Date / permission / share route through `confirm_cb` with ALLOW/DENY
+or OK/CANCEL labels.
+
+Diff: 6 files, +878 / −6. Binary 1469008 bytes (+14656 vs stage 10).
+
+### Concept #80.stage-B — shell consults @on back before popping (commit `154ae59`)
+
+§14.8 says the runtime's `@on back` handler steers the gesture. Stage
+7 landed the value-interpreting dispatcher; the shell never called it.
+`deck_shell_navbar_back` now:
+
+1. Looks up the top activity's app_id in the new
+   `deck_shell_deck_apps_handle(app_id)` table. C-side launcher apps
+   return NULL and fall through to the default pop.
+2. Calls `deck_runtime_app_back(handle)`. Acts on the sync result:
+   `HANDLED` stays; `CONFIRMED` defers (resolver pops later on user
+   pick); `UNHANDLED`/`ERROR` fall through to the default pop.
+
+New singleton `deck_runtime_set_back_resolved_handler(cb)` fires when
+a `:confirm` dialog resolves. The shell registers `back_resolved_cb`
+which pops iff the outcome is `UNHANDLED`. Before this stage the
+static `s_back_resolved` was written but never read; now it drives
+navigation.
+
+Diff: 5 files, +77 / −10. Binary 1470224 bytes (+1216 vs A).
+
+### Concept #80.stage-C — bridge diff PATCH path live (commit `66bce75`)
+
+Stage 8 shipped the decision table but treated every same-state
+frame as REBUILD. This adds the real PATCH.
+
+`deck_dvc_tree_same_shape(a, b)` — new comparator in `deck_dvc.c`.
+Matches type/flags/intent_id/attr_count/child_count/attr-atom/
+attr-type across every node, but NOT attr *values*. Two trees
+differing only in leaf values (label text, slider position, toggle
+state) are same_shape and PATCHable.
+
+New `deck_bridge_ui_patch.c` with three entry points:
+- `patch_begin` / `patch_record` / `patch_snapshot` — pre-order widget
+  recorder. Every `render_*` dispatch is wrapped in a tiny
+  `record(n, render_X(...))` shim in `deck_bridge_ui_decode.c`, so
+  the primary widget for each node is recorded at render time.
+- `patch_apply(old, new, entries)` — walks both trees in sync with
+  the widget array, updating leaf attrs via `lv_label_set_text`,
+  `lv_slider_set_value`, `lv_bar_set_value`, `LV_STATE_CHECKED`, etc.
+  Returns nonzero on any unsupported diff; caller falls back to
+  REBUILD as conformant behavior.
+
+Bridge slot cache in `deck_bridge_ui.c` grew to carry two alternating
+decode arenas (so the previous tree survives the next decode) plus
+the widget map captured at the last REBUILD/REPLACE/PUSH render. A
+20-byte envelope peek routes the new decode into the correct slot.
+After a successful PATCH the recorded entries are remapped to point
+at the new tree's nodes (shape guarantees pre-order alignment),
+keeping them live across the arena rotation.
+
+Supported leaf diffs (others bail to REBUILD, correctness preserved):
+- `LABEL.value` / `RICH_TEXT.value` / `MARKDOWN.value`
+- `TRIGGER/NAVIGATE.label` / `.disabled`
+- `TOGGLE/SWITCH.value` — `LV_STATE_CHECKED`
+- `SLIDER.value` — `lv_slider_set_value`
+- `PROGRESS.value` — `lv_bar_set_value`
+- `DATA_ROW.label` / `.value` — caption/value labels
+
+Diff: 7 files, +542 / −69. Binary 1472480 bytes (+2256 vs B).
+
+### Concept #80.stage-D — stream.* cold runtime (commit `3eb42b1`)
+
+Stage 5d-ii registered the stream.* builtin names as stubs panicking
+"DL3 not wired". This lands the **cold** stream runtime: stream
+values carry a retained list of already-emitted items, every
+composition operator walks the list eagerly and returns a new
+stream.
+
+New `DECK_T_STREAM` value type (`deck_stream_t { list*, terminated }`)
+and the `deck_new_stream_from_list` internal constructor. Retain/
+release walks into the inner list. Added to `deck_type_name`,
+`is_truthy`, and `release_children`.
+
+Live operators (and their `_io` variants):
+`stream.map` / `filter` / `each` / `distinct` / `skip` / `take` /
+`take_while` / `scan`.
+
+Still DL3 (one dispatcher `b_stream_need_scheduler` with a clearer
+message):
+`stream.throttle` / `debounce` / `delay` / `merge` / `combine` /
+`buffer` / `window` — all require per-stream state + timer ticks.
+
+Apps don't construct streams directly; streams come from services
+via `@on source <stream>`. No service produces a stream today, so
+the cold runtime is dormant until one does — at which point the
+composition chain is live end-to-end.
+
+Diff: 5 files, +263 / −31. Binary 1474096 bytes (+1616 vs C).
+
+### Concept #80.stage-E — five reference apps (commit `09ddb75`)
+
+Stage 11 from the alignment plan. Five fresh `.deck` apps exercising
+LANG §15 semantic-intent primitives. Every app is declarative content
+only — no `column`/`row`/`card`/`status_bar`, no `font`/`style`/
+`variant`, no `bridge.ui.*` calls.
+
+- `apps/launcher.deck` — catalog → `navigate` intent per entry.
+- `apps/taskman.deck` — `storage.nvs` persistence, compose form +
+  toggle rows, `@on trigger_*` handlers.
+- `apps/settings.deck` — `choice` + `toggle` + `range` controls for
+  theme / rotation / brightness / idle-lock / OTA.
+- `apps/files.deck` — `storage.fs` browser with `@on back` returning
+  `:handled` when drilled into a subdirectory.
+- `apps/bluesky.deck` — `network.http` feed fetch into a 3-state
+  machine (loading / loaded / failed); `rich_text` + `status` list.
+
+Content vocabulary exercised: `group list list_item form text toggle
+range choice trigger navigate rich_text status loading error`. Service
+capabilities declared via `@needs.services` + `@grants.services` +
+`@use` alias per CAPABILITIES.md.
+
+These apps are spec-first. A handful of features (`content = fn`
+bodies, `@on trigger_*`, `Machine.replace`, `:some` pattern in
+on-enter match) may lag the runtime as of this session. Per
+`CLAUDE.md`: "If code and spec disagree, the spec is right." Those
+gaps become runtime tickets, not app rewrites.
+
+Diff: 5 files added, +409. Binary unchanged (no runtime change).
+
+### Session checkpoint — post-alignment batch closed
+
+| Commit | Stage | Scope |
+|---|---|---|
+| `3030b51` | A | 18 new slots in the SDI bridge.ui vtable |
+| `154ae59` | B | shell consults `deck_runtime_app_back` |
+| `66bce75` | C | same-shape leaf-attr PATCH path |
+| `3eb42b1` | D | cold-stream runtime (8/15 operators live) |
+| `09ddb75` | E | 5 reference apps (launcher/tasks/settings/files/bluesky) |
+
+Build green at every step (`idf.py build`). Final binary 1474096 bytes
+(well under the 1572864-byte size guard; 59% of the app partition
+free).
+
+**Known runtime gaps exposed by the new reference apps** (not fixed in
+this batch, filed as future tickets):
+
+1. `content = …` body on a machine state: the loader + interpreter
+   currently recognise the keyword but some advanced nested primitives
+   (`for in ... do`, string interpolation inside attr values,
+   `if then else` in intent payloads) may need type-checker or
+   evaluator work.
+2. `@on trigger_<intent_atom>` with payload-typed parameters
+   (`trigger_mark(id: str)`): the shell's intent hook dispatches
+   `@on trigger_<numeric_id>` today; parameterised event names are a
+   spec feature the runtime does not yet expose.
+3. `Machine.replace(new_state)` / `Machine.send(:event(payload))` —
+   the machine API exposed to Deck apps is currently sparser than
+   what the spec-first apps assume.
+4. Full `:confirm` round-trip through the shell resolver is untested
+   on hardware — the C-path is wired (stage B) but no hardware
+   verification happened this session.
+
+**Stage F (hardware verification) not performed in this session.** Per
+user-memory note *"Done = hardware verified — compilar NO es done;
+done = funciona en la placa"*, a real hardware test requires the user
+to flash + monitor + verify visually. This session ships build-green
+commits only; running the apps on the reference board is the next
+step. Invocation:
+
+```
+idf.py -p /dev/cu.usbmodem1101 flash monitor
+```
+
+Expected observation per-app: logs emitted at each state's `on enter`
+plus the renderer walking the content tree. Any runtime gap surfaced
+there becomes a dedicated concept.
