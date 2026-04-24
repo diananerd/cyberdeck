@@ -182,6 +182,19 @@ static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload);
  * (way below) so they can access the slot array. */
 static deck_value_t *b_machine_send (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+/* Stage 5d-iii — option.* / result.* builtins registered before their
+ * definitions (BARE_BUILTINS sits further down). */
+static deck_value_t *b_to_some    (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_is_some    (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_is_none    (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_to_ok      (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_to_err     (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_is_ok      (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_is_err     (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_unwrap     (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_unwrap_or  (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_map_ok     (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_and_then   (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 
 /* Concept #47 — intent binding table + app struct moved forward so
  * content_render (concept #46) can access app->intents directly. */
@@ -5534,6 +5547,27 @@ static const builtin_t BUILTINS[] = {
     { "json.encode",            b_json_encode,         1, 1 },
     { "json.encode_pretty",     b_json_encode_pretty,  1, 1 },
 
+    /* Stage 5d-iii — BUILTINS §14 option.* + §15 result.* namespaces.
+     * The bare `unwrap` / `is_ok` / `map_ok` / etc. are removed from
+     * BARE_BUILTINS; every combinator now lives under option.* or
+     * result.*. Wiring reuses the same b_* implementations. */
+    { "option.some",          b_to_some,     1, 1 },
+    { "option.none",          b_to_some,     0, 0 },   /* arg-0 → deck_new_none in helper */
+    { "option.is_some",       b_is_some,     1, 1 },
+    { "option.is_none",       b_is_none,     1, 1 },
+    { "option.unwrap_or",     b_unwrap_or,   2, 2 },
+    { "option.map",           b_map_ok,      2, 2 },
+    { "option.and_then",      b_and_then,    2, 2 },
+
+    { "result.ok",            b_to_ok,       1, 1 },
+    { "result.err",           b_to_err,      1, 1 },
+    { "result.is_ok",         b_is_ok,       1, 1 },
+    { "result.is_err",        b_is_err,      1, 1 },
+    { "result.unwrap",        b_unwrap,      1, 1 },
+    { "result.unwrap_or",     b_unwrap_or,   2, 2 },
+    { "result.map",           b_map_ok,      2, 2 },
+    { "result.and_then",      b_and_then,    2, 2 },
+
     /* Stage 5d-ii — stream.* (BUILTINS §12). DECK_T_STREAM is DL3 and
      * not yet carried by the runtime; these are stubs that panic :bug
      * on call. Registered here so method-name lookup resolves and
@@ -5730,15 +5764,11 @@ static const builtin_t BARE_BUILTINS[] = {
     { "bool",  b_to_bool,  1, 1 },
     { "some",  b_to_some,  1, 1 },   /* DL2 F21.9 — Optional constructor */
 
-    /* DL2 F22 — Result constructors + helpers. */
-    { "ok",       b_to_ok,    1, 1 },
-    { "err",      b_to_err,   1, 1 },
-    { "is_ok",    b_is_ok,    1, 1 },
-    { "is_err",   b_is_err,   1, 1 },
-    { "unwrap",    b_unwrap,    1, 1 },
-    { "unwrap_or", b_unwrap_or, 2, 2 },   /* polymorphic — §11.5 post-#20 */
-    { "map_ok",   b_map_ok,   2, 2 },
-    { "and_then", b_and_then, 2, 2 },
+    /* Stage 5d-iii — bare `ok` / `err` / `is_ok` / `unwrap` / etc.
+     * moved to namespaced option.* / result.* modules per BUILTINS
+     * §14 / §15. Legacy bare `some` retained above because it's the
+     * commonly-written Optional constructor that reads like atomic
+     * syntax; everything else is reached via the module path. */
 
     /* DL2 F22 — type inspection. */
     { "type_of", b_type_of, 1, 1 },

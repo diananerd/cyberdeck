@@ -38,25 +38,25 @@
   let res_ok  = :ok 42
   let res_err = :err "boom"
 
-  let ok_q     = is_ok(res_ok) and is_err(res_err)
-             and not is_ok(res_err) and not is_err(res_ok)
+  let ok_q     = result.is_ok(res_ok) and result.is_err(res_err)
+             and not result.is_ok(res_err) and not result.is_err(res_ok)
 
-  -- unwrap: :ok v -> v (spec §11.5); :err runs runtime error — we
+  -- result.unwrap: :ok v -> v (BUILTINS §15); :err runs runtime error — we
   -- test only the happy path here, error-path lives in err_* fixtures.
-  let ok_unwr  = unwrap(res_ok) == 42
+  let ok_unwr  = result.unwrap(res_ok) == 42
 
-  -- map_ok transforms :ok, passes :err through.
-  let mapped1  = map_ok(res_ok,  x -> x + 1)
-  let mapped2  = map_ok(res_err, x -> x + 1)
-  let ok_mapok = unwrap(mapped1) == 43 and is_err(mapped2)
+  -- result.map transforms :ok, passes :err through.
+  let mapped1  = result.map(res_ok,  x -> x + 1)
+  let mapped2  = result.map(res_err, x -> x + 1)
+  let ok_mapok = result.unwrap(mapped1) == 43 and result.is_err(mapped2)
 
-  -- and_then chains Result operations.
-  let chained = and_then(:ok 10, n -> :ok (n * 2))
-  let ok_chain = unwrap(chained) == 20
+  -- result.and_then chains Result operations.
+  let chained = result.and_then(:ok 10, n -> :ok (n * 2))
+  let ok_chain = result.unwrap(chained) == 20
 
-  -- ---- Optional helpers (§11.6) ----
-  let ok_unwrap_or = unwrap_or(:some 7, 0) == 7
-                and unwrap_or(:none, 99)   == 99
+  -- ---- Optional helpers (BUILTINS §14) ----
+  let ok_unwrap_or = option.unwrap_or(:some 7, 0) == 7
+                and option.unwrap_or(:none, 99)   == 99
 
   -- ---- Type inspection (§11.8) ----
   let ok_tof  = type_of(42)       == :int
