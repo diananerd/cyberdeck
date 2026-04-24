@@ -4,7 +4,7 @@
   version: "1.0.0"
   edition: 2026
 
-@requires
+@needs
   deck_level: 1
 
 -- Coverage goal: `01-deck-lang §8` pattern matching — exhaustive,

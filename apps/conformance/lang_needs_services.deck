@@ -1,18 +1,18 @@
 @app
-  name: "Conf lang.requires.caps"
-  id: "conf.lang.requires.caps"
+  name: "Conf lang.needs.services"
+  id: "conf.lang.needs.services"
   version: "1.0.0"
   edition: 2026
 
--- Coverage goal: `@requires.capabilities` map form (§4A.1). Old
+-- Coverage goal: `@needs.capabilities` map form (§4A.1). Old
 -- version used `capabilities: [log, math, time, http]` as a list —
 -- §4A uses a map with version constraints: `cap.path: "version-range"`
 -- (or `"any"` or `optional`). Also `deck_os: 1` must be the string
 -- `">= 1"` for range syntax.
 --
 -- log/math/time are builtins (§03 §3) — always in scope, NOT capabilities.
--- They do not appear in @requires.capabilities.
-@requires
+-- They do not appear in @needs.capabilities.
+@needs
   deck_level: 1
   deck_os:    ">= 1"
   runtime:    ">= 1.0"
@@ -21,12 +21,12 @@
     fs:     ">= 1"
 
 @on launch:
-  -- Builtins (math, log, time) work without @use and without @requires.
+  -- Builtins (math, log, time) work without @use and without @needs.
   let r1 = math.abs(-7) + 1
   let ok_math = r1 == 8
 
   -- Required capabilities are accessible by their canonical names.
-  -- (The @requires block above means the loader validates them but
+  -- (The @needs block above means the loader validates them but
   -- we don't have @use aliases yet — apps typically add `@use nvs as
   -- nvs` too. For this DL1 probe we just confirm the required-block
   -- parsed without error.)
@@ -34,4 +34,4 @@
 
   let ok = ok_math and ok_loaded
 
-  log.info(if ok then "DECK_CONF_OK:lang.requires.caps" else "DECK_CONF_FAIL:lang.requires.caps")
+  log.info(if ok then "DECK_CONF_OK:lang.needs.services" else "DECK_CONF_FAIL:lang.needs.services")

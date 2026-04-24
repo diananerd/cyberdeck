@@ -5,7 +5,7 @@
   version: "1.0.0"
   edition: 2026
 
-@requires
+@needs
   deck_level: 1
 
 # between app and on launch

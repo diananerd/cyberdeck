@@ -78,8 +78,8 @@ typedef enum {
     AST_MODULE,
     AST_TYPE_DEF,    /* DL2 F22.2 — @type X { fields } */
     AST_ASSETS,      /* DL2 F28.5 — @assets name: "path" ... */
-    AST_MIGRATION,   /* DL2 F28.4 — @migration from N: body ... */
-    AST_REQUIRES,    /* Spec 02-deck-app §4A — top-level @requires block.
+    AST_MIGRATE,     /* LANG §17 — @migrate from N: body ... */
+    AST_NEEDS,       /* LANG §8 — top-level @needs block.
                       * Shares ast_app_field_t layout with AST_APP; parsed
                       * as a sibling to @app, not as a nested field. */
 } ast_kind_t;
@@ -317,17 +317,17 @@ struct ast_node {
             uint32_t     n_entries;
         } assets;
 
-        /* DL2 F28.4 — @migration from N: <body> entries. from_versions
-         * is an int64 array of the N keys in source order; bodies is a
-         * parallel array of AST bodies (each a AST_DO or single stmt).
-         * At app_load the runtime reads the NVS-stored version for this
-         * app and runs bodies whose key >= stored_version in ascending
-         * order, then writes back max(key)+1. */
+        /* LANG §17 — @migrate from N: <body> entries. from_versions is
+         * an int64 array of the N keys in source order; bodies is a
+         * parallel array of AST bodies. At app_load the runtime reads
+         * the NVS-stored version for this app and runs bodies whose key
+         * >= stored_version in ascending order, then writes back
+         * max(key)+1. */
         struct {
             int64_t     *from_versions;
             ast_node_t **bodies;
             uint32_t     n_entries;
-        } migration;
+        } migrate;
     } as;
 };
 

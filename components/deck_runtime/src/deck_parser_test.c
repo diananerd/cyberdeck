@@ -94,7 +94,7 @@ static const parser_case_t CASES[] = {
     { "mod_app_req",  TEST_MODULE,
       "@app\n"
       "  name: \"X\"\n"
-      "\n@requires\n"
+      "\n@needs\n"
       "  deck_level: 1\n",
       "(module (app (name (str \"X\"))) (requires (deck_level (int 1))))" },
     { "mod_on",       TEST_MODULE,
@@ -155,7 +155,7 @@ static const parser_case_t CASES[] = {
       "  if n <= 1 then 1 else n * fact(n - 1)\n",
       "(module (fn fact (params n) (do (if (binop <= (ident n) (int 1)) (int 1) (binop * (ident n) (call (ident fact) (binop - (ident n) (int 1))))))))" },
 
-    /* --- DL2 F28: opaque blocks (@flow/@migration/@assets still parse-only,
+    /* --- DL2 F28: opaque blocks (@flow/@migrate/@assets still parse-only,
      * @machine.before / @machine.after now produce AST_ON with reserved
      * event names and are executed around each machine transition) --- */
     { "mod_machine_before", TEST_MODULE,
@@ -173,10 +173,10 @@ static const parser_case_t CASES[] = {
       "  step welcome:\n"
       "    log.info(\"hi\")\n",
       "(module (machine signup (state welcome (state_hook enter (do (call (dot (ident log) info) (str \"hi\")))))))" },
-    /* @migration — version migration block (F28.4: fully parsed; runtime
+    /* @migrate — version migration block (F28.4: fully parsed; runtime
      * runs bodies whose N >= stored NVS version at app_load). */
     { "mod_migration", TEST_MODULE,
-      "@migration\n"
+      "@migrate\n"
       "  from 1:\n"
       "    log.info(\"migrating\")\n",
       "(module (migration (from 1 (do (call (dot (ident log) info) (str \"migrating\"))))))" },
@@ -192,7 +192,7 @@ static const parser_case_t CASES[] = {
     /* Inline option after label: `trigger "go" badge: 3`. */
     { "content_opt_inline", TEST_MODULE,
       "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
-      "@requires\n  deck_level: 1\n"
+      "@needs\n  deck_level: 1\n"
       "@machine m\n"
       "  state main:\n"
       "    content =\n"
@@ -204,7 +204,7 @@ static const parser_case_t CASES[] = {
      * lambda rule (§7.1) doesn't consume the arrow. */
     { "content_tail_arrow", TEST_MODULE,
       "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
-      "@requires\n  deck_level: 1\n"
+      "@needs\n  deck_level: 1\n"
       "@machine m\n"
       "  state main:\n"
       "    content =\n"
@@ -215,7 +215,7 @@ static const parser_case_t CASES[] = {
     /* `on [atom]? -> action` form used by form submit + input intents. */
     { "content_on_arrow", TEST_MODULE,
       "@app\n  name: \"X\"\n  id: \"y\"\n  version: \"1.0.0\"\n  edition: 2026\n"
-      "@requires\n  deck_level: 1\n"
+      "@needs\n  deck_level: 1\n"
       "@machine m\n"
       "  state main:\n"
       "    content =\n"

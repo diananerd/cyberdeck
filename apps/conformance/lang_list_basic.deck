@@ -4,7 +4,7 @@
   version: "1.0.0"
   edition: 2026
 
-@requires
+@needs
   deck_level: 1
 
 -- Coverage goal: list literal + core list stdlib (§11.2). Old version

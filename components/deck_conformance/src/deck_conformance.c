@@ -194,11 +194,11 @@ static deck_test_t DECK_TESTS[] = {
     { "lang.with.update", "/conformance/lang_with_update.deck", "DECK_CONF_OK:lang.with.update", DECK_RT_OK, false, 0, 0, 0, 0, {0}, 0 },
 
     /* DL2 F22.9 + F23.4 + F23.6 + F23.7 — @private, @use.optional,
-     * @permissions, @errors metadata blocks. */
+     * @grants, @errors metadata blocks. */
     { "lang.metadata",    "/conformance/lang_metadata.deck",    "DECK_CONF_OK:lang.metadata",    DECK_RT_OK, false, 0, 0, 0, 0, {0}, 0 },
 
-    /* DL2 F23.5 — @requires.capabilities list. */
-    { "lang.requires.caps","/conformance/lang_requires_caps.deck","DECK_CONF_OK:lang.requires.caps",DECK_RT_OK, false, 0, 0, 0, 0, {0}, 0 },
+    /* LANG §8 — @needs.services / @needs.caps list. */
+    { "lang.needs.services","/conformance/lang_needs_services.deck","DECK_CONF_OK:lang.needs.services",DECK_RT_OK, false, 0, 0, 0, 0, {0}, 0 },
 
     /* Negative tests — loader/interp must reject with the expected code. */
     { "errors.level_below_required", "/conformance/err_level_high.deck",  NULL,
@@ -238,7 +238,7 @@ static deck_test_t DECK_TESTS[] = {
     { "errors.effect_undeclared", "/conformance/err_effect_undeclared.deck", NULL,
       DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, 0, {0}, 0 },
 
-    /* DL2 F23.5 — @requires.capabilities lists an unknown cap. */
+    /* DL2 F23.5 — @needs.capabilities lists an unknown cap. */
     { "errors.required_cap_unknown", "/conformance/err_required_cap_unknown.deck", NULL,
       DECK_LOAD_CAPABILITY_MISSING, false, 0, 0, 0, 0, {0}, 0 },
 

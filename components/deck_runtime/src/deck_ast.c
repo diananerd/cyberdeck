@@ -78,8 +78,8 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_MODULE:      return "module";
         case AST_TYPE_DEF:    return "type_def";
         case AST_ASSETS:      return "assets";
-        case AST_REQUIRES:    return "requires";
-        case AST_MIGRATION:   return "migration";
+        case AST_NEEDS:       return "needs";
+        case AST_MIGRATE:     return "migrate";
         default:              return "?";
     }
 }
@@ -254,7 +254,7 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
             sp_putc(p, ' '); print_node(p, n->as.fndef.body);
             break;
         case AST_APP:
-        case AST_REQUIRES:
+        case AST_NEEDS:
             for (uint32_t i = 0; i < n->as.app.n_fields; i++) {
                 sp_printf(p, " (%s ", n->as.app.fields[i].name);
                 print_node(p, n->as.app.fields[i].value);
@@ -314,11 +314,11 @@ static void print_node(sprinter_t *p, const ast_node_t *n)
                           n->as.assets.paths[i] ? n->as.assets.paths[i] : "");
             }
             break;
-        case AST_MIGRATION:
-            for (uint32_t i = 0; i < n->as.migration.n_entries; i++) {
+        case AST_MIGRATE:
+            for (uint32_t i = 0; i < n->as.migrate.n_entries; i++) {
                 sp_printf(p, " (from %lld ",
-                          (long long)n->as.migration.from_versions[i]);
-                print_node(p, n->as.migration.bodies[i]);
+                          (long long)n->as.migrate.from_versions[i]);
+                print_node(p, n->as.migrate.bodies[i]);
                 sp_putc(p, ')');
             }
             break;

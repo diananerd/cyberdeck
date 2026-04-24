@@ -75,7 +75,7 @@ const char *deck_err_message(deck_err_t err)
         case DECK_LOAD_SIGNATURE_INVALID:      return "bundle signature does not validate";
         case DECK_LOAD_UNKNOWN_SIGNER:         return "bundle signer not recognized";
         case DECK_LOAD_BUNDLE_CORRUPT:         return "bundle hash mismatch";
-        case DECK_LOAD_MIGRATION_FAILED:       return "@migration step failed";
+        case DECK_LOAD_MIGRATION_FAILED:       return "@migrate step failed";
         case DECK_LOAD_NO_MEMORY:              return "insufficient heap to load app";
         case DECK_LOAD_INTERNAL:               return "load internal error";
         default:                               return "unknown error";

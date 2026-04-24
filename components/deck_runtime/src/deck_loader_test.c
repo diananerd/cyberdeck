@@ -25,7 +25,7 @@ typedef struct {
     "  id: \"sys.hello\"\n" \
     "  version: \"1.0.0\"\n" \
     "  edition: 2026\n" \
-    "\n@requires\n" \
+    "\n@needs\n" \
     "  deck_level: 1\n"
 
 static const loader_case_t CASES[] = {
@@ -120,7 +120,7 @@ static const loader_case_t CASES[] = {
       "  id: \"x\"\n"
       "  version: \"1.0.0\"\n"
       "  edition: 2026\n"
-      "\n@requires\n"
+      "\n@needs\n"
       "  deck_level: 3\n",
       DECK_LOAD_LEVEL_BELOW_REQUIRED, 6 },
 
@@ -131,7 +131,7 @@ static const loader_case_t CASES[] = {
       "  id: \"y\"\n"
       "  version: \"1.0.0\"\n"
       "  edition: 2026\n"
-      "\n@requires\n"
+      "\n@needs\n"
       "  deck_level: 99\n",
       DECK_LOAD_LEVEL_UNKNOWN, 6 },
 
@@ -142,7 +142,7 @@ static const loader_case_t CASES[] = {
       "  id: \"y\"\n"
       "  version: \"1.0.0\"\n"
       "  edition: 2099\n"
-      "\n@requires\n"
+      "\n@needs\n"
       "  deck_level: 1\n",
       DECK_LOAD_INCOMPATIBLE_EDITION, 6 },
 

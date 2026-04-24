@@ -108,7 +108,7 @@ static bool t_time_duration(const char *name)
     "  id: \"y\"\n" \
     "  version: \"1.0.0\"\n" \
     "  edition: 2026\n" \
-    "\n@requires\n" \
+    "\n@needs\n" \
     "  deck_level: 1\n"
 
 static bool t_hello(const char *name)
@@ -322,9 +322,9 @@ static bool t_app_dispatch(const char *name)
     return true;
 }
 
-/* DL2 F28.4 — @migration runs at app_load, driven by NVS-stored version.
+/* DL2 F28.4 — @migrate runs at app_load, driven by NVS-stored version.
  * Delete the migration tracking key first to get a clean run; then load
- * an app that has `@migration from 0:` setting a sentinel NVS value, and
+ * an app that has `@migrate from 0:` setting a sentinel NVS value, and
  * assert the sentinel was written.
  *
  * The app_id hash for "mig.test" is deterministic (FNV32), so the
@@ -346,10 +346,10 @@ static bool t_migration(const char *name)
         "  id: \"mig.test\"\n"
         "  version: \"1.0.0\"\n"
         "  edition: 2026\n"
-        "\n@requires\n"
+        "\n@needs\n"
         "  deck_level: 1\n"
         "\n"
-        "@migration\n"
+        "@migrate\n"
         "  from 0:\n"
         "    nvs.set(\"ran\", \"v0\")\n"
         "\n"
@@ -395,7 +395,7 @@ static bool t_migration(const char *name)
     "  id: \"conf.cpi\"\n" \
     "  version: \"1.0.0\"\n" \
     "  edition: 2026\n" \
-    "\n@requires\n" \
+    "\n@needs\n" \
     "  deck_level: 1\n"
 
 static bool t_intent_captured_action(const char *name)
@@ -499,7 +499,7 @@ static bool t_named_call_args(const char *name)
         "  id: \"t.nc\"\n"
         "  version: \"1\"\n"
         "  edition: 2026\n"
-        "@requires\n"
+        "@needs\n"
         "  deck_level: 1\n"
         "fn sub (a, b) = a - b\n"
         "@on launch:\n"

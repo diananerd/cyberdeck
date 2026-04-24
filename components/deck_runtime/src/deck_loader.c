@@ -46,24 +46,24 @@ static const ast_node_t *find_app(const ast_node_t *mod)
     return NULL;
 }
 
-/* Spec 02-deck-app §4A — @requires is a top-level sibling of @app.
- * The parser yields an AST_REQUIRES node whose `as.app.fields` layout
+/* Spec 02-deck-app §4A — @needs is a top-level sibling of @app.
+ * The parser yields an AST_NEEDS node whose `as.app.fields` layout
  * mirrors AST_APP. */
-static const ast_node_t *find_requires(const ast_node_t *mod)
+static const ast_node_t *find_needs(const ast_node_t *mod)
 {
     if (!mod || mod->kind != AST_MODULE) return NULL;
     for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
         const ast_node_t *it = mod->as.module.items.items[i];
-        if (it && it->kind == AST_REQUIRES) return it;
+        if (it && it->kind == AST_NEEDS) return it;
     }
     return NULL;
 }
 
-/* Accepts AST_APP or AST_REQUIRES — both share the ast_app_field_t layout. */
+/* Accepts AST_APP or AST_NEEDS — both share the ast_app_field_t layout. */
 static const ast_app_field_t *find_field(const ast_node_t *node, const char *name)
 {
     if (!node) return NULL;
-    if (node->kind != AST_APP && node->kind != AST_REQUIRES) return NULL;
+    if (node->kind != AST_APP && node->kind != AST_NEEDS) return NULL;
     for (uint32_t i = 0; i < node->as.app.n_fields; i++) {
         if (node->as.app.fields[i].name &&
             strcmp(node->as.app.fields[i].name, name) == 0)
@@ -93,8 +93,8 @@ static void extract_app_metadata(deck_loader_t *l, const ast_node_t *app)
     l->required_deck_level = 1;   /* default if not specified */
     l->required_deck_os    = 1;
 
-    /* 02-deck-app §4A — @requires is a top-level sibling of @app. */
-    const ast_node_t *req = find_requires(l->module);
+    /* 02-deck-app §4A — @needs is a top-level sibling of @app. */
+    const ast_node_t *req = find_needs(l->module);
     if (req) {
         const ast_app_field_t *dlf = find_field(req, "deck_level");
         const ast_app_field_t *dof = find_field(req, "deck_os");
@@ -527,7 +527,7 @@ static void stage5_exhaustiveness(deck_loader_t *l)
 /* DL2 F23.5 — capabilities the runtime *advertises* (currently built-in
  * + DL2 names that the spec promises and apps can declare-require even
  * if the dispatch isn't wired yet). Apps that USE an unimplemented cap
- * still error at the dot-chain CALL check; @requires.capabilities is a
+ * still error at the dot-chain CALL check; @needs.capabilities is a
  * coarse declaration. */
 static bool cap_advertised(const char *name)
 {
@@ -546,16 +546,16 @@ static void check_required_capabilities(deck_loader_t *l)
 {
     /* Spec 02-deck-app §4A — capabilities: nested block of
      *   capability.path: "version_range"
-     * The parser yields an AST_REQUIRES child whose fields carry the
+     * The parser yields an AST_NEEDS child whose fields carry the
      * dotted capability names. */
-    const ast_node_t *req = find_requires(l->module);
+    const ast_node_t *req = find_needs(l->module);
     if (!req) return;
     const ast_app_field_t *caps = find_field(req, "capabilities");
     if (!caps || !caps->value) return;
     const ast_node_t *block = caps->value;
-    if (block->kind != AST_REQUIRES) {
+    if (block->kind != AST_NEEDS) {
         set_err(l, DECK_LOAD_TYPE_ERROR, 6, block->line, block->col,
-                "@requires.capabilities must be an indented block of "
+                "@needs.capabilities must be an indented block of "
                 "`name: \"version_range\"` entries (see 02-deck-app §4A)");
         return;
     }
@@ -566,14 +566,14 @@ static void check_required_capabilities(deck_loader_t *l)
             set_err(l, DECK_LOAD_TYPE_ERROR, 6,
                     f->value ? f->value->line : 0,
                     f->value ? f->value->col  : 0,
-                    "@requires.capabilities entry missing name");
+                    "@needs.capabilities entry missing name");
             return;
         }
         if (!cap_advertised(name)) {
             set_err(l, DECK_LOAD_CAPABILITY_MISSING, 6,
                     f->value ? f->value->line : 0,
                     f->value ? f->value->col  : 0,
-                    "@requires.capabilities lists '%s' which is not advertised",
+                    "@needs.capabilities lists '%s' which is not advertised",
                     name);
             return;
         }
@@ -598,7 +598,7 @@ static void stage6_compat(deck_loader_t *l)
     }
     if (l->required_deck_level < 1 || l->required_deck_level > 3) {
         set_err(l, DECK_LOAD_LEVEL_UNKNOWN, 6, 1, 1,
-                "@requires.deck_level %d is not a valid conformance level (1..3)",
+                "@needs.deck_level %d is not a valid conformance level (1..3)",
                 l->required_deck_level);
         return;
     }
@@ -618,7 +618,7 @@ static void stage6_compat(deck_loader_t *l)
     /* All DL1 caps are DL1-or-higher, so this is a no-op at DL1 today.
      * Wiring left here for when DL2 caps are added (http, wifi, etc.). */
 
-    /* DL2 F23.5 — verify @requires.capabilities list against runtime. */
+    /* DL2 F23.5 — verify @needs.capabilities list against runtime. */
     check_required_capabilities(l);
 }
 

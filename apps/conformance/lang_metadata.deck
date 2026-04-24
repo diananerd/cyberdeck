@@ -4,21 +4,21 @@
   version: "1.0.0"
   edition: 2026
 
-@requires
+@needs
   deck_level: 1
 
 -- Coverage goal: spec-canonical metadata annotations —
--- `@use`, `@permissions`, `@errors`, `@private` (§02 §4–§7, §10.2).
+-- `@use`, `@grants`, `@errors`, `@private` (§02 §4–§7, §10.2).
 -- Old version used non-spec forms:
 --   - `@use log` (no alias) — §4 requires `name as alias`
 --   - `@use.optional crypto` — §4 is `crypto as alias  optional`
---   - `@permissions` with `cap: required` — §5 is `cap reason: "…"`
+--   - `@grants` with `cap: required` — §5 is `cap reason: "…"`
 --   - `@errors` without domain name — §7 is `@errors domain_name`
 
 @use
   crypto.aes as aes  optional
 
-@permissions
+@grants
   crypto.aes  reason: "Encrypt local notes"
 
 @errors sensor

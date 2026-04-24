@@ -6977,11 +6977,11 @@ deck_err_t deck_runtime_app_intent(deck_runtime_app_t *app, uint32_t intent_id)
     return deck_runtime_app_intent_v(app, intent_id, NULL, 0);
 }
 
-/* ----- DL2 F28.4: @migration runner ------------------------------------
+/* ----- DL2 F28.4: @migrate runner ------------------------------------
  *
  * Called at app_load after fn pre-binding and before @on launch. Reads
  * the stored schema version for this app from NVS, runs every
- * `@migration from N:` body where `N >= stored` in ascending order of
+ * `@migrate from N:` body where `N >= stored` in ascending order of
  * N, then writes back the new high-water mark.
  *
  * NVS layout:
@@ -7014,9 +7014,9 @@ static void run_migrations(struct deck_runtime_app *app)
     const ast_node_t *mig = NULL;
     for (uint32_t i = 0; i < app->ld.module->as.module.items.len; i++) {
         const ast_node_t *it = app->ld.module->as.module.items.items[i];
-        if (it && it->kind == AST_MIGRATION) { mig = it; break; }
+        if (it && it->kind == AST_MIGRATE) { mig = it; break; }
     }
-    if (!mig || mig->as.migration.n_entries == 0) return;
+    if (!mig || mig->as.migrate.n_entries == 0) return;
     if (!app->ld.app_id || !*app->ld.app_id) {
         ESP_LOGW(TAG, "migration: app has no id — skipping");
         return;
@@ -7039,13 +7039,13 @@ static void run_migrations(struct deck_runtime_app *app)
      * (DECK_MIGRATION_MAX), so insertion sort with a 16-slot stack array
      * is fine. */
     uint32_t order[16];
-    const uint32_t n = mig->as.migration.n_entries;
+    const uint32_t n = mig->as.migrate.n_entries;
     for (uint32_t i = 0; i < n; i++) order[i] = i;
     for (uint32_t a = 1; a < n; a++) {
         uint32_t v = order[a];
-        int64_t  vk = mig->as.migration.from_versions[v];
+        int64_t  vk = mig->as.migrate.from_versions[v];
         int j = (int)a - 1;
-        while (j >= 0 && mig->as.migration.from_versions[order[j]] > vk) {
+        while (j >= 0 && mig->as.migrate.from_versions[order[j]] > vk) {
             order[j + 1] = order[j];
             j--;
         }
@@ -7055,11 +7055,11 @@ static void run_migrations(struct deck_runtime_app *app)
     int64_t new_high = stored;
     bool any_ran = false;
     for (uint32_t i = 0; i < n; i++) {
-        int64_t fv = mig->as.migration.from_versions[order[i]];
+        int64_t fv = mig->as.migrate.from_versions[order[i]];
         if (fv < stored) continue;
         ESP_LOGI(TAG, "migration %s: from %lld", app->ld.app_id, (long long)fv);
         deck_value_t *r = deck_interp_run(&app->ctx, app->ctx.global,
-                                          mig->as.migration.bodies[order[i]]);
+                                          mig->as.migrate.bodies[order[i]]);
         if (r) deck_release(r);
         if (app->ctx.err != DECK_RT_OK) {
             ESP_LOGE(TAG, "migration from %lld failed: %s — aborting",
@@ -7121,7 +7121,7 @@ deck_err_t deck_runtime_app_load(const char *src, uint32_t len,
         }
     }
 
-    /* DL2 F28.4 — run any applicable @migration bodies BEFORE @on launch
+    /* DL2 F28.4 — run any applicable @migrate bodies BEFORE @on launch
      * so the launch body sees the post-migration NVS / FS state. */
     if (app->ctx.err == DECK_RT_OK) {
         run_migrations(app);

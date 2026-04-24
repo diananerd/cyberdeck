@@ -1399,14 +1399,14 @@ static bool dec_is(const deck_token_t *t, const char *name)
 }
 
 static ast_node_t *parse_app_block(deck_parser_t *p);
-static ast_node_t *parse_requires_decl(deck_parser_t *p);
+static ast_node_t *parse_needs_decl(deck_parser_t *p);
 static ast_node_t *parse_use_decl(deck_parser_t *p);
 static ast_node_t *parse_on_decl(deck_parser_t *p);
 static ast_node_t *parse_machine_decl(deck_parser_t *p);
 static ast_node_t *parse_machine_hook_decl(deck_parser_t *p, const char *event);
 static ast_node_t *parse_assets_decl(deck_parser_t *p);
 static ast_node_t *parse_flow_decl(deck_parser_t *p);
-static ast_node_t *parse_migration_decl(deck_parser_t *p);
+static ast_node_t *parse_migrate_decl(deck_parser_t *p);
 
 /* @app
  *   name:    "..."
@@ -1416,14 +1416,14 @@ static ast_node_t *parse_migration_decl(deck_parser_t *p);
  *
  * Spec 02-deck-app §3: @app is identity-only. Every field is a scalar
  * expression (str/int/list literal). Version contracts live in a sibling
- * `@requires` block (§4A), never nested inside @app. The parser rejects
+ * `@needs` block (§4A), never nested inside @app. The parser rejects
  * nested blocks inside @app with a clear spec pointer so authors migrate.
  */
 static bool parse_scalar_fields(deck_parser_t   *p,
                                 ast_app_field_t **out,
                                 uint32_t         *out_n,
                                 const char       *owner);
-static bool parse_requires_fields(deck_parser_t   *p,
+static bool parse_needs_fields(deck_parser_t   *p,
                                   ast_app_field_t **out,
                                   uint32_t         *out_n);
 
@@ -1439,7 +1439,7 @@ static ast_node_t *parse_app_block(deck_parser_t *p)
     return n;
 }
 
-/* @requires
+/* @needs
  *   deck_level: 2
  *   deck_os:    ">= 2"
  *   runtime:    ">= 1.0"
@@ -1448,19 +1448,19 @@ static ast_node_t *parse_app_block(deck_parser_t *p)
  *     storage.local: "any"
  *
  * Top-level per 02-deck-app §4A. Fields may be scalars or a single-level
- * nested block (`capabilities:`). The parser produces an AST_REQUIRES
+ * nested block (`capabilities:`). The parser produces an AST_NEEDS
  * node reusing AST_APP's ast_app_field_t layout; the nested block is
- * stored as a child AST_REQUIRES value. The loader reads whichever
+ * stored as a child AST_NEEDS value. The loader reads whichever
  * arrangement the source uses. */
-static ast_node_t *parse_requires_decl(deck_parser_t *p)
+static ast_node_t *parse_needs_decl(deck_parser_t *p)
 {
-    ast_node_t *n = mknode(p, AST_REQUIRES); if (!n) return NULL;
-    advance(p); /* @requires */
-    if (!expect(p, TOK_NEWLINE, "expected newline after @requires")) return NULL;
+    ast_node_t *n = mknode(p, AST_NEEDS); if (!n) return NULL;
+    advance(p); /* @needs */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @needs")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
-    if (!expect(p, TOK_INDENT, "expected indented @requires body")) return NULL;
-    if (!parse_requires_fields(p, &n->as.app.fields, &n->as.app.n_fields)) return NULL;
-    if (!expect(p, TOK_DEDENT, "expected dedent closing @requires")) return NULL;
+    if (!expect(p, TOK_INDENT, "expected indented @needs body")) return NULL;
+    if (!parse_needs_fields(p, &n->as.app.fields, &n->as.app.n_fields)) return NULL;
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @needs")) return NULL;
     return n;
 }
 
@@ -1485,14 +1485,15 @@ static bool parse_scalar_fields(deck_parser_t    *p,
             : "expected ':' after field name";
         if (!expect(p, TOK_COLON, emsg)) return false;
         if (at(p, TOK_NEWLINE)) {
-            /* Reject nested blocks — spec §3 @app is identity-only.
-             * The common mistake is writing `requires:` nested inside
-             * @app; point authors at §4A's top-level @requires form. */
+            /* Reject nested blocks — @app is identity-only.
+             * The common mistake is writing `needs:` nested inside
+             * @app; point authors at the top-level @needs form. */
             if (strcmp(owner, "@app") == 0 &&
-                strcmp(name, "requires") == 0) {
+                (strcmp(name, "needs") == 0 ||
+                 strcmp(name, "requires") == 0)) {
                 set_err(p, DECK_LOAD_PARSE_ERROR,
-                        "`requires:` must be a top-level `@requires` "
-                        "annotation (see 02-deck-app §4A), not a nested "
+                        "`needs:` must be a top-level `@needs` "
+                        "annotation (LANG §8), not a nested "
                         "field inside @app");
             } else {
                 set_err(p, DECK_LOAD_PARSE_ERROR,
@@ -1512,7 +1513,7 @@ static bool parse_scalar_fields(deck_parser_t    *p,
     return true;
 }
 
-static bool parse_requires_fields(deck_parser_t   *p,
+static bool parse_needs_fields(deck_parser_t   *p,
                                   ast_app_field_t **out,
                                   uint32_t         *out_n)
 {
@@ -1520,7 +1521,7 @@ static bool parse_requires_fields(deck_parser_t   *p,
     uint32_t n = 0;
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF) && n < 32) {
         if (!at(p, TOK_IDENT)) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name in @requires");
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected field name in @needs");
             return false;
         }
         const char *name = p->cur.text;
@@ -1532,7 +1533,7 @@ static bool parse_requires_fields(deck_parser_t   *p,
             advance(p);
             if (!at(p, TOK_IDENT)) {
                 set_err(p, DECK_LOAD_PARSE_ERROR,
-                        "expected ident after '.' in @requires key");
+                        "expected ident after '.' in @needs key");
                 return false;
             }
             if (k < sizeof(scratch) - 1) scratch[k++] = '.';
@@ -1541,19 +1542,19 @@ static bool parse_requires_fields(deck_parser_t   *p,
             advance(p);
         }
         const char *full_name = deck_intern(scratch, k);
-        if (!expect(p, TOK_COLON, "expected ':' after @requires field name")) return false;
+        if (!expect(p, TOK_COLON, "expected ':' after @needs field name")) return false;
         ast_node_t *val = NULL;
         if (at(p, TOK_NEWLINE)) {
             /* Nested block (capabilities:). One level of nesting only. */
             advance(p);
             while (at(p, TOK_NEWLINE)) advance(p);
-            if (!expect(p, TOK_INDENT, "expected indented nested block in @requires")) return false;
-            ast_node_t *nested = ast_new(p->arena, AST_REQUIRES,
+            if (!expect(p, TOK_INDENT, "expected indented nested block in @needs")) return false;
+            ast_node_t *nested = ast_new(p->arena, AST_NEEDS,
                                          p->cur.line, p->cur.col);
             if (!nested) return false;
-            if (!parse_requires_fields(p, &nested->as.app.fields,
+            if (!parse_needs_fields(p, &nested->as.app.fields,
                                        &nested->as.app.n_fields)) return false;
-            if (!expect(p, TOK_DEDENT, "expected dedent in @requires nested block")) return false;
+            if (!expect(p, TOK_DEDENT, "expected dedent in @needs nested block")) return false;
             val = nested;
         } else {
             val = parse_expr_prec(p, 0);
@@ -1972,9 +1973,9 @@ static ast_node_t *parse_flow_decl(deck_parser_t *p)
     return m;
 }
 
-/* DL2 F28.4 — `@migration from N: <body>` blocks.
+/* DL2 F28.4 — `@migrate from N: <body>` blocks.
  *
- *   @migration
+ *   @migrate
  *     from 0:
  *       log.info("0 → 1")
  *     from 1:
@@ -1989,13 +1990,13 @@ static ast_node_t *parse_flow_decl(deck_parser_t *p)
  * Max 16 entries per block — 16 migration steps is plenty for any app
  * that ships over a reasonable lifetime. */
 #define DECK_MIGRATION_MAX   16
-static ast_node_t *parse_migration_decl(deck_parser_t *p)
+static ast_node_t *parse_migrate_decl(deck_parser_t *p)
 {
-    ast_node_t *n = mknode(p, AST_MIGRATION); if (!n) return NULL;
-    advance(p); /* @migration */
-    if (!expect(p, TOK_NEWLINE, "expected newline after @migration")) return NULL;
+    ast_node_t *n = mknode(p, AST_MIGRATE); if (!n) return NULL;
+    advance(p); /* @migrate */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @migrate")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
-    if (!expect(p, TOK_INDENT, "expected indented @migration body")) return NULL;
+    if (!expect(p, TOK_INDENT, "expected indented @migrate body")) return NULL;
 
     int64_t      versions[DECK_MIGRATION_MAX];
     ast_node_t  *bodies[DECK_MIGRATION_MAX];
@@ -2003,11 +2004,11 @@ static ast_node_t *parse_migration_decl(deck_parser_t *p)
 
     while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
         if (k >= DECK_MIGRATION_MAX) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @migration entries (max 16)");
+            set_err(p, DECK_LOAD_PARSE_ERROR, "too many @migrate entries (max 16)");
             return NULL;
         }
         if (!at(p, TOK_IDENT) || strcmp(p->cur.text, "from") != 0) {
-            set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'from' in @migration body");
+            set_err(p, DECK_LOAD_PARSE_ERROR, "expected 'from' in @migrate body");
             return NULL;
         }
         advance(p); /* from */
@@ -2023,14 +2024,14 @@ static ast_node_t *parse_migration_decl(deck_parser_t *p)
         k++;
         while (at(p, TOK_NEWLINE)) advance(p);
     }
-    if (!expect(p, TOK_DEDENT, "expected dedent closing @migration body")) return NULL;
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @migrate body")) return NULL;
 
     if (k > 0) {
-        n->as.migration.from_versions = deck_arena_memdup(p->arena, versions, k * sizeof(int64_t));
-        n->as.migration.bodies        = deck_arena_memdup(p->arena, bodies,   k * sizeof(ast_node_t *));
-        if (!n->as.migration.from_versions || !n->as.migration.bodies) return NULL;
+        n->as.migrate.from_versions = deck_arena_memdup(p->arena, versions, k * sizeof(int64_t));
+        n->as.migrate.bodies        = deck_arena_memdup(p->arena, bodies,   k * sizeof(ast_node_t *));
+        if (!n->as.migrate.from_versions || !n->as.migrate.bodies) return NULL;
     }
-    n->as.migration.n_entries = k;
+    n->as.migrate.n_entries = k;
     return n;
 }
 
@@ -2723,13 +2724,13 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     return n;
 }
 
-/* DL2 F23.6 / F23.7 — `@permissions` and `@errors` are documented as
+/* DL2 F23.6 / F23.7 — `@grants` and `@errors` are documented as
  * indented blocks of `key: value` entries. F23 minimum: parse and
  * discard (metadata for future shell prompts / runtime cataloging). */
 /* DL2 F28 — opaque indented block: consumes tokens until matching DEDENT,
  * returns a benign stub. Used for decorators whose body is not
  * interpreted today (@machine.before/.after, @flow, @flow.step,
- * @migration, @assets). The decorator name is logged for the loader
+ * @migrate, @assets). The decorator name is logged for the loader
  * to surface in `info` / debug. Runtime semantics land post-DL2. */
 static ast_node_t *parse_opaque_block(deck_parser_t *p)
 {
@@ -2758,10 +2759,10 @@ static ast_node_t *parse_opaque_block(deck_parser_t *p)
 
 static ast_node_t *parse_metadata_block(deck_parser_t *p)
 {
-    /* Spec 02-deck-app §5 (@permissions) and §7 (@errors) — parsed
+    /* Spec 02-deck-app §5 (@grants) and §7 (@errors) — parsed
      * and discarded at this layer (metadata for future runtime use).
      * Entry shapes the spec admits:
-     *   @permissions
+     *   @grants
      *     capability.path   reason: "Human description"
      *   @errors <domain_ident>
      *     :variant   "Description"
@@ -2771,7 +2772,7 @@ static ast_node_t *parse_metadata_block(deck_parser_t *p)
      * The loader doesn't consume metadata today, so verbatim skip is
      * spec-equivalent — and it keeps fixtures that use either shape
      * from tripping a parser error while the runtime is at DL2. */
-    advance(p); /* @permissions or @errors */
+    advance(p); /* @grants or @errors */
     /* Optional inline ident argument (e.g. `@errors sensor`). */
     while (at(p, TOK_IDENT) || at(p, TOK_DOT)) advance(p);
     if (!expect(p, TOK_NEWLINE, "expected newline after metadata decorator")) return NULL;
@@ -2852,7 +2853,7 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
     }
     if (at(p, TOK_DECORATOR)) {
         if      (dec_is(&p->cur, "app"))            return parse_app_block(p);
-        else if (dec_is(&p->cur, "requires"))       return parse_requires_decl(p); /* 02-deck-app §4A */
+        else if (dec_is(&p->cur, "needs"))          return parse_needs_decl(p); /* LANG §8 */
         else if (dec_is(&p->cur, "use"))            return parse_use_decl(p);
         else if (dec_is(&p->cur, "use.optional"))   return parse_use_decl(p);   /* DL2 F23.4 */
         else if (dec_is(&p->cur, "on"))             return parse_on_decl(p);
@@ -2861,10 +2862,10 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         else if (dec_is(&p->cur, "machine.after"))  return parse_machine_hook_decl(p, "__machine_after");   /* F28.1 */
         else if (dec_is(&p->cur, "flow"))           return parse_flow_decl(p);     /* F28.2 */
         else if (dec_is(&p->cur, "flow.step"))      return parse_opaque_block(p);  /* F28.2 — unused outside @flow */
-        else if (dec_is(&p->cur, "migration"))      return parse_migration_decl(p); /* F28.4 */
+        else if (dec_is(&p->cur, "migrate"))        return parse_migrate_decl(p); /* LANG §17 */
         else if (dec_is(&p->cur, "assets"))         return parse_assets_decl(p);   /* F28.5 */
         else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
-        else if (dec_is(&p->cur, "permissions"))    return parse_metadata_block(p);  /* F23.6 */
+        else if (dec_is(&p->cur, "grants"))         return parse_metadata_block(p);  /* LANG §10 (Stage 5b wires structured parsing) */
         else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */
         /* Spec-declared top-level annotations the runtime parses-and-
          * discards until real semantics land. Accepting them here keeps
