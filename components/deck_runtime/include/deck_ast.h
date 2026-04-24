@@ -82,6 +82,11 @@ typedef enum {
     AST_NEEDS,       /* LANG §8 — top-level @needs block.
                       * Shares ast_app_field_t layout with AST_APP; parsed
                       * as a sibling to @app, not as a nested field. */
+    AST_GRANTS,      /* LANG §10 — @grants with per-entry option bags. */
+    AST_CONFIG,      /* LANG §12 — @config with typed defaults + bounds. */
+    AST_ERRORS,      /* LANG §2.4 — @errors <domain> + :variant str pairs. */
+    AST_HANDLES,     /* LANG §19 — @handles with deep-link URL patterns. */
+    AST_SERVICE,     /* LANG §18 — @service "<id>" with allow/keep + methods. */
 } ast_kind_t;
 
 typedef enum {
@@ -328,6 +333,63 @@ struct ast_node {
             ast_node_t **bodies;
             uint32_t     n_entries;
         } migrate;
+
+        /* Stage 5b — LANG §10 @grants. Each entry is a named group of
+         * `key: expr` option pairs (reason/prompt/persist/paths/...).
+         * `names` carries the dotted path as written (`services.fs`,
+         * `location`, `logging`). `options_offset` + `n_options` window
+         * into a flat ast_content_option_t pool. */
+        struct {
+            const char **names;            /* arena-owned, length n_entries */
+            uint32_t    *options_offset;   /* start in options[] per entry */
+            uint32_t    *n_options;        /* length per entry */
+            ast_content_option_t *options; /* flat pool */
+            uint32_t     n_entries;
+            uint32_t     options_total;
+        } grants;
+
+        /* Stage 5b — LANG §12 @config. Each entry: name, optional type
+         * annotation (parsed-and-discarded as a raw source span), a
+         * default-value expression, and a bag of constraint options
+         * (min/max/min_length/max_length/min_items/max_items/in). */
+        struct {
+            const char  **names;           /* length n_entries */
+            ast_node_t  **defaults;        /* parallel */
+            uint32_t     *options_offset;
+            uint32_t     *n_options;
+            ast_content_option_t *options;
+            uint32_t      n_entries;
+            uint32_t      options_total;
+        } config;
+
+        /* Stage 5b — LANG §2.4 @errors <domain>. Atom-variant list.
+         * `domain` is the dotted namespace as written
+         * ("api", "fs", "network.http"). descriptions are the quoted
+         * doc strings following each :variant. */
+        struct {
+            const char  *domain;           /* interned */
+            const char **variants;         /* length n_variants */
+            const char **descriptions;     /* parallel; NULL if omitted */
+            uint32_t     n_variants;
+        } errors;
+
+        /* Stage 5b — LANG §19 @handles. Flat list of URL patterns as
+         * the app declares them. Deep-link resolver consumes these. */
+        struct {
+            const char **patterns;         /* length n_patterns */
+            uint32_t     n_patterns;
+        } handles;
+
+        /* Stage 5b — LANG §18 @service "<id>". `allow_expr` is the raw
+         * expression on the `allow:` line (may be :any / :system / a
+         * list literal; evaluated by the OS at bind time). `methods` is
+         * a list of AST_ON nodes, one per `on :name (params) ...`. */
+        struct {
+            const char   *service_id;      /* quoted-string literal */
+            ast_node_t   *allow_expr;      /* may be NULL */
+            bool          keep;            /* from `keep:` */
+            ast_list_t    methods;         /* AST_ON entries */
+        } service;
     } as;
 };
 

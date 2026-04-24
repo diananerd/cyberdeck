@@ -2724,6 +2724,369 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
     return n;
 }
 
+/* ================================================================
+ * Stage 5b — structured parsers for @grants / @config / @errors /
+ *            @handles / @service
+ *
+ * All five previously routed to parse_opaque_block (bodies discarded)
+ * or parse_metadata_block (best-effort skip). These replace the skip
+ * with real AST binding per LANG.md §10 / §12 / §2.4 / §19 / §18, so
+ * downstream stages (6b stub services, 7 @on back routing, 8 bridge
+ * diff using @handles URL matching) have structured data to consume.
+ * ================================================================ */
+
+/* Small option-pair accumulator reused across @grants / @config. Each
+ * option is `key: expr` where key is an interned ident and expr is a
+ * full Deck expression. */
+typedef struct {
+    ast_content_option_t *items;
+    uint32_t              len;
+    uint32_t              cap;
+} opt_buf_t;
+
+static bool opt_buf_push(deck_parser_t *p, opt_buf_t *b, const char *key, ast_node_t *val)
+{
+    if (b->len >= b->cap) {
+        uint32_t nc = b->cap ? b->cap * 2 : 8;
+        ast_content_option_t *ni = deck_arena_alloc(p->arena, nc * sizeof(*ni));
+        if (!ni) { set_err(p, DECK_LOAD_RESOURCE, "option buf alloc"); return false; }
+        if (b->items) memcpy(ni, b->items, b->len * sizeof(*ni));
+        b->items = ni; b->cap = nc;
+    }
+    b->items[b->len].key = key;
+    b->items[b->len].value = val;
+    b->len++;
+    return true;
+}
+
+/* Accept an inline dotted-ident chain and intern it as a single string
+ * ("services.fs", "location", "system.security"). Used by @grants for
+ * entry names. Does NOT consume the trailing colon. */
+static const char *parse_dotted_name(deck_parser_t *p)
+{
+    if (!at(p, TOK_IDENT)) return NULL;
+    char buf[128];
+    uint32_t n = (uint32_t)snprintf(buf, sizeof(buf), "%s", p->cur.text);
+    advance(p);
+    while (at(p, TOK_DOT)) {
+        advance(p);
+        if (!at(p, TOK_IDENT)) return NULL;
+        n += (uint32_t)snprintf(buf + n, sizeof(buf) - n, ".%s", p->cur.text);
+        advance(p);
+    }
+    return deck_intern(buf, n);
+}
+
+/* Parse one `key: expr` pair at the current indent level. Consumes
+ * trailing NEWLINE(s) if present. Returns true on success. */
+static bool parse_kv_option(deck_parser_t *p, const char **out_key, ast_node_t **out_val)
+{
+    if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected key name"); return false; }
+    *out_key = p->cur.text;
+    advance(p);
+    if (!expect(p, TOK_COLON, "expected ':' after option key")) return false;
+    ast_node_t *expr = deck_parser_parse_expr(p);
+    if (!expr) return false;
+    *out_val = expr;
+    skip_newlines(p);
+    return true;
+}
+
+/* ---- @grants (LANG §10) -----------------------------------------
+ *   @grants
+ *     <dotted_name>:
+ *       <key>: <expr>
+ *       ...
+ *     <dotted_name>:
+ *       ...
+ */
+static ast_node_t *parse_grants_decl(deck_parser_t *p)
+{
+    advance(p); /* @grants */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @grants")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    ast_node_t *n = mknode(p, AST_GRANTS); if (!n) return NULL;
+    n->as.grants.n_entries = 0;
+    n->as.grants.options_total = 0;
+    if (!at(p, TOK_INDENT)) return n;  /* empty block */
+    advance(p); /* INDENT */
+
+    const char *names[32];
+    uint32_t    offs[32];
+    uint32_t    lens[32];
+    uint32_t    ne = 0;
+    opt_buf_t   opts = {0};
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (ne >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @grants entries (max 32)"); return NULL; }
+        const char *name = parse_dotted_name(p);
+        if (!name) { set_err(p, DECK_LOAD_PARSE, "expected grant entry name"); return NULL; }
+        if (!expect(p, TOK_COLON, "expected ':' after grant entry name")) return NULL;
+        if (!expect(p, TOK_NEWLINE, "expected newline after grant entry ':'")) return NULL;
+        while (at(p, TOK_NEWLINE)) advance(p);
+        names[ne] = name;
+        offs[ne]  = opts.len;
+
+        if (at(p, TOK_INDENT)) {
+            advance(p);
+            while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                const char *k = NULL; ast_node_t *v = NULL;
+                if (!parse_kv_option(p, &k, &v)) return NULL;
+                if (!opt_buf_push(p, &opts, k, v)) return NULL;
+            }
+            if (!expect(p, TOK_DEDENT, "expected dedent inside grant entry")) return NULL;
+        }
+        lens[ne] = opts.len - offs[ne];
+        ne++;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @grants")) return NULL;
+
+    n->as.grants.n_entries = ne;
+    n->as.grants.options_total = opts.len;
+    if (ne) {
+        n->as.grants.names = deck_arena_memdup(p->arena, names, ne * sizeof(*names));
+        n->as.grants.options_offset = deck_arena_memdup(p->arena, offs, ne * sizeof(*offs));
+        n->as.grants.n_options = deck_arena_memdup(p->arena, lens, ne * sizeof(*lens));
+    }
+    if (opts.len) {
+        n->as.grants.options = deck_arena_memdup(p->arena, opts.items,
+                                                  opts.len * sizeof(*opts.items));
+    }
+    return n;
+}
+
+/* ---- @config (LANG §12) -----------------------------------------
+ *   @config
+ *     <name> : <type> = <default> [key: expr ...]
+ *
+ * We parse-and-discard the type annotation (use the existing
+ * skip_type_annotation helper), then demand `=` followed by a default
+ * expression. Constraint options (min/max/min_length/...) are captured
+ * into the same ast_content_option_t pool shape used by @grants.
+ */
+static ast_node_t *parse_config_decl(deck_parser_t *p)
+{
+    advance(p); /* @config */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @config")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    ast_node_t *n = mknode(p, AST_CONFIG); if (!n) return NULL;
+    n->as.config.n_entries = 0;
+    n->as.config.options_total = 0;
+    if (!at(p, TOK_INDENT)) return n;
+    advance(p);
+
+    const char *names[32];
+    ast_node_t *defs[32];
+    uint32_t    offs[32];
+    uint32_t    lens[32];
+    uint32_t    ne = 0;
+    opt_buf_t   opts = {0};
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (ne >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @config entries (max 32)"); return NULL; }
+        if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected config field name"); return NULL; }
+        names[ne] = p->cur.text;
+        advance(p);
+        if (!expect(p, TOK_COLON, "expected ':' after @config field")) return NULL;
+        if (!skip_type_annotation(p)) return NULL;
+        if (!expect(p, TOK_EQ, "expected '=' before @config default")) return NULL;
+        defs[ne] = deck_parser_parse_expr(p);
+        if (!defs[ne]) return NULL;
+        offs[ne] = opts.len;
+        while (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+            const char *k = NULL; ast_node_t *v = NULL;
+            if (!parse_kv_option(p, &k, &v)) return NULL;
+            if (!opt_buf_push(p, &opts, k, v)) return NULL;
+        }
+        lens[ne] = opts.len - offs[ne];
+        ne++;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @config")) return NULL;
+
+    n->as.config.n_entries = ne;
+    n->as.config.options_total = opts.len;
+    if (ne) {
+        n->as.config.names = deck_arena_memdup(p->arena, names, ne * sizeof(*names));
+        n->as.config.defaults = deck_arena_memdup(p->arena, defs, ne * sizeof(*defs));
+        n->as.config.options_offset = deck_arena_memdup(p->arena, offs, ne * sizeof(*offs));
+        n->as.config.n_options = deck_arena_memdup(p->arena, lens, ne * sizeof(*lens));
+    }
+    if (opts.len) {
+        n->as.config.options = deck_arena_memdup(p->arena, opts.items,
+                                                  opts.len * sizeof(*opts.items));
+    }
+    return n;
+}
+
+/* ---- @errors <domain> (LANG §2.4) -------------------------------
+ *   @errors <domain_ident>
+ *     :variant1 "description"
+ *     :variant2 "description"
+ *     ...
+ */
+static ast_node_t *parse_errors_decl(deck_parser_t *p)
+{
+    advance(p); /* @errors */
+    const char *domain = parse_dotted_name(p);
+    if (!domain) { set_err(p, DECK_LOAD_PARSE, "expected @errors <domain>"); return NULL; }
+    if (!expect(p, TOK_NEWLINE, "expected newline after @errors domain")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+
+    ast_node_t *n = mknode(p, AST_ERRORS); if (!n) return NULL;
+    n->as.errors.domain = domain;
+    n->as.errors.n_variants = 0;
+
+    if (!at(p, TOK_INDENT)) return n;
+    advance(p);
+
+    const char *vs[64];
+    const char *ds[64];
+    uint32_t    nv = 0;
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (nv >= 64) { set_err(p, DECK_LOAD_PARSE, "too many @errors variants (max 64)"); return NULL; }
+        if (!at(p, TOK_ATOM)) { set_err(p, DECK_LOAD_PARSE, "expected :atom variant in @errors"); return NULL; }
+        vs[nv] = p->cur.text;
+        advance(p);
+        if (at(p, TOK_STRING)) {
+            ds[nv] = p->cur.text;
+            advance(p);
+        } else {
+            ds[nv] = NULL;
+        }
+        nv++;
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @errors")) return NULL;
+
+    n->as.errors.n_variants = nv;
+    if (nv) {
+        n->as.errors.variants     = deck_arena_memdup(p->arena, vs, nv * sizeof(*vs));
+        n->as.errors.descriptions = deck_arena_memdup(p->arena, ds, nv * sizeof(*ds));
+    }
+    return n;
+}
+
+/* ---- @handles (LANG §19) ----------------------------------------
+ *   @handles
+ *     "bsky://profile/{handle}"
+ *     "https://bsky.app/profile/{handle}"
+ */
+static ast_node_t *parse_handles_decl(deck_parser_t *p)
+{
+    advance(p); /* @handles */
+    if (!expect(p, TOK_NEWLINE, "expected newline after @handles")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+
+    ast_node_t *n = mknode(p, AST_HANDLES); if (!n) return NULL;
+    n->as.handles.n_patterns = 0;
+    if (!at(p, TOK_INDENT)) return n;
+    advance(p);
+
+    const char *ps[32];
+    uint32_t np = 0;
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        if (np >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @handles patterns (max 32)"); return NULL; }
+        if (!at(p, TOK_STRING)) { set_err(p, DECK_LOAD_PARSE, "expected URL pattern string in @handles"); return NULL; }
+        ps[np++] = p->cur.text;
+        advance(p);
+        while (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @handles")) return NULL;
+
+    n->as.handles.n_patterns = np;
+    if (np) n->as.handles.patterns = deck_arena_memdup(p->arena, ps, np * sizeof(*ps));
+    return n;
+}
+
+/* ---- @service "<id>" (LANG §18) ---------------------------------
+ *   @service "<service-id>"
+ *     allow: <expr>
+ *     keep:  <bool>
+ *
+ *     on :method_name (params)
+ *       -> ReturnType !
+ *       = body
+ *
+ * Methods reuse parse_on_decl since the grammar is identical ("on :atom
+ * (params) -> T ! = body"). Only the containing construct differs.
+ */
+static ast_node_t *parse_service_decl(deck_parser_t *p)
+{
+    advance(p); /* @service */
+    if (!at(p, TOK_STRING)) { set_err(p, DECK_LOAD_PARSE, "expected quoted service id after @service"); return NULL; }
+    const char *sid = p->cur.text;
+    advance(p);
+    if (!expect(p, TOK_NEWLINE, "expected newline after @service id")) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+
+    ast_node_t *n = mknode(p, AST_SERVICE); if (!n) return NULL;
+    n->as.service.service_id = sid;
+    n->as.service.allow_expr = NULL;
+    n->as.service.keep = false;
+    ast_list_init(&n->as.service.methods);
+
+    if (!at(p, TOK_INDENT)) return n;
+    advance(p);
+
+    while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+        /* allow: / keep: */
+        if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+            const char *k = p->cur.text;
+            advance(p); advance(p); /* ident : */
+            if (strcmp(k, "allow") == 0) {
+                ast_node_t *e = deck_parser_parse_expr(p);
+                if (!e) return NULL;
+                n->as.service.allow_expr = e;
+            } else if (strcmp(k, "keep") == 0) {
+                if (at(p, TOK_KW_TRUE))       { n->as.service.keep = true;  advance(p); }
+                else if (at(p, TOK_KW_FALSE)) { n->as.service.keep = false; advance(p); }
+                else { set_err(p, DECK_LOAD_PARSE, "keep: expects true/false"); return NULL; }
+            } else {
+                /* Unknown key — accept with expression to stay forward-
+                 * compatible; discard. */
+                ast_node_t *e = deck_parser_parse_expr(p);
+                if (!e) return NULL;
+            }
+            while (at(p, TOK_NEWLINE)) advance(p);
+            continue;
+        }
+        /* on :method — reuse parse_on_decl. The parser sees TOK_DECORATOR
+         * for "@on", but inside @service methods the spec syntax is
+         * `on :name (params) ... = body` (no leading @). parse_on_decl
+         * expects a leading "@on" decorator token. For minimal structural
+         * coverage, skip any `on ...` body at the correct indent depth. */
+        if (at(p, TOK_IDENT) && strcmp(p->cur.text, "on") == 0) {
+            /* Consume `on :atom (...) ... = body`. We're not fully
+             * validating the method here — Stage 5b ensures the
+             * envelope parses; method-level binding lands when service
+             * dispatch is wired (later stage). */
+            int depth = 0;
+            while (!at(p, TOK_EOF)) {
+                if (at(p, TOK_INDENT)) { depth++; advance(p); continue; }
+                if (at(p, TOK_DEDENT)) {
+                    if (depth == 0) break;
+                    depth--; advance(p); continue;
+                }
+                if (depth == 0 && at(p, TOK_NEWLINE)) {
+                    advance(p);
+                    if (!at(p, TOK_INDENT)) break;
+                    continue;
+                }
+                advance(p);
+            }
+            continue;
+        }
+        /* Stray content — skip to next newline to stay resilient. */
+        while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)) advance(p);
+        if (at(p, TOK_NEWLINE)) advance(p);
+    }
+    if (!expect(p, TOK_DEDENT, "expected dedent closing @service")) return NULL;
+    return n;
+}
+
 /* DL2 F23.6 / F23.7 — `@grants` and `@errors` are documented as
  * indented blocks of `key: value` entries. F23 minimum: parse and
  * discard (metadata for future shell prompts / runtime cataloging). */
@@ -2754,47 +3117,6 @@ static ast_node_t *parse_opaque_block(deck_parser_t *p)
     }
     ast_node_t *stub = mknode(p, AST_USE);
     if (stub) { stub->as.use.module = "__metadata"; stub->as.use.is_optional = true; }
-    return stub;
-}
-
-static ast_node_t *parse_metadata_block(deck_parser_t *p)
-{
-    /* Spec 02-deck-app §5 (@grants) and §7 (@errors) — parsed
-     * and discarded at this layer (metadata for future runtime use).
-     * Entry shapes the spec admits:
-     *   @grants
-     *     capability.path   reason: "Human description"
-     *   @errors <domain_ident>
-     *     :variant   "Description"
-     *     :variant   "Description"
-     * Rather than hard-code both grammars (and reject the one that
-     * doesn't match), swallow everything up to the matching DEDENT.
-     * The loader doesn't consume metadata today, so verbatim skip is
-     * spec-equivalent — and it keeps fixtures that use either shape
-     * from tripping a parser error while the runtime is at DL2. */
-    advance(p); /* @grants or @errors */
-    /* Optional inline ident argument (e.g. `@errors sensor`). */
-    while (at(p, TOK_IDENT) || at(p, TOK_DOT)) advance(p);
-    if (!expect(p, TOK_NEWLINE, "expected newline after metadata decorator")) return NULL;
-    while (at(p, TOK_NEWLINE)) advance(p);
-    if (!at(p, TOK_INDENT)) {
-        /* Empty body — accept. */
-        ast_node_t *stub = mknode(p, AST_USE);
-        if (stub) { stub->as.use.module = "__metadata"; stub->as.use.is_optional = true; }
-        return stub;
-    }
-    advance(p); /* INDENT */
-    int depth = 1;
-    while (depth > 0 && !at(p, TOK_EOF)) {
-        if      (at(p, TOK_INDENT)) { depth++; advance(p); }
-        else if (at(p, TOK_DEDENT)) { depth--; advance(p); }
-        else                         { advance(p); }
-    }
-    ast_node_t *stub = mknode(p, AST_USE);
-    if (stub) {
-        stub->as.use.module = "__metadata";
-        stub->as.use.is_optional = true;
-    }
     return stub;
 }
 
@@ -2865,22 +3187,19 @@ static ast_node_t *parse_top_item(deck_parser_t *p)
         else if (dec_is(&p->cur, "migrate"))        return parse_migrate_decl(p); /* LANG §17 */
         else if (dec_is(&p->cur, "assets"))         return parse_assets_decl(p);   /* F28.5 */
         else if (dec_is(&p->cur, "type"))           return parse_type_decl(p);
-        else if (dec_is(&p->cur, "grants"))         return parse_metadata_block(p);  /* LANG §10 (Stage 5b wires structured parsing) */
-        else if (dec_is(&p->cur, "errors"))         return parse_metadata_block(p);  /* F23.7 */
+        else if (dec_is(&p->cur, "grants"))         return parse_grants_decl(p);   /* Stage 5b */
+        else if (dec_is(&p->cur, "errors"))         return parse_errors_decl(p);   /* Stage 5b */
+        else if (dec_is(&p->cur, "handles"))        return parse_handles_decl(p);  /* Stage 5b */
+        else if (dec_is(&p->cur, "config"))         return parse_config_decl(p);   /* Stage 5b */
+        else if (dec_is(&p->cur, "service"))        return parse_service_decl(p);  /* Stage 5b */
         /* Spec-declared top-level annotations the runtime parses-and-
-         * discards until real semantics land. Accepting them here keeps
-         * annex-style apps loadable today; each will get a dedicated
-         * concept when the runtime honours it:
-         *   @handles — deep-link patterns (§20)
-         *   @config  — typed persistent config (§6)
+         * discards until real semantics land:
          *   @stream  — reactive data sources (§10)
          *   @task    — background tasks (§14)
          *   @doc     — module / fn documentation (§17)
          *   @example — executable doctest assertion (§17)
          *   @test    — named test block (§17)
          */
-        else if (dec_is(&p->cur, "handles"))        return parse_opaque_block(p);
-        else if (dec_is(&p->cur, "config"))         return parse_opaque_block(p);
         else if (dec_is(&p->cur, "stream"))         return parse_opaque_block(p);
         else if (dec_is(&p->cur, "task"))           return parse_opaque_block(p);
         else if (dec_is(&p->cur, "doc"))            return parse_opaque_block(p);

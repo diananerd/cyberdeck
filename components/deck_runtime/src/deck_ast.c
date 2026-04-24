@@ -80,6 +80,11 @@ const char *ast_kind_name(ast_kind_t k)
         case AST_ASSETS:      return "assets";
         case AST_NEEDS:       return "needs";
         case AST_MIGRATE:     return "migrate";
+        case AST_GRANTS:      return "grants";
+        case AST_CONFIG:      return "config";
+        case AST_ERRORS:      return "errors";
+        case AST_HANDLES:     return "handles";
+        case AST_SERVICE:     return "service";
         default:              return "?";
     }
 }
