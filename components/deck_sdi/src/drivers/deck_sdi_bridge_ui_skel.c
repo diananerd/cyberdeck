@@ -74,18 +74,108 @@ deck_sdi_err_t deck_sdi_bridge_ui_clear(void)
 { void *c; const deck_sdi_bridge_ui_vtable_t *v = bui_vt(&c);
   return v ? v->clear(c) : DECK_SDI_ERR_NOT_FOUND; }
 
+/* Core resolution services — NULL slot → NOT_SUPPORTED. */
+
+#define BUI_CALL0(slot)                                                   \
+    void *c; const deck_sdi_bridge_ui_vtable_t *v = bui_vt(&c);            \
+    if (!v) return DECK_SDI_ERR_NOT_FOUND;                                 \
+    if (!v->slot) return DECK_SDI_ERR_NOT_FOUND;
+
+deck_sdi_err_t deck_sdi_bridge_ui_toast(const char *text, uint32_t duration_ms)
+{ BUI_CALL0(toast); return v->toast(c, text, duration_ms); }
+
 deck_sdi_err_t deck_sdi_bridge_ui_confirm(const char *title, const char *message,
                                            const char *ok_label,
                                            const char *cancel_label,
                                            deck_sdi_bridge_ui_cb_t on_ok,
                                            deck_sdi_bridge_ui_cb_t on_cancel,
                                            void *user_data)
-{
-    void *c; const deck_sdi_bridge_ui_vtable_t *v = bui_vt(&c);
-    if (!v || !v->confirm) return DECK_SDI_ERR_NOT_FOUND;
-    return v->confirm(c, title, message, ok_label, cancel_label,
-                      on_ok, on_cancel, user_data);
-}
+{ BUI_CALL0(confirm);
+  return v->confirm(c, title, message, ok_label, cancel_label,
+                    on_ok, on_cancel, user_data); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_loading_show(const char *label)
+{ BUI_CALL0(loading_show); return v->loading_show(c, label); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_loading_hide(void)
+{ BUI_CALL0(loading_hide); return v->loading_hide(c); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_progress_show(const char *label)
+{ BUI_CALL0(progress_show); return v->progress_show(c, label); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_progress_set(float pct)
+{ BUI_CALL0(progress_set); return v->progress_set(c, pct); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_progress_hide(void)
+{ BUI_CALL0(progress_hide); return v->progress_hide(c); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_choice_show(const char *title,
+                                               const char *const *options,
+                                               uint16_t n_options,
+                                               deck_sdi_bridge_ui_choice_cb_t on_pick,
+                                               void *user_data)
+{ BUI_CALL0(choice_show);
+  return v->choice_show(c, title, options, n_options, on_pick, user_data); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_multiselect_show(const char *title,
+                                                    const char *const *options,
+                                                    uint16_t n_options,
+                                                    const bool *initially_selected,
+                                                    deck_sdi_bridge_ui_cb_t on_done,
+                                                    void *user_data)
+{ BUI_CALL0(multiselect_show);
+  return v->multiselect_show(c, title, options, n_options,
+                              initially_selected, on_done, user_data); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_date_show(const char *title,
+                                             int64_t initial_epoch_ms,
+                                             deck_sdi_bridge_ui_cb_t on_pick,
+                                             void *user_data)
+{ BUI_CALL0(date_show);
+  return v->date_show(c, title, initial_epoch_ms, on_pick, user_data); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_share_show(const char *text, const char *url)
+{ BUI_CALL0(share_show); return v->share_show(c, text, url); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_permission_show(const char *permission_name,
+                                                   const char *rationale,
+                                                   deck_sdi_bridge_ui_cb_t on_grant,
+                                                   deck_sdi_bridge_ui_cb_t on_deny,
+                                                   void *user_data)
+{ BUI_CALL0(permission_show);
+  return v->permission_show(c, permission_name, rationale,
+                             on_grant, on_deny, user_data); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_locked(bool locked)
+{ BUI_CALL0(set_locked); return v->set_locked(c, locked); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_theme(const char *theme_atom)
+{ BUI_CALL0(set_theme); return v->set_theme(c, theme_atom); }
+
+/* Visual band. */
+
+deck_sdi_err_t deck_sdi_bridge_ui_keyboard_show(const char *kind_atom)
+{ BUI_CALL0(keyboard_show); return v->keyboard_show(c, kind_atom); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_keyboard_hide(void)
+{ BUI_CALL0(keyboard_hide); return v->keyboard_hide(c); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_statusbar(bool visible)
+{ BUI_CALL0(set_statusbar); return v->set_statusbar(c, visible); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_navbar(bool visible)
+{ BUI_CALL0(set_navbar); return v->set_navbar(c, visible); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_badge(const char *app_id, int count)
+{ BUI_CALL0(set_badge); return v->set_badge(c, app_id, count); }
+
+/* Physical-display band. */
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_rotation(int rot)
+{ BUI_CALL0(set_rotation); return v->set_rotation(c, rot); }
+
+deck_sdi_err_t deck_sdi_bridge_ui_set_brightness(float level)
+{ BUI_CALL0(set_brightness); return v->set_brightness(c, level); }
 
 /* ---------- selftest ---------- */
 
