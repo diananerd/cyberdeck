@@ -1,0 +1,98 @@
+-- taskman.deck — Stage E reference app #2.
+--
+-- Task manager: add tasks through a form, toggle completion per row,
+-- persist across launches in NVS. Demonstrates forms, toggle + text
+-- intents, list + list_item with for-in, and state-machine driven
+-- content. All layout decisions (columns, card widths, stack vs grid)
+-- are left to the bridge.
+--
+-- Deck features exercised:
+--   @app, @needs.services.storage.nvs, @use aliasing
+--   @machine with two states (browsing / composing) + :go transitions
+--   Machine.state payload binding (tasks list, draft title)
+--   content primitives: group, list, list_item, form, text, toggle,
+--                        trigger, navigate
+--   @on trigger_* handlers — the spec-compliant way to receive intents
+--   nvs.get / nvs.put — persistence
+
+@app
+  name:    "Tasks"
+  id:      "cyberdeck.taskman"
+  version: "1.0.0"
+  edition: 2027
+  entry:   App
+  icon:    "TM"
+
+@needs
+  deck_level: 1
+  services:
+    "storage.nvs": ">= 1"
+
+@grants
+  services:
+    "storage.nvs": nvs
+
+@use "storage.nvs" as nvs
+
+type Task = { id: str, title: str, done: bool }
+
+fn load () -> [Task] =
+  nvs.get("tasks", [])
+
+fn store (xs: [Task]) -> unit =
+  do
+    nvs.put("tasks", xs)
+
+fn toggle (xs: [Task], id: str) -> [Task] =
+  list.map(xs, (t) ->
+    if t.id == id then { t with done: not t.done } else t)
+
+@on launch:
+  log.info("taskman: boot")
+
+@machine taskman
+  state browsing:
+    on enter:
+      log.info("taskman: browsing")
+
+    content =
+      group "Tasks"
+        list as "items"
+          for t in Machine.state.tasks do
+            list_item
+              toggle label: t.title, value: t.done, intent: :mark(t.id)
+        trigger label: "ADD TASK", intent: :open_compose
+
+  state composing:
+    on enter:
+      log.info("taskman: composing")
+
+    content =
+      group "New task"
+        form as "new_task"
+          text   label: "Title", value: Machine.state.draft, intent: :set_draft
+          trigger label: "SAVE",   intent: :save
+          trigger label: "CANCEL", intent: :cancel
+
+  on :open_compose from :browsing to :composing
+  on :cancel       from :composing to :browsing
+  on :save         from :composing to :browsing
+
+@on trigger_mark(id: str):
+  do
+    let current = Machine.state.tasks
+    let updated = toggle(current, id)
+    store(updated)
+    Machine.replace({ tasks: updated, draft: "" })
+
+@on trigger_set_draft(v: str):
+  Machine.replace({ tasks: Machine.state.tasks, draft: v })
+
+@on trigger_save:
+  do
+    let draft = Machine.state.draft
+    let xs    = Machine.state.tasks
+    let id    = "t-{list.len(xs)}"
+    let next  = list.append(xs, { id: id, title: draft, done: false })
+    store(next)
+    Machine.replace({ tasks: next, draft: "" })

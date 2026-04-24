@@ -1,0 +1,83 @@
+-- bluesky.deck — Stage E reference app #5.
+--
+-- A minimal Bluesky timeline reader. Fetches a public feed via
+-- network.http on enter into :loaded, then renders each post as a
+-- rich_text item. Posts come through as a list; tapping one opens
+-- detail. This stays deliberately small — no auth, no reply thread,
+-- no media — and is more a demonstration of the spec's content
+-- vocabulary than a production feed reader.
+--
+-- Deck features exercised:
+--   @needs.services.network.http with `optional` + @grants aliasing
+--   @machine with three states: loading → loaded | failed
+--   content: group, list, list_item, rich_text, status, loading, error
+--   result/option unwrapping in state transitions
+
+@app
+  name:    "Bluesky"
+  id:      "cyberdeck.bluesky"
+  version: "1.0.0"
+  edition: 2027
+  entry:   App
+  icon:    "BS"
+
+@needs
+  deck_level: 1
+  services:
+    "network.http": ">= 1"
+
+@grants
+  services:
+    "network.http": http
+
+@use "network.http" as http
+
+type Post = { author: str, text: str, indexed_at: str }
+
+fn feed_url () -> str =
+  "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor=bsky.app&limit=20"
+
+@on launch:
+  log.info("bluesky: boot")
+
+@machine bluesky
+  state loading:
+    on enter:
+      do
+        log.info("bluesky: fetching feed")
+        match http.get(feed_url())
+          :some(body) then Machine.send(:ok(body))
+          :none       then Machine.send(:fail)
+
+    content =
+      loading label: "LOADING TIMELINE"
+
+  state loaded:
+    on enter:
+      log.info("bluesky: loaded {list.len(Machine.state.posts)} posts")
+
+    content =
+      group "Timeline"
+        list as "posts"
+          for p in Machine.state.posts do
+            list_item
+              rich_text value: "{p.author}: {p.text}"
+              status    value: p.indexed_at
+
+        trigger label: "REFRESH", intent: :refresh
+
+  state failed:
+    on enter:
+      log.info("bluesky: fetch failed")
+
+    content =
+      error message: "Could not load timeline."
+      trigger label: "RETRY", intent: :refresh
+
+  on :ok(body: str)   from :loading to :loaded
+  on :fail            from :loading to :failed
+  on :refresh         from :loaded  to :loading
+  on :refresh         from :failed  to :loading
+
+@on trigger_refresh:
+  Machine.send(:refresh)

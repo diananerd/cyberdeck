@@ -1,0 +1,51 @@
+-- launcher.deck — Stage E reference app #1.
+--
+-- A minimal launcher that surfaces a small catalog of installed apps
+-- and routes the user's pick to the OS via a `navigate` intent. The
+-- bridge decides the visual (grid on a 4-inch touch display, list on
+-- e-ink, speakable menu on voice). The app declares semantic intent
+-- only — no card/grid/column keywords, no font/style/variant.
+--
+-- Deck features exercised:
+--   @app identity + @needs.services on the catalog
+--   @machine with a single `browsing` state
+--   content primitives: list, list_item, navigate (intent)
+--   for-in on a catalog literal
+--   @on launch logging
+
+@app
+  name:    "Launcher"
+  id:      "cyberdeck.launcher"
+  version: "1.0.0"
+  edition: 2027
+  entry:   App
+  icon:    "LA"
+
+@needs
+  deck_level: 1
+
+@on launch:
+  log.info("launcher: boot")
+
+-- A catalog entry shape. The bridge has no opinion about layout here —
+-- it will lay each item out according to the surface's Gestalt rubric.
+type Entry = { id: str, name: str, icon: str }
+
+fn catalog () -> [Entry] =
+  [
+    { id: "taskman",  name: "TASKS",    icon: "TM" },
+    { id: "files",    name: "FILES",    icon: "FI" },
+    { id: "settings", name: "SETTINGS", icon: "SE" },
+    { id: "bluesky",  name: "BLUESKY",  icon: "BS" },
+  ]
+
+@machine launcher
+  state browsing:
+    on enter:
+      log.info("launcher: browsing")
+
+    content =
+      list as "apps"
+        for entry in catalog() do
+          list_item
+            navigate to: entry.id, label: entry.name
