@@ -45,6 +45,86 @@ static deck_sdi_err_t bui_init_impl(void *ctx)
     return deck_bridge_ui_lvgl_init();
 }
 
+/* BRIDGE §9 diffing state. Last envelope seen per (app_id, machine_id).
+ * The table is tiny — apps rarely run >1 concurrently in the reference
+ * bridge, so a flat 4-slot array is enough. */
+typedef enum {
+    BRIDGE_DIFF_PUSH = 0,      /* new activity */
+    BRIDGE_DIFF_REPLACE,       /* same (app, machine), different state */
+    BRIDGE_DIFF_PATCH,         /* same state, same tree shape */
+    BRIDGE_DIFF_REBUILD,       /* same state, different tree shape */
+} bridge_diff_action_t;
+
+#define BRIDGE_DIFF_SLOTS 4
+static struct {
+    bool     used;
+    uint32_t app_id;
+    uint32_t machine_id;
+    uint32_t state_id;
+    uint32_t frame_id;
+} s_diff_slots[BRIDGE_DIFF_SLOTS];
+
+static bridge_diff_action_t bridge_diff_decide(const deck_dvc_envelope_t *env,
+                                                const deck_dvc_node_t *root,
+                                                bool *out_stale)
+{
+    (void)root;  /* Tree-shape comparison would consult root for PATCH
+                   detection; current bridge always does full rebuild on
+                   state changes, so shape equality downgrades to REBUILD
+                   with the same outcome. Reserved for future. */
+    *out_stale = false;
+    int hit = -1;
+    int empty = -1;
+    for (int i = 0; i < BRIDGE_DIFF_SLOTS; i++) {
+        if (!s_diff_slots[i].used) { if (empty < 0) empty = i; continue; }
+        if (s_diff_slots[i].app_id == env->app_id &&
+            s_diff_slots[i].machine_id == env->machine_id) {
+            hit = i; break;
+        }
+    }
+    if (hit < 0) {
+        /* First snapshot for this (app, machine) — push as a new activity. */
+        int slot = (empty >= 0) ? empty : 0;   /* evict slot 0 if full */
+        s_diff_slots[slot].used       = true;
+        s_diff_slots[slot].app_id     = env->app_id;
+        s_diff_slots[slot].machine_id = env->machine_id;
+        s_diff_slots[slot].state_id   = env->state_id;
+        s_diff_slots[slot].frame_id   = env->frame_id;
+        return BRIDGE_DIFF_PUSH;
+    }
+    /* Stale-snapshot guard: frame_id must be monotonically increasing
+     * per (app, machine). An older frame_id means the runtime looped
+     * — drop it to avoid overwriting newer state. */
+    if (env->frame_id < s_diff_slots[hit].frame_id) {
+        *out_stale = true;
+        return BRIDGE_DIFF_REBUILD;
+    }
+    bridge_diff_action_t act;
+    if (env->state_id != s_diff_slots[hit].state_id) {
+        act = BRIDGE_DIFF_REPLACE;
+    } else {
+        /* Same identity triple — patch vs rebuild. BRIDGE §9 allows
+         * "rebuild everywhere" as conformant; we take it. Future
+         * refinement: compare tree shapes via deck_dvc_tree_equal and
+         * flip to PATCH when shapes match. */
+        act = BRIDGE_DIFF_REBUILD;
+    }
+    s_diff_slots[hit].state_id = env->state_id;
+    s_diff_slots[hit].frame_id = env->frame_id;
+    return act;
+}
+
+static const char *bridge_diff_name(bridge_diff_action_t a)
+{
+    switch (a) {
+        case BRIDGE_DIFF_PUSH:    return "push";
+        case BRIDGE_DIFF_REPLACE: return "replace";
+        case BRIDGE_DIFF_PATCH:   return "patch";
+        case BRIDGE_DIFF_REBUILD: return "rebuild";
+    }
+    return "?";
+}
+
 static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
                                               const void *bytes, size_t len)
 {
@@ -66,13 +146,18 @@ static deck_sdi_err_t bui_push_snapshot_impl(void *ctx,
         ESP_LOGE(TAG, "decode failed: %s", deck_err_name(r));
         return DECK_SDI_ERR_INVALID_ARG;
     }
-    /* Stage 5f: envelope is on the wire. Stage 8 wires diffing that
-     * consults (app_id, machine_id, state_id) for patch-vs-rebuild and
-     * frame_id for stale-intent discard. Until then, the envelope is
-     * parsed and logged only. */
-    ESP_LOGD(TAG, "snapshot env app=%08x machine=%08x state=%08x frame=%u",
+
+    bool stale = false;
+    bridge_diff_action_t act = bridge_diff_decide(&env, root, &stale);
+    if (stale) {
+        ESP_LOGW(TAG, "stale snapshot frame=%u (already past) — dropping",
+                 (unsigned)env.frame_id);
+        return DECK_SDI_OK;
+    }
+    ESP_LOGD(TAG, "snapshot app=%08x machine=%08x state=%08x frame=%u — %s",
              (unsigned)env.app_id, (unsigned)env.machine_id,
-             (unsigned)env.state_id, (unsigned)env.frame_id);
+             (unsigned)env.state_id, (unsigned)env.frame_id,
+             bridge_diff_name(act));
 
     if (!deck_bridge_ui_lock(500)) {
         ESP_LOGE(TAG, "ui_lock timeout — render dropped");
