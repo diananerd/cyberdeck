@@ -71,6 +71,38 @@ void deck_bridge_ui_overlay_confirm_cb(const char *title, const char *message,
                                         deck_bridge_ui_overlay_cb_t on_cancel,
                                         void *user_data);
 
+/* Progress overlay — modal with a bar and optional label. pct is 0..1;
+ * a negative value means indeterminate (marquee). */
+void deck_bridge_ui_overlay_progress_show(const char *label);
+void deck_bridge_ui_overlay_progress_set(float pct);
+void deck_bridge_ui_overlay_progress_hide(void);
+
+/* Choice / multiselect overlays — modal list. The `_cb` callback fires
+ * exactly once with the selected index (choice) or when DONE is pressed
+ * (multiselect). Caller owns `options[]` / `initially_selected[]` only for
+ * the duration of the call; the overlay copies them internally. */
+typedef void (*deck_bridge_ui_overlay_choice_cb_t)(void *user_data, int index);
+typedef void (*deck_bridge_ui_overlay_multiselect_cb_t)(void *user_data,
+                                                         const bool *selected,
+                                                         uint16_t n);
+void deck_bridge_ui_overlay_choice_show(const char *title,
+                                         const char *const *options,
+                                         uint16_t n_options,
+                                         deck_bridge_ui_overlay_choice_cb_t on_pick,
+                                         void *user_data);
+void deck_bridge_ui_overlay_multiselect_show(const char *title,
+                                              const char *const *options,
+                                              uint16_t n_options,
+                                              const bool *initially_selected,
+                                              deck_bridge_ui_overlay_multiselect_cb_t on_done,
+                                              void *user_data);
+
+/* Keyboard overlay — LVGL keyboard docked at the bottom of the screen,
+ * tied to a single-line textarea shown just above it. kind_atom selects
+ * the keymap layout: "text" / "text_upper" / "number" / "password". */
+void deck_bridge_ui_overlay_keyboard_show(const char *kind_atom);
+void deck_bridge_ui_overlay_keyboard_hide(void);
+
 /* ---------- Statusbar (top dock — time + WiFi + battery) ---------- */
 
 deck_sdi_err_t deck_bridge_ui_statusbar_init(void);
@@ -80,6 +112,13 @@ void           deck_bridge_ui_statusbar_refresh(void);
  * harnesses and platforms that rotate the display through other paths. */
 void           deck_bridge_ui_statusbar_relayout(void);
 void           deck_bridge_ui_navbar_relayout(void);
+
+/* Show / hide the statusbar and navbar. Toggles the LVGL HIDDEN flag on
+ * the dock objects so they keep their widget tree and refresh timers
+ * alive. Safe to call before the dock is initialized — calls become
+ * no-ops in that case. */
+void           deck_bridge_ui_statusbar_set_visible(bool visible);
+void           deck_bridge_ui_navbar_set_visible(bool visible);
 
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 
@@ -176,6 +215,23 @@ typedef enum {
  * each can rebuild its layout for the new dimensions. */
 deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t rot);
 deck_bridge_ui_rotation_t deck_bridge_ui_get_rotation(void);
+
+/* ---------- Shell-injected handlers ----------
+ *
+ * The SDI bridge.ui driver routes certain resolution calls out to the
+ * shell (lockscreen for set_locked, theme atom storage for set_theme).
+ * Rather than having the bridge depend on deck_shell (which would create
+ * a cycle since deck_shell depends on deck_bridge_ui for its UI), the
+ * shell injects handlers at init time. Passing NULL clears the handler.
+ * Missing handler = the vtable call returns OK without side effects. */
+typedef void (*deck_bridge_ui_lock_handler_t)(bool locked);
+typedef void (*deck_bridge_ui_theme_handler_t)(const char *theme_atom);
+
+void deck_bridge_ui_set_lock_handler(deck_bridge_ui_lock_handler_t cb);
+void deck_bridge_ui_set_theme_handler(deck_bridge_ui_theme_handler_t cb);
+
+/* Read the last theme atom seen by the bridge. NULL until one is set. */
+const char *deck_bridge_ui_get_theme(void);
 
 #ifdef __cplusplus
 }

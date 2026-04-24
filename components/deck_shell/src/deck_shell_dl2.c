@@ -161,10 +161,25 @@ static void on_unlocked(void)
                                   &s_launcher_cbs, NULL);
 }
 
+/* Routed from bridge.ui set_locked — Deck apps asking the shell to
+ * bring the lockscreen back up. false is a no-op (unlock only through
+ * PIN verify). */
+static void shell_lock_handler(bool locked)
+{
+    if (!locked) return;
+    s_unlocked = false;
+    deck_shell_lockscreen_lock(on_unlocked);
+}
+
 deck_err_t deck_shell_dl2_boot(void)
 {
     if (s_booted) return DECK_RT_OK;
     s_booted = true;
+
+    /* Inject bridge.ui resolvers that need shell collaboration. Done
+     * before boot so any app that `set_locked(true)`s during warmup is
+     * routed correctly. */
+    deck_bridge_ui_set_lock_handler(shell_lock_handler);
 
     /* Restore display rotation before we start drawing real screens. */
     deck_shell_rotation_restore();

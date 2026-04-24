@@ -335,3 +335,461 @@ void deck_bridge_ui_overlay_confirm_cb(const char *title, const char *message,
         deck_bridge_ui_unlock();
     }
 }
+
+/* ---------- PROGRESS ---------- */
+
+static lv_obj_t *s_progress_backdrop = NULL;
+static lv_obj_t *s_progress_bar      = NULL;
+static lv_timer_t *s_progress_anim   = NULL;
+
+static void progress_indet_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_progress_bar) return;
+    int32_t v = lv_bar_get_value(s_progress_bar);
+    v = (v + 30) % 1001;
+    lv_bar_set_value(s_progress_bar, v, LV_ANIM_OFF);
+}
+
+static void progress_show_impl(const char *label)
+{
+    if (s_progress_backdrop) {
+        /* Update label only if one exists as a second child. */
+        return;
+    }
+    lv_obj_t *bd = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(bd, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(bd, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bd, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_border_width(bd, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(bd, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *bar = lv_bar_create(bd);
+    lv_obj_set_size(bar, 300, 8);
+    lv_obj_align(bar, LV_ALIGN_CENTER, 0, 0);
+    lv_bar_set_range(bar, 0, 1000);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, CD_BG_CARD, LV_PART_MAIN);
+    lv_obj_set_style_border_color(bar, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, CD_PRIMARY, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 0, LV_PART_INDICATOR);
+
+    if (label && *label) {
+        lv_obj_t *l = lv_label_create(bd);
+        lv_label_set_text(l, label);
+        lv_obj_set_style_text_color(l, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_align_to(l, bar, LV_ALIGN_OUT_TOP_MID, 0, -16);
+    }
+
+    s_progress_backdrop = bd;
+    s_progress_bar      = bar;
+}
+
+static void progress_set_impl(float pct)
+{
+    if (!s_progress_bar) return;
+    if (pct < 0.0f) {
+        /* Indeterminate — start a marquee tick if not already running. */
+        if (!s_progress_anim) {
+            s_progress_anim = lv_timer_create(progress_indet_tick_cb, 80, NULL);
+        }
+    } else {
+        if (s_progress_anim) { lv_timer_del(s_progress_anim); s_progress_anim = NULL; }
+        int32_t v = (int32_t)(pct * 1000.0f + 0.5f);
+        if (v < 0)    v = 0;
+        if (v > 1000) v = 1000;
+        lv_bar_set_value(s_progress_bar, v, LV_ANIM_OFF);
+    }
+}
+
+static void progress_hide_impl(void)
+{
+    if (s_progress_anim) { lv_timer_del(s_progress_anim); s_progress_anim = NULL; }
+    if (s_progress_backdrop) { lv_obj_del(s_progress_backdrop); s_progress_backdrop = NULL; }
+    s_progress_bar = NULL;
+}
+
+void deck_bridge_ui_overlay_progress_show(const char *label)
+{
+    if (deck_bridge_ui_lock(200)) { progress_show_impl(label); deck_bridge_ui_unlock(); }
+}
+void deck_bridge_ui_overlay_progress_set(float pct)
+{
+    if (deck_bridge_ui_lock(200)) { progress_set_impl(pct); deck_bridge_ui_unlock(); }
+}
+void deck_bridge_ui_overlay_progress_hide(void)
+{
+    if (deck_bridge_ui_lock(200)) { progress_hide_impl(); deck_bridge_ui_unlock(); }
+}
+
+/* ---------- CHOICE ---------- */
+
+typedef struct {
+    lv_obj_t *backdrop;
+    deck_bridge_ui_overlay_choice_cb_t cb;
+    void     *user_data;
+    bool      fired;
+} choice_state_t;
+
+static void choice_dismiss(choice_state_t *cs, int idx)
+{
+    if (!cs || cs->fired) return;
+    cs->fired = true;
+    deck_bridge_ui_overlay_choice_cb_t cb = cs->cb;
+    void *ud = cs->user_data;
+    lv_obj_t *bd = cs->backdrop;
+    cs->backdrop = NULL;
+    lv_mem_free(cs);
+    if (bd) lv_obj_del(bd);
+    if (cb) cb(ud, idx);
+}
+
+static void choice_row_cb(lv_event_t *e)
+{
+    choice_state_t *cs = (choice_state_t *)lv_event_get_user_data(e);
+    lv_obj_t *row = lv_event_get_current_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(row);
+    choice_dismiss(cs, idx);
+}
+
+static void choice_cancel_cb(lv_event_t *e)
+{
+    choice_state_t *cs = (choice_state_t *)lv_event_get_user_data(e);
+    choice_dismiss(cs, -1);
+}
+
+static void choice_show_impl(const char *title,
+                              const char *const *options, uint16_t n,
+                              deck_bridge_ui_overlay_choice_cb_t cb,
+                              void *user_data)
+{
+    choice_state_t *cs = lv_mem_alloc(sizeof(*cs));
+    if (!cs) return;
+    memset(cs, 0, sizeof(*cs));
+    cs->cb = cb;
+    cs->user_data = user_data;
+
+    cs->backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(cs->backdrop, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(cs->backdrop, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(cs->backdrop, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_width(cs->backdrop, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(cs->backdrop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(cs->backdrop, choice_cancel_cb, LV_EVENT_CLICKED, cs);
+
+    lv_obj_t *dlg = lv_obj_create(cs->backdrop);
+    lv_obj_set_size(dlg, 420, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(dlg, lv_pct(80), LV_PART_MAIN);
+    lv_obj_align(dlg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dlg, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(dlg, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(dlg, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(dlg, 4, LV_PART_MAIN);
+    lv_obj_set_flex_flow(dlg, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(dlg, LV_FLEX_ALIGN_START,
+                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    if (title && *title) {
+        lv_obj_t *t = lv_label_create(dlg);
+        lv_label_set_text(t, title);
+        lv_obj_set_style_text_color(t, CD_PRIMARY_DIM, LV_PART_MAIN);
+        lv_obj_set_style_pad_bottom(t, 8, LV_PART_MAIN);
+    }
+
+    for (uint16_t i = 0; i < n; i++) {
+        lv_obj_t *row = lv_obj_create(dlg);
+        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_color(row, CD_PRIMARY_DIM, LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
+        lv_obj_set_style_radius(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(row, 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(row, 12, LV_PART_MAIN);
+        lv_obj_set_user_data(row, (void *)(intptr_t)i);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+        lv_obj_add_event_cb(row, choice_row_cb, LV_EVENT_CLICKED, cs);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, (options && options[i]) ? options[i] : "");
+        lv_obj_set_style_text_color(lbl, CD_PRIMARY, LV_PART_MAIN);
+    }
+}
+
+void deck_bridge_ui_overlay_choice_show(const char *title,
+                                         const char *const *options,
+                                         uint16_t n_options,
+                                         deck_bridge_ui_overlay_choice_cb_t on_pick,
+                                         void *user_data)
+{
+    if (deck_bridge_ui_lock(200)) {
+        choice_show_impl(title, options, n_options, on_pick, user_data);
+        deck_bridge_ui_unlock();
+    }
+}
+
+/* ---------- MULTISELECT ---------- */
+
+typedef struct {
+    lv_obj_t *backdrop;
+    deck_bridge_ui_overlay_multiselect_cb_t cb;
+    void     *user_data;
+    bool     *selected;      /* len = n */
+    uint16_t  n;
+    bool      fired;
+} mselect_state_t;
+
+static void mselect_dismiss(mselect_state_t *s, bool commit)
+{
+    if (!s || s->fired) return;
+    s->fired = true;
+    deck_bridge_ui_overlay_multiselect_cb_t cb = s->cb;
+    void *ud = s->user_data;
+    lv_obj_t *bd = s->backdrop;
+    bool *selected = s->selected;
+    uint16_t n = s->n;
+    s->backdrop = NULL;
+    s->selected = NULL;
+    lv_mem_free(s);
+    if (bd) lv_obj_del(bd);
+    if (cb) cb(ud, commit ? selected : NULL, commit ? n : 0);
+    if (selected) lv_mem_free(selected);
+}
+
+static void mselect_row_cb(lv_event_t *e)
+{
+    mselect_state_t *s = (mselect_state_t *)lv_event_get_user_data(e);
+    lv_obj_t *row = lv_event_get_current_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(row);
+    if (!s || idx < 0 || idx >= s->n || !s->selected) return;
+    s->selected[idx] = !s->selected[idx];
+    /* Toggle visual marker (second child of row is the checkmark label). */
+    uint32_t n_children = lv_obj_get_child_cnt(row);
+    if (n_children >= 2) {
+        lv_obj_t *mark = lv_obj_get_child(row, 0);
+        lv_label_set_text(mark, s->selected[idx] ? LV_SYMBOL_OK : " ");
+    }
+}
+
+static void mselect_done_cb(lv_event_t *e)
+{
+    mselect_state_t *s = (mselect_state_t *)lv_event_get_user_data(e);
+    mselect_dismiss(s, true);
+}
+static void mselect_cancel_cb(lv_event_t *e)
+{
+    mselect_state_t *s = (mselect_state_t *)lv_event_get_user_data(e);
+    mselect_dismiss(s, false);
+}
+
+static void mselect_show_impl(const char *title,
+                               const char *const *options, uint16_t n,
+                               const bool *initially,
+                               deck_bridge_ui_overlay_multiselect_cb_t cb,
+                               void *user_data)
+{
+    mselect_state_t *st = lv_mem_alloc(sizeof(*st));
+    if (!st) return;
+    memset(st, 0, sizeof(*st));
+    st->cb = cb;
+    st->user_data = user_data;
+    st->n = n;
+    if (n > 0) {
+        st->selected = lv_mem_alloc(sizeof(bool) * n);
+        if (!st->selected) { lv_mem_free(st); return; }
+        for (uint16_t i = 0; i < n; i++) {
+            st->selected[i] = initially ? initially[i] : false;
+        }
+    }
+
+    st->backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(st->backdrop, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(st->backdrop, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(st->backdrop, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_width(st->backdrop, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(st->backdrop, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dlg = lv_obj_create(st->backdrop);
+    lv_obj_set_size(dlg, 420, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(dlg, lv_pct(80), LV_PART_MAIN);
+    lv_obj_align(dlg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dlg, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(dlg, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(dlg, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(dlg, 4, LV_PART_MAIN);
+    lv_obj_set_flex_flow(dlg, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(dlg, LV_FLEX_ALIGN_START,
+                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    if (title && *title) {
+        lv_obj_t *t = lv_label_create(dlg);
+        lv_label_set_text(t, title);
+        lv_obj_set_style_text_color(t, CD_PRIMARY_DIM, LV_PART_MAIN);
+        lv_obj_set_style_pad_bottom(t, 8, LV_PART_MAIN);
+    }
+
+    for (uint16_t i = 0; i < n; i++) {
+        lv_obj_t *row = lv_obj_create(dlg);
+        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_color(row, CD_PRIMARY_DIM, LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
+        lv_obj_set_style_radius(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(row, 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(row, 10, LV_PART_MAIN);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 12, LV_PART_MAIN);
+        lv_obj_set_user_data(row, (void *)(intptr_t)i);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+        lv_obj_add_event_cb(row, mselect_row_cb, LV_EVENT_CLICKED, st);
+
+        lv_obj_t *mark = lv_label_create(row);
+        lv_label_set_text(mark, st->selected[i] ? LV_SYMBOL_OK : " ");
+        lv_obj_set_style_text_color(mark, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_width(mark, 20);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, (options && options[i]) ? options[i] : "");
+        lv_obj_set_style_text_color(lbl, CD_PRIMARY, LV_PART_MAIN);
+    }
+
+    /* Button row — CANCEL + DONE. */
+    lv_obj_t *btnrow = lv_obj_create(dlg);
+    lv_obj_set_size(btnrow, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btnrow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btnrow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(btnrow, 20, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(btnrow, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_END,
+                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *cancel = lv_btn_create(btnrow);
+    lv_obj_set_style_bg_opa(cancel, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(cancel, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(cancel, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(cancel, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(cancel, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(cancel, 12, LV_PART_MAIN);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "CANCEL");
+    lv_obj_set_style_text_color(cl, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(cancel, mselect_cancel_cb, LV_EVENT_CLICKED, st);
+    lv_obj_clear_flag(cancel, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+    lv_obj_t *done = lv_btn_create(btnrow);
+    lv_obj_set_style_bg_color(done, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(done, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(done, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(done, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(done, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(done, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(done, 12, LV_PART_MAIN);
+    lv_obj_t *dl = lv_label_create(done);
+    lv_label_set_text(dl, "DONE");
+    lv_obj_set_style_text_color(dl, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_center(dl);
+    lv_obj_add_event_cb(done, mselect_done_cb, LV_EVENT_CLICKED, st);
+    lv_obj_clear_flag(done, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+}
+
+void deck_bridge_ui_overlay_multiselect_show(const char *title,
+                                              const char *const *options,
+                                              uint16_t n_options,
+                                              const bool *initially_selected,
+                                              deck_bridge_ui_overlay_multiselect_cb_t on_done,
+                                              void *user_data)
+{
+    if (deck_bridge_ui_lock(200)) {
+        mselect_show_impl(title, options, n_options, initially_selected,
+                           on_done, user_data);
+        deck_bridge_ui_unlock();
+    }
+}
+
+/* ---------- KEYBOARD ---------- */
+
+static lv_obj_t *s_kb_backdrop = NULL;
+static lv_obj_t *s_kb          = NULL;
+static lv_obj_t *s_kb_ta       = NULL;
+
+static void kb_dismiss_cb(lv_event_t *e)
+{
+    (void)e;
+    deck_bridge_ui_overlay_keyboard_hide();
+}
+
+static void keyboard_show_impl(const char *kind_atom)
+{
+    if (s_kb_backdrop) return;   /* already up */
+
+    lv_obj_t *bd = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(bd, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(bd, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(bd, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(bd, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ta = lv_textarea_create(bd);
+    lv_obj_set_size(ta, lv_pct(80), 48);
+    lv_obj_align(ta, LV_ALIGN_BOTTOM_MID, 0, -260);
+    lv_textarea_set_one_line(ta, true);
+    lv_obj_set_style_bg_color(ta, CD_BG_CARD, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta, 2, LV_PART_MAIN);
+
+    lv_obj_t *kb = lv_keyboard_create(bd);
+    lv_obj_set_size(kb, lv_pct(100), 240);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(kb, ta);
+
+    lv_keyboard_mode_t mode = LV_KEYBOARD_MODE_TEXT_UPPER;
+    if (kind_atom) {
+        if      (!strcmp(kind_atom, "text") ||
+                 !strcmp(kind_atom, "text_lower")) mode = LV_KEYBOARD_MODE_TEXT_LOWER;
+        else if (!strcmp(kind_atom, "number") ||
+                 !strcmp(kind_atom, "pin"))        mode = LV_KEYBOARD_MODE_NUMBER;
+        else if (!strcmp(kind_atom, "special"))    mode = LV_KEYBOARD_MODE_SPECIAL;
+    }
+    lv_keyboard_set_mode(kb, mode);
+
+    /* Tapping OK / close hides the overlay. */
+    lv_obj_add_event_cb(kb, kb_dismiss_cb, LV_EVENT_READY,  NULL);
+    lv_obj_add_event_cb(kb, kb_dismiss_cb, LV_EVENT_CANCEL, NULL);
+
+    s_kb_backdrop = bd;
+    s_kb          = kb;
+    s_kb_ta       = ta;
+}
+
+static void keyboard_hide_impl(void)
+{
+    if (s_kb_backdrop) { lv_obj_del(s_kb_backdrop); s_kb_backdrop = NULL; }
+    s_kb = NULL;
+    s_kb_ta = NULL;
+}
+
+void deck_bridge_ui_overlay_keyboard_show(const char *kind_atom)
+{
+    if (deck_bridge_ui_lock(200)) { keyboard_show_impl(kind_atom); deck_bridge_ui_unlock(); }
+}
+void deck_bridge_ui_overlay_keyboard_hide(void)
+{
+    if (deck_bridge_ui_lock(200)) { keyboard_hide_impl(); deck_bridge_ui_unlock(); }
+}

@@ -156,3 +156,12 @@ void deck_bridge_ui_statusbar_relayout(void)
     lv_obj_set_size(s_bar, lv_disp_get_hor_res(NULL), SB_HEIGHT);
     lv_obj_align(s_bar, LV_ALIGN_TOP_MID, 0, 0);
 }
+
+void deck_bridge_ui_statusbar_set_visible(bool visible)
+{
+    if (!s_bar) return;
+    if (!deck_bridge_ui_lock(200)) return;
+    if (visible) lv_obj_clear_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    deck_bridge_ui_unlock();
+}
