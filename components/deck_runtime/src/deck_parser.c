@@ -1290,15 +1290,52 @@ static ast_node_t *parse_match(deck_parser_t *p)
     return m;
 }
 
+/* Tolerate a NEWLINE+optional INDENT before each clause keyword so the
+ * spec's multi-line `if cond\n  then expr\n  else expr` form parses
+ * the same as the inline `if cond then expr else expr` form. The
+ * matching DEDENT (when an INDENT was consumed) is eaten lazily after
+ * the clause expression. */
+static bool eat_clause_continuation(deck_parser_t *p, bool *ate_indent)
+{
+    *ate_indent = false;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    if (at(p, TOK_INDENT)) { advance(p); *ate_indent = true; }
+    while (at(p, TOK_NEWLINE)) advance(p);
+    return true;
+}
+static void exit_clause_continuation(deck_parser_t *p, bool ate_indent)
+{
+    if (ate_indent) {
+        while (at(p, TOK_NEWLINE)) advance(p);
+        if (at(p, TOK_DEDENT)) advance(p);
+    }
+}
+
+/* Parse an if-clause body: either an inline expression or a suite-
+ * style indented block (for `then\n  ...` / `else\n  ...`). */
+static ast_node_t *parse_clause_body(deck_parser_t *p)
+{
+    if (at(p, TOK_NEWLINE)) {
+        return parse_suite(p);   /* eats NEWLINE + INDENT + stmts + DEDENT */
+    }
+    return parse_expr_prec(p, 0);
+}
+
 static ast_node_t *parse_if(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_IF); if (!n) return NULL;
     advance(p); /* if */
     n->as.if_.cond = parse_expr_prec(p, 0); if (!n->as.if_.cond) return NULL;
+    bool ai_then = false;
+    eat_clause_continuation(p, &ai_then);
     if (!expect(p, TOK_KW_THEN, "expected 'then' after if condition")) return NULL;
-    n->as.if_.then_ = parse_expr_prec(p, 0); if (!n->as.if_.then_) return NULL;
+    n->as.if_.then_ = parse_clause_body(p); if (!n->as.if_.then_) return NULL;
+    exit_clause_continuation(p, ai_then);
+    bool ai_else = false;
+    eat_clause_continuation(p, &ai_else);
     if (!expect(p, TOK_KW_ELSE, "expected 'else' in if expression")) return NULL;
-    n->as.if_.else_ = parse_expr_prec(p, 0); if (!n->as.if_.else_) return NULL;
+    n->as.if_.else_ = parse_clause_body(p); if (!n->as.if_.else_) return NULL;
+    exit_clause_continuation(p, ai_else);
     return n;
 }
 
@@ -3443,6 +3480,27 @@ static ast_node_t *parse_opaque_block(deck_parser_t *p)
 /* DL2 F22.2 — `@type Name`<NEWLINE><INDENT> field: TypeName ... <DEDENT>.
  * Type annotations on fields are parsed and discarded (the runtime is
  * dynamic). Union types `T1 | T2` are also accepted and discarded. */
+/* Skip a balanced parenthesised list, e.g. `(A, B, C)` or
+ * `(left: Tree, right: Tree, value: int)`. Used to discard type-
+ * parameter clauses and variant payload fields — the runtime is
+ * dynamic so the structure is forgotten after parse. */
+static bool skip_balanced_parens(deck_parser_t *p)
+{
+    if (!at(p, TOK_LPAREN)) return true;
+    advance(p);
+    int depth = 1;
+    while (depth > 0 && !at(p, TOK_EOF)) {
+        if (at(p, TOK_LPAREN)) depth++;
+        else if (at(p, TOK_RPAREN)) {
+            depth--;
+            if (depth == 0) { advance(p); return true; }
+        }
+        advance(p);
+    }
+    set_err(p, DECK_LOAD_PARSE, "unterminated `(` in type clause");
+    return false;
+}
+
 static ast_node_t *parse_type_decl(deck_parser_t *p)
 {
     advance(p); /* @type */
@@ -3453,9 +3511,56 @@ static ast_node_t *parse_type_decl(deck_parser_t *p)
     ast_node_t *n = mknode(p, AST_TYPE_DEF); if (!n) return NULL;
     n->as.typedef_.name = p->cur.text;
     advance(p);
+
+    /* LANG §2.5 — optional type-parameter clause `(A, B, ...)`. The
+     * runtime is dynamic so parameters are parse-and-discard; we just
+     * consume the balanced parens. */
+    if (at(p, TOK_LPAREN)) {
+        if (!skip_balanced_parens(p)) return NULL;
+    }
+
+    /* Three body forms after the (optional) type-parameter clause:
+     *   1. `@type Name\n  field : T\n  field : T\n`           (record body, indented)
+     *   2. `@type Name = | :variant\n               | :variant (payload)` (variant body)
+     *   3. `@type Name = T`                                    (alias body — single line)
+     * The variant + alias forms start with `=`; the record form goes
+     * straight to NEWLINE + INDENT. */
+    if (at(p, TOK_ASSIGN)) {
+        advance(p); /* = */
+        /* Variant body opens with `|` (possibly preceded by NEWLINE +
+         * INDENT). Alias body is a single type expression on the same
+         * line (or indented across lines). Both are parse-and-discard. */
+        bool any_indent = false;
+        while (at(p, TOK_NEWLINE)) advance(p);
+        if (at(p, TOK_INDENT)) { advance(p); any_indent = true; }
+        /* Eat the body until DEDENT/EOF or — for the inline alias form —
+         * NEWLINE at the top level. */
+        int paren_depth = 0;
+        while (!at(p, TOK_EOF)) {
+            if (any_indent && at(p, TOK_DEDENT) && paren_depth == 0) break;
+            if (!any_indent && at(p, TOK_NEWLINE) && paren_depth == 0) break;
+            if (at(p, TOK_LPAREN) || at(p, TOK_LBRACKET) || at(p, TOK_LBRACE)) paren_depth++;
+            else if (at(p, TOK_RPAREN) || at(p, TOK_RBRACKET) || at(p, TOK_RBRACE)) {
+                if (paren_depth > 0) paren_depth--;
+            }
+            advance(p);
+        }
+        if (any_indent && at(p, TOK_DEDENT)) advance(p);
+        while (at(p, TOK_NEWLINE)) advance(p);
+        n->as.typedef_.fields   = NULL;
+        n->as.typedef_.n_fields = 0;
+        return n;
+    }
+
     if (!expect(p, TOK_NEWLINE, "expected newline after @type name")) return NULL;
     while (at(p, TOK_NEWLINE)) advance(p);
-    if (!expect(p, TOK_INDENT, "expected indented @type body")) return NULL;
+    /* Body-less marker type (`@type Empty` with no fields). */
+    if (!at(p, TOK_INDENT)) {
+        n->as.typedef_.fields   = NULL;
+        n->as.typedef_.n_fields = 0;
+        return n;
+    }
+    advance(p); /* INDENT */
 
     const char *fields[32];
     uint32_t nf = 0;

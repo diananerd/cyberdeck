@@ -419,6 +419,19 @@ typedef enum {
 extern const char    *deck_bridge_ui_get_theme(void);
 extern deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t);
 
+/* Forward decls from deck_shell (same dep-cycle reason — single source
+ * of truth for the shell-app-info struct so multiple builtins can
+ * iterate the loaded .deck app set). */
+typedef struct {
+    uint16_t    app_id;
+    const char *id;
+    const char *name;
+    const char *path;
+} deck_shell_deck_app_info_t;
+extern uint32_t deck_shell_deck_apps_count(void);
+extern void     deck_shell_deck_apps_info(uint32_t idx, deck_shell_deck_app_info_t *out);
+extern struct   deck_runtime_app *deck_shell_deck_apps_handle(uint16_t app_id);
+
 /* (:ok, value) and (:err, atom) helpers — used by every DL1+DL2 stub. */
 static deck_value_t *result_ok_unit(void)
 {
@@ -654,10 +667,6 @@ static deck_value_t *b_display_brightness(deck_value_t **a, uint32_t n, deck_int
 static deck_value_t *b_apps_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
-    extern uint32_t deck_shell_deck_apps_count(void);
-    typedef struct { uint16_t app_id; const char *id; const char *name; const char *path; }
-        deck_shell_deck_app_info_t;
-    extern void deck_shell_deck_apps_info(uint32_t idx, deck_shell_deck_app_info_t *out);
     uint32_t cnt = deck_shell_deck_apps_count();
     deck_value_t *list = deck_new_list(cnt);
     for (uint32_t i = 0; i < cnt; i++) {
@@ -1038,6 +1047,175 @@ static deck_value_t *b_ws_close(deck_value_t **a, uint32_t n, deck_interp_ctx_t 
 {
     (void)a; (void)n; (void)c;
     return result_ok_unit();
+}
+
+/* DL2 — system.audio (SERVICES §25). Surface declared so apps that
+ * @needs system.audio resolve; actual playback returns :unsupported
+ * until an audio amp + driver are wired (the reference board has an
+ * optional external BT module on UART1 — not exposed by SDI yet). */
+static deck_value_t *b_audio_play(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("unsupported");
+}
+static deck_value_t *b_audio_stop(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+static deck_value_t *b_audio_pause(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+static deck_value_t *b_audio_resume(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+static deck_value_t *b_audio_volume_set(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+static deck_value_t *b_audio_volume_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int(50);   /* 0..100 — default mid */
+}
+static deck_value_t *b_audio_is_playing(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_bool(false);
+}
+static deck_value_t *b_audio_duration(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int(0);
+}
+
+/* DL2 — system.tasks (SERVICES §38). Per-process metrics. Backed by
+ * the FreeRTOS task list when available; falls back to single-task
+ * stub on platforms without runtime stats. */
+static deck_value_t *b_tasks_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* Surface a single "system" task entry describing the calling
+     * runtime; richer per-app split lands when the shell wires its
+     * app slots into the registry. */
+    deck_value_t *list = deck_new_list(1);
+    deck_value_t *m = deck_new_map(3);
+    deck_value_t *k1 = deck_new_str_cstr("name");
+    deck_value_t *v1 = deck_new_str_cstr("system");
+    deck_value_t *k2 = deck_new_str_cstr("heap_free");
+    deck_value_t *v2 = deck_new_int((int64_t)deck_sdi_info_free_heap());
+    deck_value_t *k3 = deck_new_str_cstr("uptime_ms");
+    deck_value_t *v3 = deck_new_int(deck_sdi_time_monotonic_us() / 1000LL);
+    deck_map_put(m, k1, v1); deck_map_put(m, k2, v2); deck_map_put(m, k3, v3);
+    deck_release(k1); deck_release(v1);
+    deck_release(k2); deck_release(v2);
+    deck_release(k3); deck_release(v3);
+    deck_list_push(list, m);
+    deck_release(m);
+    return list;
+}
+static deck_value_t *b_tasks_cpu_pct(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* No runtime-stats hook wired; report 0 so callers can branch. */
+    return deck_new_int(0);
+}
+static deck_value_t *b_tasks_heap(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int((int64_t)deck_sdi_info_free_heap());
+}
+static deck_value_t *b_tasks_fps(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* LVGL frame counter not exposed; report nominal 30. */
+    return deck_new_int(30);
+}
+
+/* DL2 — system.services (SERVICES §37). Service registry for cross-
+ * app @service IPC. Backed by deck_shell_deck_apps_handle iteration
+ * over loaded apps. */
+static deck_value_t *b_services_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    uint32_t cnt = deck_shell_deck_apps_count();
+    deck_value_t *list = deck_new_list(cnt);
+    for (uint32_t i = 0; i < cnt; i++) {
+        deck_shell_deck_app_info_t info = {0};
+        deck_shell_deck_apps_info(i, &info);
+        struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
+        const char *svc_id = h ? deck_runtime_app_service_id(h) : NULL;
+        if (!svc_id) continue;
+        deck_list_push(list, deck_new_str_cstr(svc_id));
+    }
+    return list;
+}
+static deck_value_t *b_services_has(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *want = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!want) return deck_new_bool(false);
+    uint32_t cnt = deck_shell_deck_apps_count();
+    for (uint32_t i = 0; i < cnt; i++) {
+        deck_shell_deck_app_info_t info = {0};
+        deck_shell_deck_apps_info(i, &info);
+        struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
+        const char *svc = h ? deck_runtime_app_service_id(h) : NULL;
+        if (svc && strcmp(svc, want) == 0) return deck_new_bool(true);
+    }
+    return deck_new_bool(false);
+}
+static deck_value_t *b_services_invoke(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)c;
+    const char *svc_id = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    const char *method = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr
+                          : (a[1] && a[1]->type == DECK_T_ATOM ? a[1]->as.atom : NULL);
+    if (!svc_id || !method) return result_err_atom("malformed");
+    uint32_t cnt = deck_shell_deck_apps_count();
+    for (uint32_t i = 0; i < cnt; i++) {
+        deck_shell_deck_app_info_t info = {0};
+        deck_shell_deck_apps_info(i, &info);
+        struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
+        const char *svc = h ? deck_runtime_app_service_id(h) : NULL;
+        if (!svc || strcmp(svc, svc_id) != 0) continue;
+        deck_value_t *payload = (n >= 3) ? a[2] : NULL;
+        deck_value_t *r = deck_runtime_app_invoke_service(h, method, payload);
+        return r ? r : result_err_atom("not_found");
+    }
+    return result_err_atom("not_found");
+}
+
+/* DL2 — media.audio (SERVICES §41). Pipe through system.audio when
+ * present; otherwise :unsupported. */
+static deck_value_t *b_media_audio_play(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{ return b_audio_play(a, n, c); }
+static deck_value_t *b_media_audio_stop(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{ return b_audio_stop(a, n, c); }
+
+/* DL2 — api.client (SERVICES §39). Thin JSON wrapper over network.http.
+ * For brevity we route through http_request; future enrichment adds
+ * Authorization, retry, and JSON encode/decode helpers. */
+static deck_value_t *b_api_get_json(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_GET, a, n, c);
+}
+static deck_value_t *b_api_post_json(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_POST, a, n, c);
+}
+static deck_value_t *b_api_put_json(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_PUT, a, n, c);
+}
+static deck_value_t *b_api_delete_json(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_DELETE, a, n, c);
 }
 
 static deck_value_t *b_info_cpu_freq(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
@@ -6606,6 +6784,37 @@ static const builtin_t BUILTINS[] = {
     { "network.ws.open",          b_ws_open,            1, 2 },
     { "network.ws.send",          b_ws_send,            2, 2 },
     { "network.ws.close",         b_ws_close,           1, 1 },
+
+    /* DL2 — system.audio surface (SERVICES §25). */
+    { "system.audio.play",        b_audio_play,         1, 2 },
+    { "system.audio.stop",        b_audio_stop,         0, 0 },
+    { "system.audio.pause",       b_audio_pause,        0, 0 },
+    { "system.audio.resume",      b_audio_resume,       0, 0 },
+    { "system.audio.volume_set",  b_audio_volume_set,   1, 1 },
+    { "system.audio.volume_get",  b_audio_volume_get,   0, 0 },
+    { "system.audio.is_playing",  b_audio_is_playing,   0, 0 },
+    { "system.audio.duration",    b_audio_duration,     0, 0 },
+
+    /* DL2 — system.tasks (SERVICES §38). */
+    { "system.tasks.list",        b_tasks_list,         0, 0 },
+    { "system.tasks.cpu_pct",     b_tasks_cpu_pct,      0, 0 },
+    { "system.tasks.heap",        b_tasks_heap,         0, 0 },
+    { "system.tasks.fps",         b_tasks_fps,          0, 0 },
+
+    /* DL2 — system.services registry (SERVICES §37). */
+    { "system.services.list",     b_services_list,      0, 0 },
+    { "system.services.has",      b_services_has,       1, 1 },
+    { "system.services.invoke",   b_services_invoke,    2, 3 },
+
+    /* DL2 — media.audio (SERVICES §41). */
+    { "media.audio.play",         b_media_audio_play,   1, 2 },
+    { "media.audio.stop",         b_media_audio_stop,   0, 0 },
+
+    /* DL2 — api.client (SERVICES §39). */
+    { "api.client.get_json",      b_api_get_json,       1, 1 },
+    { "api.client.post_json",     b_api_post_json,      2, 2 },
+    { "api.client.put_json",      b_api_put_json,       2, 2 },
+    { "api.client.delete_json",   b_api_delete_json,    1, 1 },
 
     /* text — spec 03-deck-os §3 (post-#15a unification on `len`).
      * `len` / `starts` / `ends` match §11.2's list.len convention;
