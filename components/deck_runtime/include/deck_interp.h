@@ -204,6 +204,25 @@ deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app);
 typedef void (*deck_runtime_back_resolved_cb_t)(deck_back_result_t outcome);
 void deck_runtime_set_back_resolved_handler(deck_runtime_back_resolved_cb_t cb);
 
+/* J12 — @service provider runtime.
+ *
+ * Apps that declare `@service "id"` expose `on :method (params) → body`
+ * entries. Other apps in the same runtime can invoke those methods
+ * via deck_runtime_app_invoke_service. The caller passes the app
+ * handle that *provides* the service (not the consumer); the runtime
+ * looks up the named method, binds the supplied payload, runs the
+ * body in the provider's env, and returns its result.
+ *
+ * Returns NULL on missing service / missing method / runtime error;
+ * c->err on the provider's ctx carries the actual diagnostic.
+ *
+ * The shell can list providers by walking the loaded apps and reading
+ * deck_runtime_app_service_id (NULL if the app declares no service). */
+const char *deck_runtime_app_service_id(const deck_runtime_app_t *app);
+deck_value_t *deck_runtime_app_invoke_service(deck_runtime_app_t *app,
+                                                const char *method,
+                                                deck_value_t *payload);
+
 /* Fire @on terminate if present, then free everything. Handle is invalid
  * after this call. NULL-safe. */
 void deck_runtime_app_unload(deck_runtime_app_t *app);

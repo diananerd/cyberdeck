@@ -1,0 +1,19 @@
+@app
+  name: "Conf app.migrate"
+  id:   "conf.app.migrate"
+  version: "1.0.0"
+  edition: 2026
+
+@needs
+  deck_level: 1
+
+-- Each @migrate from N body runs once, in ascending order. The runtime
+-- writes back the new high-water mark to NVS deck.mig:v_<hash(app_id)>.
+@migrate
+  from 0:
+    log.info("migrate: from 0")
+  from 1:
+    log.info("migrate: from 1")
+
+@on launch:
+  log.info("DECK_CONF_OK:app.migrate")

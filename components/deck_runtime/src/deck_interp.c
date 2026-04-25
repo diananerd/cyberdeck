@@ -356,6 +356,52 @@ static deck_value_t *b_info_uptime(deck_value_t **a, uint32_t n, deck_interp_ctx
     return deck_new_int(deck_sdi_time_monotonic_us() / 1000LL);
 }
 
+/* J9 — system.power.* */
+static deck_value_t *b_power_uptime(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int(deck_sdi_time_monotonic_us() / 1000LL);
+}
+static deck_value_t *b_power_heap_free(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_int((int64_t)deck_sdi_info_free_heap());
+}
+static deck_value_t *b_power_restart(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n;
+    ESP_LOGW("deck.power", "system.power.restart() — rebooting in 100ms");
+    /* Defer the reboot a tick so the caller's logs can flush. */
+    extern void esp_restart(void);
+    esp_restart();
+    (void)c;
+    return deck_retain(deck_unit());
+}
+
+/* J9 — system.notify.* — surface a payload as a toast through the
+ * bridge. Decouples policy (notification vs toast) from the bridge:
+ * apps call system.notify.show("hello") and the reference bridge maps
+ * it to a 2 s toast. Future bridges can route through OS notification
+ * surfaces without app-side changes. */
+static deck_value_t *b_notify_show(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *text = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : "";
+    extern void deck_bridge_ui_overlay_toast(const char *text, uint32_t duration_ms);
+    deck_bridge_ui_overlay_toast(text, 2000);
+    return deck_retain(deck_unit());
+}
+
+/* J9 — system.ota.check_update — current shell ships no update channel.
+ * Stub returns :none so apps can branch cleanly without a panic. Future
+ * impl reads a JSON manifest from a configured URL and returns
+ * :some(version_atom). */
+static deck_value_t *b_ota_check_update(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_none();
+}
+
 static deck_value_t *b_info_cpu_freq(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
@@ -5282,13 +5328,136 @@ static deck_value_t *b_stream_scan(deck_value_t **args, uint32_t n, deck_interp_
     return stream_from_new_list(out);
 }
 
-static deck_value_t *b_stream_need_scheduler(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+/* J1/J2 — cold semantics for time-based + multi-source stream ops.
+ *
+ * The cold runtime materialises every element into a list eagerly, so
+ * operators that depend on inter-emission timing collapse to their
+ * pointwise limit:
+ *   throttle/delay   — pass-through (no time between elements)
+ *   debounce         — keep only the last element (silence is forever
+ *                       after the batch)
+ *   merge            — concat (no temporal interleaving available)
+ *   combine          — tuple of (last_a, last_b)
+ *   buffer(n)        — chunk into lists of n
+ *   window(n)        — sliding window of last-n on every emission
+ *
+ * A future DL3 tick scheduler will replace these with stateful pipes
+ * driven by FreeRTOS timers; the surface stays identical so apps
+ * compiled against the cold runtime keep working. */
+
+static deck_value_t *b_stream_throttle_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)args; (void)n;
-    set_err(c, DECK_RT_ABORTED, 0, 0,
-            "stream time/merge operator requires DL3 tick scheduler "
-            "(not available in cold-stream runtime)");
-    return NULL;
+    (void)n; (void)c;
+    if (!stream_check(args[0], c, "stream.throttle")) return NULL;
+    return deck_retain(args[0]);
+}
+
+static deck_value_t *b_stream_delay_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (!stream_check(args[0], c, "stream.delay")) return NULL;
+    return deck_retain(args[0]);
+}
+
+static deck_value_t *b_stream_debounce_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.debounce")) return NULL;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(len > 0 ? 1 : 0);
+    if (!out) return NULL;
+    if (len > 0) deck_list_push(out, src->as.list.items[len - 1]);
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_merge_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.merge")) return NULL;
+    if (!stream_check(args[1], c, "stream.merge")) return NULL;
+    deck_value_t *a = stream_items(args[0]);
+    deck_value_t *b = stream_items(args[1]);
+    uint32_t la = a ? a->as.list.len : 0;
+    uint32_t lb = b ? b->as.list.len : 0;
+    deck_value_t *out = deck_new_list(la + lb);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < la; i++) deck_list_push(out, a->as.list.items[i]);
+    for (uint32_t i = 0; i < lb; i++) deck_list_push(out, b->as.list.items[i]);
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_combine_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.combine")) return NULL;
+    if (!stream_check(args[1], c, "stream.combine")) return NULL;
+    deck_value_t *a = stream_items(args[0]);
+    deck_value_t *b = stream_items(args[1]);
+    uint32_t la = a ? a->as.list.len : 0;
+    uint32_t lb = b ? b->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    if (la > 0 && lb > 0) {
+        deck_value_t *items[2] = { a->as.list.items[la - 1],
+                                   b->as.list.items[lb - 1] };
+        deck_value_t *t = deck_new_tuple(items, 2);
+        if (!t) { deck_release(out); return NULL; }
+        deck_list_push(out, t);
+        deck_release(t);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_buffer_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.buffer")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_INT || args[1]->as.i <= 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.buffer(n:int>0)"); return NULL;
+    }
+    uint32_t size = (uint32_t)args[1]->as.i;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < len; i += size) {
+        uint32_t take = (i + size <= len) ? size : (len - i);
+        deck_value_t *chunk = deck_new_list(take);
+        if (!chunk) { deck_release(out); return NULL; }
+        for (uint32_t k = 0; k < take; k++) {
+            deck_list_push(chunk, src->as.list.items[i + k]);
+        }
+        deck_list_push(out, chunk);
+        deck_release(chunk);
+    }
+    return stream_from_new_list(out);
+}
+
+static deck_value_t *b_stream_window_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!stream_check(args[0], c, "stream.window")) return NULL;
+    if (!args[1] || args[1]->type != DECK_T_INT || args[1]->as.i <= 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.window(n:int>0)"); return NULL;
+    }
+    uint32_t size = (uint32_t)args[1]->as.i;
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(0);
+    if (!out) return NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        uint32_t start = (i + 1 >= size) ? (i + 1 - size) : 0;
+        uint32_t take = i + 1 - start;
+        deck_value_t *win = deck_new_list(take);
+        if (!win) { deck_release(out); return NULL; }
+        for (uint32_t k = 0; k < take; k++) {
+            deck_list_push(win, src->as.list.items[start + k]);
+        }
+        deck_list_push(out, win);
+        deck_release(win);
+    }
+    return stream_from_new_list(out);
 }
 
 /* ---- json.* ------------------------------------------------------
@@ -5527,6 +5696,12 @@ static const builtin_t BUILTINS[] = {
     { "system.info.uptime",       b_info_uptime,       0, 0 },
     { "system.info.cpu_freq_mhz", b_info_cpu_freq,     0, 0 },
     { "system.info.versions",     b_info_versions,     0, 0 },
+    /* J9 — system.power / system.notify / system.ota stubs. */
+    { "system.power.uptime",      b_power_uptime,      0, 0 },
+    { "system.power.heap_free",   b_power_heap_free,   0, 0 },
+    { "system.power.restart",     b_power_restart,     0, 0 },
+    { "system.notify.show",       b_notify_show,       1, 1 },
+    { "system.ota.check_update",  b_ota_check_update,  0, 0 },
 
     /* text — spec 03-deck-os §3 (post-#15a unification on `len`).
      * `len` / `starts` / `ends` match §11.2's list.len convention;
@@ -5801,13 +5976,13 @@ static const builtin_t BUILTINS[] = {
     { "stream.take",            b_stream_take,             2, 2 },
     { "stream.take_while",      b_stream_take_while,       2, 2 },
     { "stream.scan",            b_stream_scan,             3, 3 },
-    { "stream.throttle",        b_stream_need_scheduler,   2, 2 },
-    { "stream.debounce",        b_stream_need_scheduler,   2, 2 },
-    { "stream.delay",           b_stream_need_scheduler,   2, 2 },
-    { "stream.merge",           b_stream_need_scheduler,   2, 2 },
-    { "stream.combine",         b_stream_need_scheduler,   2, 2 },
-    { "stream.buffer",          b_stream_need_scheduler,   2, 2 },
-    { "stream.window",          b_stream_need_scheduler,   2, 2 },
+    { "stream.throttle",        b_stream_throttle_cold,    2, 2 },
+    { "stream.debounce",        b_stream_debounce_cold,    2, 2 },
+    { "stream.delay",           b_stream_delay_cold,       2, 2 },
+    { "stream.merge",           b_stream_merge_cold,       2, 2 },
+    { "stream.combine",         b_stream_combine_cold,     2, 2 },
+    { "stream.buffer",          b_stream_buffer_cold,      2, 2 },
+    { "stream.window",          b_stream_window_cold,      2, 2 },
     { "stream.map_io",          b_stream_map,              2, 2 },
     { "stream.filter_io",       b_stream_filter,           2, 2 },
     { "stream.each_io",         b_stream_each,             2, 2 },
@@ -7999,6 +8174,75 @@ static void back_confirm_on_cancel(void *user)
     s_back_resolved = outcome;
     if (s) free(s);
     if (s_back_resolved_cb) s_back_resolved_cb(outcome);
+}
+
+/* J12 — @service provider runtime. */
+
+static const ast_node_t *find_service_decl(const ast_node_t *mod)
+{
+    if (!mod || mod->kind != AST_MODULE) return NULL;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (it && it->kind == AST_SERVICE) return it;
+    }
+    return NULL;
+}
+
+const char *deck_runtime_app_service_id(const deck_runtime_app_t *app)
+{
+    if (!app || !app->in_use) return NULL;
+    const ast_node_t *svc = find_service_decl(app->ld.module);
+    if (!svc) return NULL;
+    return svc->as.service.service_id;
+}
+
+deck_value_t *deck_runtime_app_invoke_service(deck_runtime_app_t *app,
+                                                const char *method,
+                                                deck_value_t *payload)
+{
+    if (!app || !app->in_use || !method) return NULL;
+    const ast_node_t *svc = find_service_decl(app->ld.module);
+    if (!svc) return NULL;
+
+    /* Find the matching method (AST_ON with on->as.on.event == method). */
+    const ast_node_t *m = NULL;
+    for (uint32_t i = 0; i < svc->as.service.methods.len; i++) {
+        const ast_node_t *mm = svc->as.service.methods.items[i];
+        if (mm && mm->kind == AST_ON && mm->as.on.event &&
+            strcmp(mm->as.on.event, method) == 0) {
+            m = mm;
+            break;
+        }
+    }
+    if (!m || !m->as.on.body) return NULL;
+
+    app->ctx.err = DECK_RT_OK;
+    app->ctx.err_line = 0;
+    app->ctx.err_col  = 0;
+    app->ctx.err_msg[0] = '\0';
+    app->ctx.depth = 0;
+    app->ctx.module = app->ld.module;
+
+    deck_env_t *env = deck_env_new(&app->arena, app->ctx.global);
+    if (!env) return NULL;
+
+    /* Single-param scalar binding (mirrors dispatch's G4 path). */
+    if (m->as.on.n_params == 1 && m->as.on.params[0].field && payload) {
+        deck_env_bind(&app->arena, env, m->as.on.params[0].field, payload);
+    }
+    if (payload) {
+        deck_env_bind(&app->arena, env, "event", payload);
+    }
+
+    deck_value_t *r = deck_interp_run(&app->ctx, env, m->as.on.body);
+    deck_env_release(env);
+    if (app->ctx.err != DECK_RT_OK) {
+        ESP_LOGE(TAG, "service.invoke %s.%s: %s",
+                 svc->as.service.service_id ? svc->as.service.service_id : "?",
+                 method, app->ctx.err_msg);
+        if (r) { deck_release(r); r = NULL; }
+    }
+    return r;
 }
 
 deck_back_result_t deck_runtime_app_back(deck_runtime_app_t *app)

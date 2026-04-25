@@ -646,6 +646,35 @@ static const deck_sdi_bridge_ui_vtable_t s_vtable = {
     .set_brightness   = bui_set_brightness_impl,
 };
 
+bool deck_bridge_ui_simulate_tap(uint32_t intent_id)
+{
+    if (intent_id == 0) return false;
+    /* Walk every slot's entries[] looking for a node with matching
+     * intent_id. First match wins — apps rarely run >1 concurrently
+     * with overlapping ids. Held in ui_lock so the obj can't be
+     * deleted mid-event. */
+    if (!deck_bridge_ui_lock(200)) return false;
+    bool found = false;
+    for (int i = 0; i < BRIDGE_DIFF_SLOTS; i++) {
+        bridge_slot_t *s = &s_slots[i];
+        if (!s->used || !s->entries) continue;
+        for (size_t k = 0; k < s->n_entries; k++) {
+            const deck_dvc_node_t *n = s->entries[k].node;
+            if (!n || n->intent_id != intent_id) continue;
+            lv_obj_t *obj = s->entries[k].obj;
+            if (!obj) continue;
+            ESP_LOGI(TAG, "simulate_tap: intent_id=%u (slot=%d k=%zu)",
+                     (unsigned)intent_id, i, k);
+            lv_event_send(obj, LV_EVENT_CLICKED, NULL);
+            found = true;
+            break;
+        }
+        if (found) break;
+    }
+    deck_bridge_ui_unlock();
+    return found;
+}
+
 deck_sdi_err_t deck_bridge_ui_register_lvgl(void)
 {
     /* Bring up LVGL eagerly so push_snapshot doesn't carry a slow

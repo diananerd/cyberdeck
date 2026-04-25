@@ -164,6 +164,14 @@ void           deck_bridge_ui_navbar_apply_theme(const char *atom);
  * stack right-to-left after the time. */
 void           deck_bridge_ui_statusbar_set_badge(const char *app_id, int count);
 
+/* J10 — UI tap test harness. Walks the most recently rendered widget
+ * map and synthesises an LV_EVENT_CLICKED on the lv_obj for the node
+ * matching the requested intent_id. Exercises the full
+ * touchscreen → bridge intent_hook → runtime path without needing a
+ * physical tap. Returns true if a matching widget was found and the
+ * event was sent. */
+bool           deck_bridge_ui_simulate_tap(uint32_t intent_id);
+
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 
 typedef void (*deck_bridge_ui_nav_cb_t)(void);
