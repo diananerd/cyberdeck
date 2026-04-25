@@ -16,6 +16,7 @@
 
 #include "deck_bridge_ui.h"
 #include "deck_interp.h"
+#include "deck_alloc.h"
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -188,6 +189,38 @@ static void canary_dispatch(deck_runtime_app_t *app, const char *event)
              event, rc == DECK_RT_OK ? "OK" : deck_err_name(rc));
 }
 
+/* I2 — exercise a parameterised @on trigger_<atom>(v: T). We can't
+ * easily reach intent_id 1's binding from here without rendering the
+ * activity, so the canary instead pushes a known payload through the
+ * runtime via the same `event` binding the bridge-side intent_hook
+ * uses (deck_runtime_app_intent_v with vals[]). The probe constructs
+ * a single-scalar payload like a real tap on a slider/choice would. */
+static void canary_param_dispatch_atom(deck_runtime_app_t *app,
+                                        const char *event,
+                                        const char *atom_value)
+{
+    if (!app) return;
+    /* @on trigger_set_theme(v: atom) — bind v to atom_value via the
+     * existing dispatch path, which puts `event` in the env and (via
+     * G4) also binds the first declared param to `event`. */
+    deck_value_t *payload = deck_new_atom(atom_value);
+    deck_err_t rc = deck_runtime_app_dispatch(app, event, payload);
+    if (payload) deck_release(payload);
+    ESP_LOGI(TAG, "tap-canary: %s(%s) → %s",
+             event, atom_value, rc == DECK_RT_OK ? "OK" : deck_err_name(rc));
+}
+
+static void canary_param_dispatch_int(deck_runtime_app_t *app,
+                                       const char *event, int v)
+{
+    if (!app) return;
+    deck_value_t *payload = deck_new_int(v);
+    deck_err_t rc = deck_runtime_app_dispatch(app, event, payload);
+    if (payload) deck_release(payload);
+    ESP_LOGI(TAG, "tap-canary: %s(%d) → %s",
+             event, v, rc == DECK_RT_OK ? "OK" : deck_err_name(rc));
+}
+
 static void run_intent_canary(void)
 {
     /* settings.deck — every parameterless trigger_*. */
@@ -215,6 +248,12 @@ static void run_intent_canary(void)
     canary_dispatch(taskman,  "trigger_open_compose");
     canary_dispatch(files,    "trigger_go_up");
     canary_dispatch(bluesky,  "trigger_refresh");
+
+    /* I2 — payload-carrying triggers (mirrors what a real choice / range
+     * tap would deliver through the bridge intent_hook). */
+    canary_param_dispatch_atom(settings, "trigger_set_theme",     "amber");
+    canary_param_dispatch_int (settings, "trigger_set_rotation",  90);
+    canary_param_dispatch_int (settings, "trigger_set_brightness", 42);
 }
 
 deck_err_t deck_shell_dl2_boot(void)

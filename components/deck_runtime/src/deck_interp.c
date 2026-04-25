@@ -7847,31 +7847,49 @@ deck_err_t deck_runtime_app_dispatch(deck_runtime_app_t *app,
     if (on->as.on.n_params > 0) {
         bind_env = deck_env_new(&app->arena, app->ctx.global);
         if (!bind_env) return DECK_RT_NO_MEMORY;
-        for (uint32_t i = 0; i < on->as.on.n_params; i++) {
-            const ast_on_param_t *p = &on->as.on.params[i];
-            if (!p->field || !p->pattern) continue;
-            deck_value_t *field_val = NULL;
-            if (payload && payload->type == DECK_T_MAP) {
-                /* Try atom key first (records), then string key (JSON / raw maps). */
-                deck_value_t *akey = deck_new_atom(p->field);
-                if (akey) {
-                    field_val = deck_map_get(payload, akey);
-                    deck_release(akey);
-                }
-                if (!field_val) {
-                    deck_value_t *skey = deck_new_str_cstr(p->field);
-                    if (skey) {
-                        field_val = deck_map_get(payload, skey);
-                        deck_release(skey);
+        /* G4 — single-param handler with a scalar payload: bind the
+         * one declared param to the whole value. Mirrors what the
+         * intent dispatcher does for `intent: :foo(payload_expr)`. */
+        bool scalar_single_bind =
+            on->as.on.n_params == 1 && payload &&
+            payload->type != DECK_T_MAP &&
+            on->as.on.params[0].field && on->as.on.params[0].pattern;
+        if (scalar_single_bind) {
+            /* The @on parameter form is `field: pattern`. For payload-
+             * as-record handlers the pattern's binder names a sub-field
+             * extraction, but for the trigger_<atom>(name: type) shape
+             * users expect `name` (the field) to be the binder and
+             * `type` to be a discarded annotation. Bind the field name
+             * directly to the whole scalar payload. */
+            const ast_on_param_t *p = &on->as.on.params[0];
+            deck_env_bind(&app->arena, bind_env, p->field, payload);
+        } else {
+            for (uint32_t i = 0; i < on->as.on.n_params; i++) {
+                const ast_on_param_t *p = &on->as.on.params[i];
+                if (!p->field || !p->pattern) continue;
+                deck_value_t *field_val = NULL;
+                if (payload && payload->type == DECK_T_MAP) {
+                    /* Try atom key first (records), then string key (JSON / raw maps). */
+                    deck_value_t *akey = deck_new_atom(p->field);
+                    if (akey) {
+                        field_val = deck_map_get(payload, akey);
+                        deck_release(akey);
+                    }
+                    if (!field_val) {
+                        deck_value_t *skey = deck_new_str_cstr(p->field);
+                        if (skey) {
+                            field_val = deck_map_get(payload, skey);
+                            deck_release(skey);
+                        }
                     }
                 }
-            }
-            /* A missing field is unit — binders will capture that; value
-             * patterns won't match unit against a concrete literal. */
-            if (!field_val) field_val = deck_unit();
-            if (!match_pattern(&app->arena, bind_env, p->pattern, field_val)) {
-                skip_handler = true;
-                break;
+                /* A missing field is unit — binders will capture that; value
+                 * patterns won't match unit against a concrete literal. */
+                if (!field_val) field_val = deck_unit();
+                if (!match_pattern(&app->arena, bind_env, p->pattern, field_val)) {
+                    skip_handler = true;
+                    break;
+                }
             }
         }
         if (skip_handler) {

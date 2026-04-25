@@ -1974,12 +1974,26 @@ static ast_node_t *parse_assets_decl(deck_parser_t *p)
         names[k] = p->cur.text;
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after asset name")) return NULL;
-        if (!at(p, TOK_STRING)) {
-            set_err(p, DECK_LOAD_PARSE, "expected string literal path for asset");
-            return NULL;
+        /* I1 — accept any expression for the asset value, plus a trailing
+         * sequence of `key: expr` modifiers (`as: :icon`,
+         * `for_domain: "x"`, `download: "url"`, `ttl: 7d`). The runtime
+         * today only consumes a string path; richer modifier semantics
+         * lie in future asset-pipeline work. Modifiers are parsed-and-
+         * discarded for forward compatibility. */
+        if (at(p, TOK_STRING)) {
+            paths[k] = p->cur.text;
+            advance(p);
+        } else {
+            paths[k] = "";   /* non-string asset spec: value not exposed */
+            ast_node_t *discard = parse_expr_prec(p, 0);
+            if (!discard) return NULL;
         }
-        paths[k] = p->cur.text;
-        advance(p);
+        while (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+            advance(p); /* mod name */
+            advance(p); /* : */
+            ast_node_t *mod_v = parse_expr_prec(p, 0);
+            if (!mod_v) return NULL;
+        }
         k++;
         while (at(p, TOK_NEWLINE)) advance(p);
     }
