@@ -180,8 +180,10 @@ typedef struct {
 static deck_value_t *make_result_tag(const char *tag, deck_value_t *payload);
 /* Concept #44 — machine.* builtins defined after struct deck_runtime_app
  * (way below) so they can access the slot array. */
-static deck_value_t *b_machine_send (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
-static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_machine_send   (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_machine_state  (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_machine_replace(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_machine_data   (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
 /* Stage 5d-iii — option.* / result.* builtins registered before their
  * definitions (BARE_BUILTINS sits further down). */
 static deck_value_t *b_to_some    (deck_value_t **args, uint32_t n, deck_interp_ctx_t *c);
@@ -215,6 +217,12 @@ typedef struct {
     uint32_t      id;              /* 0 = slot empty */
     ast_node_t   *action_ast;      /* expression to evaluate on tap */
     deck_env_t   *captured_env;    /* retained; released when slot is cleared */
+    /* G4 — when the intent attribute was `:atom` or `:atom(payload_expr)`,
+     * we capture the atom name + payload expression here so the dispatcher
+     * can fire `@on trigger_<atom>` with the payload bound. NULL/NULL
+     * means "no @on trigger_X path — only evaluate action_ast". */
+    const char   *event_atom;
+    ast_node_t   *payload_ast;
 } deck_intent_binding_t;
 
 struct deck_runtime_app {
@@ -223,6 +231,9 @@ struct deck_runtime_app {
     deck_loader_t      ld;
     deck_interp_ctx_t  ctx;
     const char        *machine_state;
+    /* G3 — Machine.replace(record) stores user-bound machine data here.
+     * Machine.data returns a retained ref, or :none until first replace. */
+    deck_value_t      *machine_data;
     deck_intent_binding_t intents[DECK_RUNTIME_MAX_INTENTS];
     uint32_t           next_intent_id;
     /* BRIDGE §7 monotonic per-app frame counter. Incremented on every
@@ -4174,6 +4185,20 @@ static uint32_t content_bind_intent(struct deck_runtime_app *app,
     app->intents[id].id = id;
     app->intents[id].action_ast = action;
     app->intents[id].captured_env = deck_env_retain(env);
+
+    /* G4 — peek the action shape. `:atom` and `:atom(payload)` route to
+     * `@on trigger_<atom>` with the evaluated payload bound as `event`. */
+    app->intents[id].event_atom  = NULL;
+    app->intents[id].payload_ast = NULL;
+    if (action->kind == AST_LIT_ATOM) {
+        app->intents[id].event_atom  = action->as.s;
+    } else if (action->kind == AST_CALL && action->as.call.fn &&
+               action->as.call.fn->kind == AST_LIT_ATOM) {
+        app->intents[id].event_atom = action->as.call.fn->as.s;
+        if (action->as.call.args.len == 1) {
+            app->intents[id].payload_ast = action->as.call.args.items[0];
+        }
+    }
     return id;
 }
 
@@ -5610,6 +5635,10 @@ static const builtin_t BUILTINS[] = {
      * use the capitalized form. */
     { "machine.send",           b_machine_send,      1, 2 },
     { "machine.state",          b_machine_state,     0, 0 },
+    { "machine.replace",        b_machine_replace,   1, 1 },
+    { "machine.data",           b_machine_data,      0, 0 },
+    { "Machine.replace",        b_machine_replace,   1, 1 },
+    { "Machine.data",           b_machine_data,      0, 0 },
     { "Machine.send",           b_machine_send,      1, 2 },
     { "Machine.state",          b_machine_state,     0, 0 },
 
@@ -7313,6 +7342,10 @@ static struct deck_runtime_app *app_slot_alloc(void)
 static void app_slot_free(struct deck_runtime_app *app)
 {
     if (!app) return;
+    if (app->machine_data) {
+        deck_release(app->machine_data);
+        app->machine_data = NULL;
+    }
     app->in_use = false;
 }
 
@@ -7415,6 +7448,27 @@ static deck_value_t *b_machine_state(deck_value_t **args, uint32_t n, deck_inter
     return deck_new_some(deck_new_atom(app->machine_state));
 }
 
+/* G3 — Machine.replace(record): store the user-bound machine data so
+ * later @on handlers can read it back via Machine.data. Returns :unit. */
+static deck_value_t *b_machine_replace(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    struct deck_runtime_app *app = app_from_ctx(c);
+    if (!app) { set_err(c, DECK_RT_INTERNAL, 0, 0, "Machine.replace: no app context"); return NULL; }
+    if (app->machine_data) deck_release(app->machine_data);
+    app->machine_data = args[0] ? deck_retain(args[0]) : NULL;
+    return deck_retain(deck_unit());
+}
+
+/* G3 — Machine.data: return retained user-bound machine data, or :none. */
+static deck_value_t *b_machine_data(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)args; (void)n;
+    struct deck_runtime_app *app = app_from_ctx(c);
+    if (!app || !app->machine_data) return deck_new_none();
+    return deck_retain(app->machine_data);
+}
+
 /* Concept #58/#59/#60 — bridge intent dispatch.
  *
  * The binding holds a captured action AST and the render-time env. At tap
@@ -7498,11 +7552,67 @@ deck_err_t deck_runtime_app_intent_v(deck_runtime_app_t *app,
     app->ctx.module = app->ld.module;
     deck_value_t *r = deck_interp_run(&app->ctx, tap_env, b->action_ast);
     if (r) deck_release(r);
-    deck_env_release(tap_env);
     if (app->ctx.err != DECK_RT_OK) {
         ESP_LOGE(TAG, "app_intent(%u): %s",
                  (unsigned)intent_id, app->ctx.err_msg);
+        deck_env_release(tap_env);
+        return app->ctx.err;
     }
+
+    /* G4 — if the intent's action shape was `:atom` or `:atom(payload)`,
+     * also fire `@on trigger_<atom>` with the payload bound as the
+     * handler's first parameter (and as `event` for legacy access). */
+    if (b->event_atom) {
+        char evt[64];
+        snprintf(evt, sizeof(evt), "trigger_%s", b->event_atom);
+        const ast_node_t *on = find_on_event(app->ld.module, evt);
+        if (on && on->as.on.body) {
+            deck_value_t *payload = NULL;
+            if (b->payload_ast) {
+                app->ctx.err = DECK_RT_OK;
+                app->ctx.err_msg[0] = '\0';
+                payload = deck_interp_run(&app->ctx, tap_env, b->payload_ast);
+                if (app->ctx.err != DECK_RT_OK) {
+                    ESP_LOGE(TAG, "@on %s: payload eval failed: %s",
+                             evt, app->ctx.err_msg);
+                    if (payload) deck_release(payload);
+                    deck_env_release(tap_env);
+                    return app->ctx.err;
+                }
+            }
+
+            deck_env_t *body_env = deck_env_new(&app->arena, tap_env);
+            if (!body_env) {
+                if (payload) deck_release(payload);
+                deck_env_release(tap_env);
+                return DECK_RT_NO_MEMORY;
+            }
+            /* Bind the @on declared parameter (first param) to payload. */
+            if (on->as.on.n_params >= 1 && on->as.on.params[0].field) {
+                deck_env_bind(&app->arena, body_env,
+                              on->as.on.params[0].field,
+                              payload ? payload : deck_unit());
+            }
+            /* Also bind `event` so handlers can use `event` directly. */
+            deck_env_bind(&app->arena, body_env, "event",
+                          payload ? payload : deck_unit());
+
+            app->ctx.err = DECK_RT_OK;
+            app->ctx.err_msg[0] = '\0';
+            deck_value_t *hr = deck_interp_run(&app->ctx, body_env,
+                                                on->as.on.body);
+            if (hr) deck_release(hr);
+            if (payload) deck_release(payload);
+            deck_env_release(body_env);
+            if (app->ctx.err != DECK_RT_OK) {
+                ESP_LOGE(TAG, "@on %s: %s", evt, app->ctx.err_msg);
+                deck_env_release(tap_env);
+                return app->ctx.err;
+            }
+        }
+    }
+
+    deck_env_release(tap_env);
     return app->ctx.err;
 }
 

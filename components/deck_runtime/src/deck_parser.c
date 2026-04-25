@@ -507,24 +507,92 @@ static ast_node_t *parse_primary(deck_parser_t *p)
         }
         case TOK_LBRACE: {
             /* DL2 F21.6: map literal `{k1: v1, k2: v2, ...}` (also `{}`).
-             * Keys may be any expression (typically atom/string/int). */
+             * Keys may be any expression (typically atom/string/int).
+             *
+             * Spec §4.3 record-update form: `{ <base_expr> with f1: v1,
+             * f2: v2 }`. Detected by scanning the first sub-expression
+             * for a trailing `with` keyword before the first `:`. We
+             * emit AST_WITH with bare-name keys (string literals) so it
+             * matches the existing `expr with { … }` postfix's runtime. */
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
             n = ast_new(p->arena, AST_LIT_MAP, ln, co); if (!n) return NULL;
             ast_list_init(&n->as.map_lit.keys);
             ast_list_init(&n->as.map_lit.vals);
             if (!at(p, TOK_RBRACE)) {
-                for (;;) {
-                    ast_node_t *k = parse_expr_prec(p, 0);
-                    if (!k) return NULL;
+                /* First lookahead: a bare-keyword `with` after the
+                 * primary expression flips the brace into record-update
+                 * mode. parse_expr_prec will not consume `with` because
+                 * the postfix-`with` form expects `{` after it, not
+                 * another field. Detect by parsing the base, then
+                 * checking for `with`.
+                 *
+                 * Bare-name → string key shortcut: `{ tasks: [...], … }`
+                 * — when the first token is an IDENT immediately
+                 * followed by `:`, treat it as a string key (the spec's
+                 * record-literal form). Same applies in the comma loop
+                 * below. */
+                ast_node_t *first = NULL;
+                if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                    first = mknode(p, AST_LIT_STR); if (!first) return NULL;
+                    first->as.s = p->cur.text;
+                    advance(p);
+                } else {
+                    first = parse_expr_prec(p, 0);
+                    if (!first) return NULL;
+                }
+                if (at(p, TOK_KW_WITH)) {
+                    advance(p); /* with */
+                    ast_node_t *w = mknode(p, AST_WITH); if (!w) return NULL;
+                    w->as.with_.base = first;
+                    ast_list_init(&w->as.with_.keys);
+                    ast_list_init(&w->as.with_.vals);
+                    for (;;) {
+                        ast_node_t *k = NULL;
+                        if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                            k = mknode(p, AST_LIT_STR); if (!k) return NULL;
+                            k->as.s = p->cur.text;
+                            advance(p);
+                        } else {
+                            k = parse_expr_prec(p, 0);
+                            if (!k) return NULL;
+                        }
+                        if (!expect(p, TOK_COLON, "expected ':' in `{ x with f: v }`")) return NULL;
+                        ast_node_t *v = parse_expr_prec(p, 0);
+                        if (!v) return NULL;
+                        ast_list_push(p->arena, &w->as.with_.keys, k);
+                        ast_list_push(p->arena, &w->as.with_.vals, v);
+                        if (!at(p, TOK_COMMA)) break;
+                        advance(p);
+                        if (at(p, TOK_RBRACE)) break;
+                    }
+                    if (!expect(p, TOK_RBRACE, "expected '}' to close `{ x with … }`")) return NULL;
+                    n = w;
+                    break;
+                }
+                /* Plain map literal — `first` was the first key. */
+                if (!expect(p, TOK_COLON, "expected ':' in map literal")) return NULL;
+                ast_node_t *v0 = parse_expr_prec(p, 0);
+                if (!v0) return NULL;
+                ast_list_push(p->arena, &n->as.map_lit.keys, first);
+                ast_list_push(p->arena, &n->as.map_lit.vals, v0);
+                while (at(p, TOK_COMMA)) {
+                    advance(p);
+                    if (at(p, TOK_RBRACE)) break;
+                    ast_node_t *k = NULL;
+                    if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                        k = mknode(p, AST_LIT_STR); if (!k) return NULL;
+                        k->as.s = p->cur.text;
+                        advance(p);
+                    } else {
+                        k = parse_expr_prec(p, 0);
+                        if (!k) return NULL;
+                    }
                     if (!expect(p, TOK_COLON, "expected ':' in map literal")) return NULL;
                     ast_node_t *v = parse_expr_prec(p, 0);
                     if (!v) return NULL;
                     ast_list_push(p->arena, &n->as.map_lit.keys, k);
                     ast_list_push(p->arena, &n->as.map_lit.vals, v);
-                    if (!at(p, TOK_COMMA)) break;
-                    advance(p);
-                    if (at(p, TOK_RBRACE)) break;   /* trailing comma */
                 }
             }
             if (!expect(p, TOK_RBRACE, "expected '}' to close map")) return NULL;
@@ -1506,11 +1574,43 @@ static bool parse_scalar_fields(deck_parser_t    *p,
                         "`needs:` must be a top-level `@needs` "
                         "annotation (LANG §8), not a nested "
                         "field inside @app");
-            } else {
+                return false;
+            }
+            /* G1 — accept an indented YAML-style bullet list:
+             *   serves:
+             *     - "endpoint/foo"
+             *     - "endpoint/bar"
+             * Synthesise an AST_LIT_LIST so the loader treats it as if
+             * the source had written `serves: ["endpoint/foo", …]`. */
+            advance(p); /* NEWLINE */
+            while (at(p, TOK_NEWLINE)) advance(p);
+            if (!at(p, TOK_INDENT)) {
                 set_err(p, DECK_LOAD_PARSE,
                         "nested blocks are not allowed in this context");
+                return false;
             }
-            return false;
+            advance(p); /* INDENT */
+            ast_node_t *list_lit = mknode(p, AST_LIT_LIST);
+            if (!list_lit) return false;
+            ast_list_init(&list_lit->as.list.items);
+            while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                if (at(p, TOK_NEWLINE)) { advance(p); continue; }
+                if (!at(p, TOK_MINUS)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected '-' starting list item in @app field");
+                    return false;
+                }
+                advance(p); /* - */
+                ast_node_t *item = parse_expr_prec(p, 0);
+                if (!item) return false;
+                ast_list_push(p->arena, &list_lit->as.list.items, item);
+                while (at(p, TOK_NEWLINE)) advance(p);
+            }
+            if (!expect(p, TOK_DEDENT, "expected dedent closing yaml list")) return false;
+            buf[n].name  = name;
+            buf[n].value = list_lit;
+            n++;
+            continue;
         }
         ast_node_t *val = parse_expr_prec(p, 0);
         if (!val) return false;
@@ -3182,8 +3282,40 @@ static ast_node_t *parse_type_decl(deck_parser_t *p)
     return n;
 }
 
+/* Bare-keyword `type T = <type-expr>` top-level alias (LANG §5.4
+ * spec form). DL2 doesn't enforce types at runtime, so we parse-and-
+ * discard: consume the name, the '=', and the balanced type
+ * expression up to the next top-level boundary, returning a
+ * placeholder AST node (AST_TYPE_DEF with zero fields). */
+static ast_node_t *parse_type_alias_decl(deck_parser_t *p)
+{
+    advance(p); /* 'type' */
+    if (!at(p, TOK_IDENT)) {
+        set_err(p, DECK_LOAD_PARSE, "expected type name after 'type'");
+        return NULL;
+    }
+    ast_node_t *n = mknode(p, AST_TYPE_DEF); if (!n) return NULL;
+    n->as.typedef_.name     = p->cur.text;
+    n->as.typedef_.fields   = NULL;
+    n->as.typedef_.n_fields = 0;
+    advance(p); /* name */
+    if (!expect(p, TOK_ASSIGN, "expected '=' after type name")) return NULL;
+    /* Skip the entire type expression. skip_type_annotation already
+     * stops at top-level NEWLINE / DEDENT / EOF and handles balanced
+     * brackets, so it's a perfect fit for the body. */
+    if (!skip_type_annotation(p)) return NULL;
+    while (at(p, TOK_NEWLINE)) advance(p);
+    return n;
+}
+
 static ast_node_t *parse_top_item(deck_parser_t *p)
 {
+    /* Bare-keyword `type T = ...` lexes as IDENT IDENT '=' ... */
+    if (at(p, TOK_IDENT) && p->cur.text &&
+        strcmp(p->cur.text, "type") == 0 &&
+        peek_next_tok(p) == TOK_IDENT) {
+        return parse_type_alias_decl(p);
+    }
     if (at(p, TOK_KW_FN)) {
         ast_node_t *fnn = parse_fn_decl(p);
         if (!fnn) return NULL;

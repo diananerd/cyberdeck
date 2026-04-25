@@ -202,8 +202,12 @@ static const cap_entry_t DL1_CAPS[] = {
     { "os",     DL1_CAP_OS     },
     { "list",   DL1_CAP_LIST   },
     { "map",    DL1_CAP_MAP    },
-    { "bridge", DL1_CAP_BRIDGE },
-    { "asset",  DL1_CAP_ASSET  },
+    { "bridge",  DL1_CAP_BRIDGE  },
+    { "asset",   DL1_CAP_ASSET   },
+    /* G3 — both casings registered so apps can write either Machine.send
+     * (spec convention) or machine.send (lower-case). */
+    { "Machine", DL1_CAP_MACHINE },
+    { "machine", DL1_CAP_MACHINE },
     { NULL, 0 },
 };
 
@@ -244,7 +248,7 @@ static void check_call_cap(deck_loader_t *l, const ast_node_t *call)
     if (!root || root->kind != AST_IDENT) return;
     if (lookup_cap(root->as.s)) return;
     set_err(l, DECK_LOAD_INCOMPATIBLE, 4, fn->line, fn->col,
-            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map, bridge, asset)",
+            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map, bridge, asset, Machine)",
             root->as.s ? root->as.s : "?");
 }
 

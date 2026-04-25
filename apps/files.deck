@@ -1,4 +1,4 @@
--- files.deck — Stage E reference app #4.
+-- files.deck — Stage E reference app #4 (spec-first restored).
 
 @app
   name:    "Files"
@@ -19,6 +19,11 @@
 @use
   storage.fs as fs
 
+type Entry = { name: str, is_dir: bool }
+
+fn root_entries () -> [Entry] =
+  [{ name: "etc", is_dir: true }, { name: "home", is_dir: true }, { name: "tmp", is_dir: true }, { name: "var", is_dir: true }]
+
 @on launch:
   log.info("files: boot")
 
@@ -29,8 +34,12 @@
 
     content =
       group "Files"
-        navigate label: "etc"
-        navigate label: "home"
-        navigate label: "tmp"
-        navigate label: "var"
-        trigger  label: "UP"
+        list root_entries()
+          item e -> navigate label: e.name, intent: :open(e.name)
+        trigger label: "UP", intent: :go_up
+
+@on trigger_open(name: str):
+  log.info("files: open {name}")
+
+@on trigger_go_up:
+  log.info("files: up")

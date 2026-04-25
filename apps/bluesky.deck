@@ -1,4 +1,4 @@
--- bluesky.deck — Stage E reference app #5.
+-- bluesky.deck — Stage E reference app #5 (spec-first restored).
 
 @app
   name:    "Bluesky"
@@ -19,6 +19,11 @@
 @use
   network.http as http
 
+type Post = { author: str, text: str }
+
+fn fixture () -> [Post] =
+  [{ author: "alice", text: "hello from deck" }, { author: "bob", text: "world!" }, { author: "carol", text: "deck rules" }]
+
 @on launch:
   log.info("bluesky: boot")
 
@@ -29,7 +34,9 @@
 
     content =
       group "Timeline"
-        rich_text "alice: hello"
-        rich_text "bob: world"
-        rich_text "carol: deck!"
-        trigger label: "REFRESH"
+        list fixture()
+          item p -> rich_text "{p.author}: {p.text}"
+        trigger label: "REFRESH", intent: :refresh
+
+@on trigger_refresh:
+  log.info("bluesky: refresh")

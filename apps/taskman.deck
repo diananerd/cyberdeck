@@ -1,4 +1,8 @@
--- taskman.deck — Stage E reference app #2.
+-- taskman.deck — Stage E reference app #2 (spec-first restored).
+--
+-- Tasks list with toggle + add. Persists to NVS via storage.nvs.
+-- Demonstrates G2 ({record with field}) + G3 (Machine.replace/data) +
+-- G4 (@on trigger_<atom> with payload).
 
 @app
   name:    "Tasks"
@@ -18,8 +22,11 @@
 @use
   storage.nvs as nvs
 
+type Task = { id: str, title: str, done: bool }
+
 @on launch:
   log.info("taskman: boot")
+  Machine.replace({ tasks: [{ id: "t1", title: "BUY GROCERIES", done: false }, { id: "t2", title: "CALL DR", done: false }, { id: "t3", title: "FINISH DECK SPEC", done: false }], draft: "" })
 
 @machine taskman
   state running:
@@ -28,7 +35,13 @@
 
     content =
       group "Tasks"
-        status :idle label: "BUY GROCERIES"
-        status :idle label: "CALL DR"
-        status :idle label: "FINISH DECK SPEC"
-        trigger label: "ADD TASK"
+        list Machine.data.tasks
+          item t -> toggle label: t.title, value: t.done, intent: :mark(t.id)
+        trigger label: "ADD TASK", intent: :open_compose
+
+@on trigger_mark(id: str):
+  do
+    log.info("taskman: mark {id}")
+
+@on trigger_open_compose:
+  log.info("taskman: open compose")

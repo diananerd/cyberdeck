@@ -1,4 +1,4 @@
--- settings.deck — Stage E reference app #3.
+-- settings.deck — Stage E reference app #3 (spec-first restored).
 
 @app
   name:    "Settings"
@@ -34,12 +34,33 @@
 
     content =
       group "Display"
-        choice  label: "Theme"
-        choice  label: "Rotation"
-        range   label: "Brightness"
+        choice  label: "Theme",      intent: :set_theme
+        choice  label: "Rotation",   intent: :set_rotation
+        range   label: "Brightness", min: 0, max: 100, intent: :set_brightness
       group "Security"
-        toggle  label: "Lock when idle"
-        trigger label: "LOCK NOW"
+        toggle  label: "Lock when idle", intent: :toggle_idle_lock
+        trigger label: "LOCK NOW",       intent: :lock_now
       group "System"
-        trigger label: "CHECK FOR UPDATE"
-        trigger label: "ABOUT"
+        trigger label: "CHECK FOR UPDATE", intent: :check_update
+        trigger label: "ABOUT",            intent: :about
+
+@on trigger_set_theme(v: atom):
+  log.info("settings: theme = {v}")
+
+@on trigger_set_rotation(v: int):
+  log.info("settings: rotation = {v}")
+
+@on trigger_set_brightness(v: int):
+  log.info("settings: brightness = {v}")
+
+@on trigger_toggle_idle_lock(v: bool):
+  log.info("settings: idle-lock = {v}")
+
+@on trigger_lock_now:
+  log.info("settings: lock now")
+
+@on trigger_check_update:
+  log.info("settings: OTA check")
+
+@on trigger_about:
+  log.info("settings: about")

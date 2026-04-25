@@ -1,14 +1,6 @@
--- launcher.deck — Stage E reference app #1.
+-- launcher.deck — Stage E reference app #1 (spec-first restored).
 --
--- A minimal launcher that surfaces a small catalog of installed apps
--- and routes taps to navigate intents. The bridge decides layout —
--- the app only declares which semantic item goes where.
---
--- Deck features exercised (as parsed by the current runtime):
---   @app identity
---   @machine with a single `browsing` state
---   content primitives: group, list <expr> with `item ->` template,
---                        navigate intent
+-- Catalog → navigate intent per entry. The bridge picks the layout.
 
 @app
   name:    "Launcher"
@@ -19,11 +11,13 @@
 @needs
   deck_level: 1
 
+type Entry = { id: str, name: str }
+
+fn catalog () -> [Entry] =
+  [{ id: "tasks", name: "TASKS" }, { id: "files", name: "FILES" }, { id: "settings", name: "SETTINGS" }, { id: "bluesky", name: "BLUESKY" }]
+
 @on launch:
   log.info("launcher: boot")
-
-fn catalog () -> [str] =
-  ["TASKS", "FILES", "SETTINGS", "BLUESKY"]
 
 @machine launcher
   state browsing:
@@ -34,4 +28,4 @@ fn catalog () -> [str] =
       group "Apps"
         list catalog()
           item app ->
-            navigate label: app
+            navigate label: app.name
