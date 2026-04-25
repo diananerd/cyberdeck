@@ -12,14 +12,15 @@
 -- Old version used non-spec forms:
 --   - `@use log` (no alias) — §4 requires `name as alias`
 --   - `@use.optional crypto` — §4 is `crypto as alias  optional`
---   - `@grants` with `cap: required` — §5 is `cap reason: "…"`
+--   - `@grants` requires `cap:` + indented `reason:` block (LANG §10)
 --   - `@errors` without domain name — §7 is `@errors domain_name`
 
 @use
   crypto.aes as aes  optional
 
 @grants
-  crypto.aes  reason: "Encrypt local notes"
+  crypto.aes:
+    reason: "Encrypt local notes"
 
 @errors sensor
   :unavailable  "Sensor not responding"

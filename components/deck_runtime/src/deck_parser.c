@@ -1290,52 +1290,15 @@ static ast_node_t *parse_match(deck_parser_t *p)
     return m;
 }
 
-/* Tolerate a NEWLINE+optional INDENT before each clause keyword so the
- * spec's multi-line `if cond\n  then expr\n  else expr` form parses
- * the same as the inline `if cond then expr else expr` form. The
- * matching DEDENT (when an INDENT was consumed) is eaten lazily after
- * the clause expression. */
-static bool eat_clause_continuation(deck_parser_t *p, bool *ate_indent)
-{
-    *ate_indent = false;
-    while (at(p, TOK_NEWLINE)) advance(p);
-    if (at(p, TOK_INDENT)) { advance(p); *ate_indent = true; }
-    while (at(p, TOK_NEWLINE)) advance(p);
-    return true;
-}
-static void exit_clause_continuation(deck_parser_t *p, bool ate_indent)
-{
-    if (ate_indent) {
-        while (at(p, TOK_NEWLINE)) advance(p);
-        if (at(p, TOK_DEDENT)) advance(p);
-    }
-}
-
-/* Parse an if-clause body: either an inline expression or a suite-
- * style indented block (for `then\n  ...` / `else\n  ...`). */
-static ast_node_t *parse_clause_body(deck_parser_t *p)
-{
-    if (at(p, TOK_NEWLINE)) {
-        return parse_suite(p);   /* eats NEWLINE + INDENT + stmts + DEDENT */
-    }
-    return parse_expr_prec(p, 0);
-}
-
 static ast_node_t *parse_if(deck_parser_t *p)
 {
     ast_node_t *n = mknode(p, AST_IF); if (!n) return NULL;
     advance(p); /* if */
     n->as.if_.cond = parse_expr_prec(p, 0); if (!n->as.if_.cond) return NULL;
-    bool ai_then = false;
-    eat_clause_continuation(p, &ai_then);
     if (!expect(p, TOK_KW_THEN, "expected 'then' after if condition")) return NULL;
-    n->as.if_.then_ = parse_clause_body(p); if (!n->as.if_.then_) return NULL;
-    exit_clause_continuation(p, ai_then);
-    bool ai_else = false;
-    eat_clause_continuation(p, &ai_else);
+    n->as.if_.then_ = parse_expr_prec(p, 0); if (!n->as.if_.then_) return NULL;
     if (!expect(p, TOK_KW_ELSE, "expected 'else' in if expression")) return NULL;
-    n->as.if_.else_ = parse_clause_body(p); if (!n->as.if_.else_) return NULL;
-    exit_clause_continuation(p, ai_else);
+    n->as.if_.else_ = parse_expr_prec(p, 0); if (!n->as.if_.else_) return NULL;
     return n;
 }
 
@@ -3105,12 +3068,9 @@ static ast_node_t *parse_grants_decl(deck_parser_t *p)
         if (ne >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @grants entries (max 32)"); return NULL; }
         const char *name = parse_dotted_name(p);
         if (!name) { set_err(p, DECK_LOAD_PARSE, "expected grant entry name"); return NULL; }
-        /* `:` is optional — LANG §10's `cap reason: "..."` form has no
-         * trailing colon on the cap, while `cap:\n  reason: "..."` does. */
-        if (at(p, TOK_COLON)) {
-            advance(p);
-            while (at(p, TOK_NEWLINE)) advance(p);
-        }
+        if (!expect(p, TOK_COLON, "expected ':' after grant entry name")) return NULL;
+        if (!expect(p, TOK_NEWLINE, "expected newline after grant entry ':'")) return NULL;
+        while (at(p, TOK_NEWLINE)) advance(p);
 
         /* J8 — `services:` followed by a quoted-string-keyed sub-block
          * is the spec-first form: each `"<id>": <alias>` line becomes
@@ -3149,17 +3109,6 @@ static ast_node_t *parse_grants_decl(deck_parser_t *p)
 
         names[ne] = name;
         offs[ne]  = opts.len;
-
-        /* Inline options on the same line as the entry name — picks up
-         * the LANG §10 form `crypto.aes  reason: "...", prompt: "..."`. */
-        while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) &&
-               !at(p, TOK_INDENT) && !at(p, TOK_DEDENT)) {
-            const char *k = NULL; ast_node_t *v = NULL;
-            if (!parse_kv_option(p, &k, &v)) return NULL;
-            if (!opt_buf_push(p, &opts, k, v)) return NULL;
-            if (at(p, TOK_COMMA)) advance(p);
-        }
-        while (at(p, TOK_NEWLINE)) advance(p);
 
         if (at(p, TOK_INDENT)) {
             advance(p);
