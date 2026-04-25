@@ -722,7 +722,10 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
             }
             ast_node_t *n = mknode(p, AST_DOT); if (!n) return NULL;
             n->as.dot.obj   = head;
-            n->as.dot.field = p->cur.text;
+            /* TOK_KW_SEND has no text payload; substitute the keyword
+             * spelling so dotted-path lookups (Machine.send) resolve. */
+            n->as.dot.field = at(p, TOK_KW_SEND) ? deck_intern_cstr("send")
+                                                  : p->cur.text;
             advance(p);
             head = n;
             continue;
@@ -1974,25 +1977,54 @@ static ast_node_t *parse_assets_decl(deck_parser_t *p)
         names[k] = p->cur.text;
         advance(p);
         if (!expect(p, TOK_COLON, "expected ':' after asset name")) return NULL;
-        /* I1 — accept any expression for the asset value, plus a trailing
-         * sequence of `key: expr` modifiers (`as: :icon`,
-         * `for_domain: "x"`, `download: "url"`, `ttl: 7d`). The runtime
-         * today only consumes a string path; richer modifier semantics
-         * lie in future asset-pipeline work. Modifiers are parsed-and-
-         * discarded for forward compatibility. */
-        if (at(p, TOK_STRING)) {
+        /* Accept any of:
+         *   name: "path"                                   (legacy)
+         *   name: <expr>                                   (e.g. ASSETS["x"])
+         *   name: <expr> mod1: v1  mod2: v2 ...
+         *   name: mod1: v1  mod2: v2 ...                   (no path, only modifiers)
+         * The leading value is optional iff the next token is an ident
+         * immediately followed by `:` (i.e. starts a modifier). */
+        bool is_modifier_first = at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON;
+        if (is_modifier_first) {
+            paths[k] = "";
+        } else if (at(p, TOK_STRING)) {
             paths[k] = p->cur.text;
             advance(p);
         } else {
-            paths[k] = "";   /* non-string asset spec: value not exposed */
+            paths[k] = "";
             ast_node_t *discard = parse_expr_prec(p, 0);
             if (!discard) return NULL;
         }
         while (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
             advance(p); /* mod name */
             advance(p); /* : */
-            ast_node_t *mod_v = parse_expr_prec(p, 0);
-            if (!mod_v) return NULL;
+            /* Single-token literal value only — explicit list to avoid
+             * parse_primary's variant-constructor heuristic (`:atom IDENT`
+             * → `:atom(IDENT)`) which would eat the next modifier
+             * name as the atom's payload. */
+            switch (p->cur.type) {
+                case TOK_STRING: case TOK_INT: case TOK_FLOAT:
+                case TOK_ATOM:   case TOK_KW_TRUE: case TOK_KW_FALSE:
+                case TOK_KW_UNIT:case TOK_KW_NONE:
+                    advance(p);
+                    break;
+                case TOK_LBRACKET: case TOK_LBRACE: {
+                    /* Eat balanced bracket span — value is parsed-and-
+                     * discarded by the runtime today, so the structure
+                     * doesn't need to land in the AST. */
+                    int depth = 0;
+                    do {
+                        if (at(p, TOK_LBRACKET) || at(p, TOK_LBRACE)) depth++;
+                        else if (at(p, TOK_RBRACKET) || at(p, TOK_RBRACE)) depth--;
+                        advance(p);
+                    } while (depth > 0 && !at(p, TOK_EOF));
+                    break;
+                }
+                default:
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected literal value for asset modifier");
+                    return NULL;
+            }
         }
         k++;
         while (at(p, TOK_NEWLINE)) advance(p);
@@ -2732,6 +2764,81 @@ static ast_node_t *parse_machine_decl(deck_parser_t *p)
             }
             continue;
         }
+        /* LANG §13.3 — `on :event from :src to :dst` top-level form.
+         * Lowered to AST_MACHINE_TRANSITION with optional indented
+         * before:/after: body identical to the `transition` form. */
+        if (at(p, TOK_KW_ON)) {
+            ast_node_t *tn = mknode(p, AST_MACHINE_TRANSITION); if (!tn) return NULL;
+            tn->as.machine_transition.event = NULL;
+            tn->as.machine_transition.from_state = NULL;
+            tn->as.machine_transition.to_state = NULL;
+            tn->as.machine_transition.when_expr = NULL;
+            tn->as.machine_transition.before_body = NULL;
+            tn->as.machine_transition.after_body = NULL;
+            advance(p); /* on */
+            if (!at(p, TOK_ATOM)) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "expected `:event` after `on` in @machine body");
+                return NULL;
+            }
+            tn->as.machine_transition.event = p->cur.text;
+            advance(p);
+            /* `from :src` */
+            if (at(p, TOK_IDENT) && p->cur.text &&
+                strcmp(p->cur.text, "from") == 0) {
+                advance(p);
+                if (at(p, TOK_ATOM)) {
+                    tn->as.machine_transition.from_state = p->cur.text;
+                    advance(p);
+                } else if (at(p, TOK_STAR)) {
+                    advance(p);
+                }
+            }
+            /* `to :dst` */
+            if (at(p, TOK_IDENT) && p->cur.text &&
+                strcmp(p->cur.text, "to") == 0) {
+                advance(p);
+                if (at(p, TOK_ATOM)) {
+                    tn->as.machine_transition.to_state = p->cur.text;
+                    advance(p);
+                }
+            }
+            while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) && !at(p, TOK_DEDENT))
+                advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+            /* Optional indented before:/after:/when: clause block. */
+            if (at(p, TOK_INDENT)) {
+                advance(p);
+                while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                    if (at(p, TOK_IDENT) && p->cur.text) {
+                        const char *key = p->cur.text;
+                        advance(p);
+                        if (at(p, TOK_COLON)) advance(p);
+                        if (strcmp(key, "before") == 0) {
+                            tn->as.machine_transition.before_body = parse_suite(p);
+                        } else if (strcmp(key, "after") == 0) {
+                            tn->as.machine_transition.after_body = parse_suite(p);
+                        } else if (strcmp(key, "when") == 0) {
+                            tn->as.machine_transition.when_expr = parse_expr_prec(p, 0);
+                        } else {
+                            /* Unknown clause — skip to next NEWLINE. */
+                            while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) &&
+                                   !at(p, TOK_DEDENT))
+                                advance(p);
+                        }
+                        while (at(p, TOK_NEWLINE)) advance(p);
+                    } else {
+                        advance(p);
+                    }
+                }
+                if (at(p, TOK_DEDENT)) advance(p);
+            }
+            if (tn->as.machine_transition.event &&
+                tn->as.machine_transition.to_state) {
+                ast_list_push(p->arena, &m->as.machine.transitions, tn);
+            }
+            continue;
+        }
         set_err(p, DECK_LOAD_PARSE,
                 "expected `state`, `initial`, or `transition` in @machine body");
         return NULL;
@@ -2830,7 +2937,9 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
      * them forward for loader cross-check. */
     const char *effects_buf[8];
     uint32_t n_effects = 0;
+    bool has_bang = false;
     while (at(p, TOK_BANG)) {
+        has_bang = true;
         advance(p);
         if (at(p, TOK_IDENT)) {
             if (n_effects >= 8) {
@@ -2857,6 +2966,7 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
                                               n_effects * sizeof(char *))
                           : NULL;
     n->as.fndef.n_effects = n_effects;
+    n->as.fndef.has_bang = has_bang;
     n->as.fndef.body     = body;
     return n;
 }
@@ -2958,9 +3068,12 @@ static ast_node_t *parse_grants_decl(deck_parser_t *p)
         if (ne >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @grants entries (max 32)"); return NULL; }
         const char *name = parse_dotted_name(p);
         if (!name) { set_err(p, DECK_LOAD_PARSE, "expected grant entry name"); return NULL; }
-        if (!expect(p, TOK_COLON, "expected ':' after grant entry name")) return NULL;
-        if (!expect(p, TOK_NEWLINE, "expected newline after grant entry ':'")) return NULL;
-        while (at(p, TOK_NEWLINE)) advance(p);
+        /* `:` is optional — LANG §10's `cap reason: "..."` form has no
+         * trailing colon on the cap, while `cap:\n  reason: "..."` does. */
+        if (at(p, TOK_COLON)) {
+            advance(p);
+            while (at(p, TOK_NEWLINE)) advance(p);
+        }
 
         /* J8 — `services:` followed by a quoted-string-keyed sub-block
          * is the spec-first form: each `"<id>": <alias>` line becomes
@@ -2999,6 +3112,17 @@ static ast_node_t *parse_grants_decl(deck_parser_t *p)
 
         names[ne] = name;
         offs[ne]  = opts.len;
+
+        /* Inline options on the same line as the entry name — picks up
+         * the LANG §10 form `crypto.aes  reason: "...", prompt: "..."`. */
+        while (!at(p, TOK_NEWLINE) && !at(p, TOK_EOF) &&
+               !at(p, TOK_INDENT) && !at(p, TOK_DEDENT)) {
+            const char *k = NULL; ast_node_t *v = NULL;
+            if (!parse_kv_option(p, &k, &v)) return NULL;
+            if (!opt_buf_push(p, &opts, k, v)) return NULL;
+            if (at(p, TOK_COMMA)) advance(p);
+        }
+        while (at(p, TOK_NEWLINE)) advance(p);
 
         if (at(p, TOK_INDENT)) {
             advance(p);
@@ -3067,10 +3191,33 @@ static ast_node_t *parse_config_decl(deck_parser_t *p)
         defs[ne] = deck_parser_parse_expr(p);
         if (!defs[ne]) return NULL;
         offs[ne] = opts.len;
-        while (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
-            const char *k = NULL; ast_node_t *v = NULL;
-            if (!parse_kv_option(p, &k, &v)) return NULL;
-            if (!opt_buf_push(p, &opts, k, v)) return NULL;
+        /* Inline modifiers (`min: 0  max: 10`) — must stay on the same
+         * line as the default value; a NEWLINE means the next entry
+         * starts. parse_kv_option's internal skip_newlines was eating
+         * the line terminator, so the next field name was being
+         * consumed as a modifier value. */
+        while (!at(p, TOK_NEWLINE) && !at(p, TOK_DEDENT) && !at(p, TOK_EOF)
+               && at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+            const char *kk = p->cur.text;
+            advance(p); /* key */
+            advance(p); /* : */
+            /* Same single-token literal restriction as @assets to
+             * avoid the variant-constructor heuristic. */
+            ast_node_t *v = NULL;
+            switch (p->cur.type) {
+                case TOK_STRING: case TOK_INT: case TOK_FLOAT:
+                case TOK_ATOM:   case TOK_KW_TRUE: case TOK_KW_FALSE:
+                case TOK_KW_UNIT:case TOK_KW_NONE:
+                    v = mknode(p, AST_LIT_NONE); /* placeholder shape */
+                    advance(p);
+                    break;
+                default:
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected literal value for @config modifier");
+                    return NULL;
+            }
+            if (!opt_buf_push(p, &opts, kk, v)) return NULL;
+            if (at(p, TOK_COMMA)) advance(p);
         }
         lens[ne] = opts.len - offs[ne];
         ne++;

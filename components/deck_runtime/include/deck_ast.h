@@ -213,6 +213,7 @@ struct ast_node {
             uint32_t     n_effects;
             ast_node_t  *body;
             bool         is_private; /* DL2 F22.9 — @private prefix */
+            bool         has_bang;   /* LANG §2.6 — purity bit `!` after sig */
         } fndef;
 
         struct { ast_app_field_t *fields; uint32_t n_fields; } app;

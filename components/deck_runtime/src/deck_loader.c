@@ -121,6 +121,7 @@ static bool state_has_name(const ast_node_t *machine, const char *name)
 
 static void check_transition_targets(deck_loader_t *l, const ast_node_t *machine)
 {
+    /* In-state `transition :event` targets. */
     for (uint32_t i = 0; i < machine->as.machine.states.len; i++) {
         const ast_node_t *st = machine->as.machine.states.items[i];
         if (!st || st->kind != AST_STATE) continue;
@@ -136,6 +137,26 @@ static void check_transition_targets(deck_loader_t *l, const ast_node_t *machine
                     return;
                 }
             }
+        }
+    }
+    /* Top-level `on :event from :src to :dst` (LANG §13.3) — both src
+     * and dst must resolve to a declared state. */
+    for (uint32_t i = 0; i < machine->as.machine.transitions.len; i++) {
+        const ast_node_t *t = machine->as.machine.transitions.items[i];
+        if (!t || t->kind != AST_MACHINE_TRANSITION) continue;
+        const char *src = t->as.machine_transition.from_state;
+        const char *dst = t->as.machine_transition.to_state;
+        if (src && !state_has_name(machine, src)) {
+            set_err(l, DECK_LOAD_UNRESOLVED, 2, t->line, t->col,
+                    "transition `from :%s` not a state in machine '%s'",
+                    src, machine->as.machine.name ? machine->as.machine.name : "?");
+            return;
+        }
+        if (dst && !state_has_name(machine, dst)) {
+            set_err(l, DECK_LOAD_UNRESOLVED, 2, t->line, t->col,
+                    "transition `to :%s` not a state in machine '%s'",
+                    dst, machine->as.machine.name ? machine->as.machine.name : "?");
+            return;
         }
     }
 }
@@ -208,6 +229,25 @@ static const cap_entry_t DL1_CAPS[] = {
      * (spec convention) or machine.send (lower-case). */
     { "Machine", DL1_CAP_MACHINE },
     { "machine", DL1_CAP_MACHINE },
+    /* Builtin modules — every namespace registered as a Deck builtin
+     * is also a recognised capability so apps can call them via dotted
+     * paths without triggering the cap-check. */
+    { "result",  DL1_CAP_RESULT  },
+    { "option",  DL1_CAP_OPTION  },
+    { "record",  DL1_CAP_RECORD  },
+    { "json",    DL1_CAP_JSON    },
+    { "rand",    DL1_CAP_RAND    },
+    { "stream",  DL1_CAP_STREAM  },
+    { "tup",     DL1_CAP_TUP     },
+    /* Service tiers — coarse buckets per Tier. */
+    { "network", DL1_CAP_NETWORK },
+    { "storage", DL1_CAP_STORAGE },
+    { "media",   DL1_CAP_MEDIA   },
+    { "auth",    DL1_CAP_AUTH    },
+    { "data",    DL1_CAP_DATA    },
+    { "share",   DL1_CAP_SHARE   },
+    { "api",     DL1_CAP_API     },
+    { "sensors", DL1_CAP_SENSORS },
     { NULL, 0 },
 };
 
@@ -248,8 +288,7 @@ static void check_call_cap(deck_loader_t *l, const ast_node_t *call)
     if (!root || root->kind != AST_IDENT) return;
     if (lookup_cap(root->as.s)) return;
     set_err(l, DECK_LOAD_INCOMPATIBLE, 4, fn->line, fn->col,
-            "unknown capability '%s' (allowed: math, text, bytes, log, time, system, nvs, fs, os, list, map, bridge, asset, Machine)",
-            root->as.s ? root->as.s : "?");
+            "unknown capability '%s'", root->as.s ? root->as.s : "?");
 }
 
 static void walk_list(deck_loader_t *l, const ast_list_t *list)
@@ -368,8 +407,41 @@ static bool use_declared(const ast_node_t *mod, const char *alias)
     return false;
 }
 
+/* True iff the module declares anything that authorises impure fns:
+ * @grants, @needs.caps with at least one entry, or @needs.services. */
+static bool module_authorises_effects(const ast_node_t *mod)
+{
+    if (!mod) return false;
+    for (uint32_t i = 0; i < mod->as.module.items.len; i++) {
+        const ast_node_t *it = mod->as.module.items.items[i];
+        if (!it) continue;
+        if (it->kind == AST_GRANTS) return true;
+        if (it->kind == AST_USE) return true;
+    }
+    const ast_node_t *needs = find_needs(mod);
+    if (needs) {
+        if (find_field(needs, "caps")          ||
+            find_field(needs, "capabilities")  ||
+            find_field(needs, "services")      ||
+            find_field(needs, "effects"))
+            return true;
+    }
+    return false;
+}
+
 static void check_fn_effects(deck_loader_t *l, const ast_node_t *fn)
 {
+    /* LANG §2.6 — bare `!` purity bit declares the fn impure. The
+     * module must authorise effects (via @grants, @use, or
+     * @needs.caps/services/effects) for that to load. */
+    if (fn->as.fndef.has_bang && fn->as.fndef.n_effects == 0 &&
+        !module_authorises_effects(l->module)) {
+        set_err(l, DECK_LOAD_INCOMPATIBLE, 4, fn->line, fn->col,
+                "fn '%s' is declared impure (`!`) but no @grants / @use / "
+                "@needs.{caps,services,effects} authorises effects",
+                fn->as.fndef.name ? fn->as.fndef.name : "<anon>");
+        return;
+    }
     for (uint32_t i = 0; i < fn->as.fndef.n_effects; i++) {
         const char *eff = fn->as.fndef.effects[i];
         if (!use_declared(l->module, eff)) {
@@ -619,7 +691,10 @@ static void check_required_capabilities(deck_loader_t *l)
      * dotted capability names. */
     const ast_node_t *req = find_needs(l->module);
     if (!req) return;
+    /* @needs.capabilities was renamed to @needs.caps in the spec
+     * cutover (LANG §8); accept both spellings during the transition. */
     const ast_app_field_t *caps = find_field(req, "capabilities");
+    if (!caps) caps = find_field(req, "caps");
     if (!caps || !caps->value) return;
     const ast_node_t *block = caps->value;
     if (block->kind != AST_NEEDS) {

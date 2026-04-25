@@ -46,6 +46,22 @@ typedef enum {
     DL1_CAP_BRIDGE    = 1u << 11,  /* DL2 F28 Phase 2 — bridge.ui.* builders */
     DL1_CAP_ASSET     = 1u << 12,  /* DL2 F28.5 — asset.path(name) */
     DL1_CAP_MACHINE   = 1u << 13,  /* G3 — Machine.send/replace/data/state */
+    DL1_CAP_RESULT    = 1u << 14,  /* BUILTINS §15 — Result combinators */
+    DL1_CAP_OPTION    = 1u << 15,  /* BUILTINS §14 — Option combinators */
+    DL1_CAP_RECORD    = 1u << 16,  /* BUILTINS §16 — Record reflection */
+    DL1_CAP_JSON      = 1u << 17,  /* BUILTINS §17 — JSON */
+    DL1_CAP_RAND      = 1u << 18,  /* BUILTINS §20 — random */
+    DL1_CAP_STREAM    = 1u << 19,  /* BUILTINS §12 — stream */
+    DL1_CAP_NETWORK   = 1u << 20,  /* SERVICES Tier 2 — network.{http,wifi,...} */
+    DL1_CAP_STORAGE   = 1u << 21,  /* SERVICES Tier 1 — storage.{cache,fs,nvs} */
+    DL1_CAP_MEDIA     = 1u << 22,  /* SERVICES Tier 4 — media.{image,audio} */
+    DL1_CAP_AUTH      = 1u << 23,  /* SERVICES Tier 4 — auth.oauth */
+    DL1_CAP_DATA      = 1u << 24,  /* SERVICES Tier 4 — data.cache */
+    DL1_CAP_SHARE     = 1u << 25,  /* SERVICES Tier 4 — share.target */
+    DL1_CAP_API       = 1u << 26,  /* SERVICES Tier 4 — api.client */
+    DL1_CAP_SENSORS   = 1u << 27,  /* SERVICES Tier 5 — sensors.* */
+    DL1_CAP_TUP       = 1u << 28,  /* tup.* — tuple helpers */
+    DL1_CAP_OS_INFO   = 1u << 29,  /* type_of, is_*, etc. (top-level) */
 } deck_dl1_cap_t;
 
 typedef struct {

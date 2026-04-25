@@ -268,7 +268,13 @@ static bool scan_cb(const char *name, bool is_dir, void *user)
 
 static deck_err_t load_one(loaded_slot_t *slot, uint16_t app_id, const char *path)
 {
-    char *buf = heap_caps_malloc(DECK_SRC_CAP_BYTES, MALLOC_CAP_INTERNAL);
+    /* Use SPIRAM-friendly allocation: the source buffer is read-once
+     * (up to 24 KB) and immediately handed to the parser, which copies
+     * what it needs into the per-app arena. After conformance leaves
+     * the internal heap fragmented, INTERNAL-only allocs of this size
+     * fail; falling back to the default cap (which prefers SPIRAM)
+     * makes the load robust regardless of internal fragmentation. */
+    char *buf = heap_caps_malloc(DECK_SRC_CAP_BYTES, MALLOC_CAP_DEFAULT);
     if (!buf) return DECK_RT_NO_MEMORY;
 
     size_t n = DECK_SRC_CAP_BYTES - 1;
@@ -326,14 +332,20 @@ deck_err_t deck_shell_deck_apps_scan_and_register(void)
         return DECK_RT_OK;
     }
 
+    ESP_LOGI(TAG, "scan collected %u top-level .deck files", (unsigned)sc.n);
     uint16_t next_id = DECK_APPS_BASE_ID;
     for (uint32_t i = 0; i < sc.n; i++) {
         char path[128];
         snprintf(path, sizeof(path), "/%s", sc.names[i]);
+        ESP_LOGI(TAG, "loading %s ...", path);
 
         loaded_slot_t *slot = &s_slots[s_n_loaded];
         memset(slot, 0, sizeof(*slot));
-        if (load_one(slot, next_id, path) != DECK_RT_OK) continue;
+        deck_err_t lo = load_one(slot, next_id, path);
+        if (lo != DECK_RT_OK) {
+            ESP_LOGW(TAG, "load_one(%s) → %s", path, deck_err_name(lo));
+            continue;
+        }
 
         deck_err_t rr = deck_shell_intent_register(next_id, deck_app_intent_resolver);
         if (rr != DECK_RT_OK) {

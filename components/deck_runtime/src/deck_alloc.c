@@ -329,8 +329,9 @@ deck_value_t *deck_new_stream_from_list(deck_value_t *list)
 {
     deck_value_t *val = alloc_value(DECK_T_STREAM);
     if (!val) return NULL;
-    val->as.stream.list       = list ? deck_retain(list) : NULL;
-    val->as.stream.terminated = true;
+    val->as.stream.list         = list ? deck_retain(list) : NULL;
+    val->as.stream.terminated   = true;
+    val->as.stream.tick_unit_us = 0;     /* DL3 — instant by default */
     return val;
 }
 

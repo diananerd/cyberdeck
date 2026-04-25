@@ -619,11 +619,14 @@ static bool handle_line_start(deck_lexer_t *lx, deck_token_t *out)
             emit(out, TOK_ERROR, lx->line, lx->col);
             return true;
         }
-        /* Pull one of the pending dedents right now. */
+        /* Indent measurement is done — clear the line-start flag so the
+         * next call drains pending dedents (in deck_lexer_next's
+         * top-of-loop drain) instead of re-running handle_line_start
+         * from a now-empty leading whitespace span. */
+        lx->at_line_start = false;
         if (lx->pending_dedents > 0) {
             lx->pending_dedents--;
             emit(out, TOK_DEDENT, lx->line, 1);
-            if (lx->pending_dedents == 0) lx->at_line_start = false;
             return true;
         }
     }

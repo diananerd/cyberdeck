@@ -184,11 +184,29 @@ static lv_obj_t *render_row(lv_obj_t *parent, const deck_dvc_node_t *n)
 
 static lv_obj_t *render_label(lv_obj_t *parent, const deck_dvc_node_t *n)
 {
+    /* DL2 — :error / :status are emitted as DVC_LABEL with a `tone` attr
+     * (info / ok / warn / error). When present, prefix the text with the
+     * tone glyph so the user sees a semantic affordance even though the
+     * underlying widget is still a plain label. Plain labels (no tone)
+     * keep their pre-DL2 appearance. */
     lv_obj_t *lbl = lv_label_create(parent);
     const char *text = attr_str(n, "value", NULL);
     if (!text) text = attr_str(n, "label", "");
-    lv_label_set_text(lbl, text);
+    const char *tone = attr_str(n, "tone", NULL);
+    if (tone) {
+        const char *glyph = LV_SYMBOL_BELL;
+        if      (strcmp(tone, "ok")    == 0) glyph = LV_SYMBOL_OK;
+        else if (strcmp(tone, "warn")  == 0) glyph = LV_SYMBOL_WARNING;
+        else if (strcmp(tone, "error") == 0) glyph = LV_SYMBOL_WARNING;
+        char buf[256];
+        snprintf(buf, sizeof(buf), "%s %s", glyph, text);
+        lv_label_set_text(lbl, buf);
+    } else {
+        lv_label_set_text(lbl, text);
+    }
     lv_obj_set_style_text_color(lbl, CD_PRIMARY, LV_PART_MAIN);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, lv_pct(100));
     return lbl;
 }
 
@@ -673,6 +691,74 @@ static lv_obj_t *render_form(lv_obj_t *parent, const deck_dvc_node_t *n)
     return col;
 }
 
+/* DL2 — :rich_text / :markdown. Multi-line label with word-wrap. The
+ * bridge does not parse markup at DL2; it shows the raw text and lets
+ * the user read structural markers literally. DL3 may add a parser. */
+static lv_obj_t *render_rich_text(lv_obj_t *parent, const deck_dvc_node_t *n)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    const char *text = attr_str(n, "value", attr_str(n, "text", ""));
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, CD_PRIMARY, LV_PART_MAIN);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, lv_pct(100));
+    return lbl;
+}
+
+/* DL2 — :media. Without an image decoder wired the bridge shows
+ * "[media: <ref>]" so the layout reserves visual space and the user
+ * sees what is referenced. DL3 swaps in lv_img with cached bytes. */
+static lv_obj_t *render_media(lv_obj_t *parent, const deck_dvc_node_t *n)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    const char *ref = attr_str(n, "src", attr_str(n, "value", "?"));
+    char buf[160];
+    snprintf(buf, sizeof(buf), "[media: %s]", ref);
+    lv_label_set_text(lbl, buf);
+    lv_obj_set_style_text_color(lbl, CD_PRIMARY_DIM, LV_PART_MAIN);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, lv_pct(100));
+    return lbl;
+}
+
+/* DL2 — inline :date_picker. Three lv_roller for Y/M/D, mirroring J5's
+ * native date overlay but rendered inline as content. The intent payload
+ * is delivered via form-submit aggregation when the picker lives inside
+ * a :form; standalone pickers fire on roller change. */
+static lv_obj_t *render_date_picker(lv_obj_t *parent, const deck_dvc_node_t *n)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(row, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                                LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    static const char *YEARS  =
+        "2020\n2021\n2022\n2023\n2024\n2025\n2026\n2027\n2028\n2029\n2030";
+    static const char *MONTHS =
+        "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12";
+    static const char *DAYS   =
+        "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n"
+        "18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31";
+
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *r = lv_roller_create(row);
+        lv_roller_set_options(r, i == 0 ? YEARS : i == 1 ? MONTHS : DAYS,
+                              LV_ROLLER_MODE_NORMAL);
+        lv_roller_set_visible_row_count(r, 3);
+        lv_obj_set_style_text_color(r, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(r,   CD_BG_DARK, LV_PART_MAIN);
+        lv_obj_set_style_border_width(r, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(r, CD_PRIMARY_DIM, LV_PART_MAIN);
+    }
+    return row;
+}
+
 /* ---------- dispatch ---------- */
 
 static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
@@ -698,6 +784,11 @@ static lv_obj_t *render_node(lv_obj_t *parent, const deck_dvc_node_t *n)
         case DVC_PROGRESS: return record(n, render_progress(parent, n));
         case DVC_SPACER:   return record(n, render_spacer(parent, n));
         case DVC_DIVIDER:  return record(n, render_divider(parent, n));
+        case DVC_RICH_TEXT:
+        case DVC_MARKDOWN:
+        case DVC_MARKDOWN_EDITOR: return record(n, render_rich_text(parent, n));
+        case DVC_MEDIA:    return record(n, render_media(parent, n));
+        case DVC_DATE_PICKER: return record(n, render_date_picker(parent, n));
         case DVC_EMPTY:    return NULL;
         default:
             /* Unknown / not-yet-implemented type — placeholder label. */

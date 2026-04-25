@@ -402,6 +402,644 @@ static deck_value_t *b_ota_check_update(deck_value_t **a, uint32_t n, deck_inter
     return deck_new_none();
 }
 
+/* DL2 — Tier-2/3 service surfaces backed by the SDI drivers that already
+ * exist (network.http, network.wifi, system.time, system.security,
+ * system.theme, system.apps, system.display). */
+#include "drivers/deck_sdi_http.h"
+#include "drivers/deck_sdi_wifi.h"
+#include "drivers/deck_sdi_security.h"
+
+/* Forward decls from deck_bridge_ui (avoids a deck_runtime →
+ * deck_bridge_ui CMake dep cycle — bridge_ui already depends on
+ * deck_runtime for the DVC types). */
+typedef enum {
+    DECK_BRIDGE_UI_ROT_0   = 0, DECK_BRIDGE_UI_ROT_90  = 1,
+    DECK_BRIDGE_UI_ROT_180 = 2, DECK_BRIDGE_UI_ROT_270 = 3,
+} deck_bridge_ui_rotation_t;
+extern const char    *deck_bridge_ui_get_theme(void);
+extern deck_sdi_err_t deck_bridge_ui_set_rotation(deck_bridge_ui_rotation_t);
+
+/* (:ok, value) and (:err, atom) helpers — used by every DL1+DL2 stub. */
+static deck_value_t *result_ok_unit(void)
+{
+    deck_value_t *atom = deck_new_atom("ok");
+    deck_value_t *unit = deck_retain(deck_unit());
+    deck_value_t *items[2] = { atom, unit };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(atom); deck_release(unit);
+    return t;
+}
+static deck_value_t *result_err_atom(const char *name)
+{
+    deck_value_t *tag = deck_new_atom("err");
+    deck_value_t *e   = deck_new_atom(name);
+    deck_value_t *items[2] = { tag, e };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(tag); deck_release(e);
+    return t;
+}
+
+/* network.http.{get,post} — synchronous request, returns
+ * (:ok, {status:int, body:str}) | (:err, atom). The caller-side buffer
+ * caps response bodies at 4 KB; longer responses come back truncated. */
+#define HTTP_BODY_CAP   4096
+static deck_value_t *http_request(deck_sdi_http_method_t method,
+                                  deck_value_t **a, uint32_t n,
+                                  deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *url = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!url) return result_err_atom("malformed");
+    deck_sdi_http_request_t req = { .url = url, .method = method };
+    if (method != DECK_SDI_HTTP_GET && a[1] && a[1]->type == DECK_T_STR) {
+        req.body = a[1]->as.s.ptr;
+        req.body_size = a[1]->as.s.len;
+    }
+    char *body = malloc(HTTP_BODY_CAP);
+    if (!body) return result_err_atom("oom");
+    deck_sdi_http_response_t resp = {0};
+    deck_sdi_err_t err = deck_sdi_http_request(&req, body, HTTP_BODY_CAP - 1, &resp);
+    if (err != DECK_SDI_OK) { free(body); return result_err_atom("io"); }
+    body[resp.body_bytes < HTTP_BODY_CAP ? resp.body_bytes : HTTP_BODY_CAP - 1] = 0;
+
+    deck_value_t *m = deck_new_map(2);
+    deck_value_t *k_status = deck_new_str_cstr("status");
+    deck_value_t *v_status = deck_new_int(resp.status_code);
+    deck_value_t *k_body   = deck_new_str_cstr("body");
+    deck_value_t *v_body   = deck_new_str_cstr(body);
+    deck_map_put(m, k_status, v_status);
+    deck_map_put(m, k_body,   v_body);
+    deck_release(k_status); deck_release(v_status);
+    deck_release(k_body);   deck_release(v_body);
+    free(body);
+
+    deck_value_t *tag   = deck_new_atom("ok");
+    deck_value_t *items[2] = { tag, m };
+    deck_value_t *out   = deck_new_tuple(items, 2);
+    deck_release(tag); deck_release(m);
+    return out;
+}
+static deck_value_t *b_http_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_GET, a, n, c);
+}
+static deck_value_t *b_http_post(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return http_request(DECK_SDI_HTTP_POST, a, n, c);
+}
+
+/* network.wifi.{scan,connect,disconnect,status,ip} */
+typedef struct { deck_value_t *list; uint32_t n; } wifi_scan_acc_t;
+static bool wifi_scan_collect(const deck_sdi_wifi_ap_t *ap, void *user)
+{
+    wifi_scan_acc_t *acc = user;
+    if (!ap || acc->n >= 16) return acc->n < 16;
+    deck_value_t *m = deck_new_map(3);
+    deck_value_t *k1 = deck_new_str_cstr("ssid");
+    deck_value_t *v1 = deck_new_str_cstr(ap->ssid);
+    deck_value_t *k2 = deck_new_str_cstr("rssi");
+    deck_value_t *v2 = deck_new_int(ap->rssi);
+    deck_value_t *k3 = deck_new_str_cstr("channel");
+    deck_value_t *v3 = deck_new_int(ap->channel);
+    deck_map_put(m, k1, v1); deck_map_put(m, k2, v2); deck_map_put(m, k3, v3);
+    deck_release(k1); deck_release(v1);
+    deck_release(k2); deck_release(v2);
+    deck_release(k3); deck_release(v3);
+    deck_list_push(acc->list, m);
+    deck_release(m);
+    acc->n++;
+    return true;
+}
+static deck_value_t *b_wifi_scan(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    wifi_scan_acc_t acc = { .list = deck_new_list(8), .n = 0 };
+    deck_sdi_wifi_scan(wifi_scan_collect, &acc);
+    return acc.list;
+}
+static deck_value_t *b_wifi_connect(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *ssid = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    const char *pass = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr : NULL;
+    if (!ssid) return result_err_atom("malformed");
+    deck_sdi_err_t err = deck_sdi_wifi_connect(ssid, pass, 15000);
+    return err == DECK_SDI_OK ? result_ok_unit() : result_err_atom("connect_failed");
+}
+static deck_value_t *b_wifi_disconnect(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    deck_sdi_wifi_disconnect();
+    return result_ok_unit();
+}
+static deck_value_t *b_wifi_status(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    switch (deck_sdi_wifi_status()) {
+        case DECK_SDI_WIFI_DISCONNECTED: return deck_new_atom("disconnected");
+        case DECK_SDI_WIFI_SCANNING:     return deck_new_atom("scanning");
+        case DECK_SDI_WIFI_CONNECTING:   return deck_new_atom("connecting");
+        case DECK_SDI_WIFI_CONNECTED:    return deck_new_atom("connected");
+        default:                          return deck_new_atom("failed");
+    }
+}
+static deck_value_t *b_wifi_ip(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    char buf[DECK_SDI_WIFI_IP_MAX];
+    if (deck_sdi_wifi_get_ip(buf, sizeof(buf)) != DECK_SDI_OK) buf[0] = 0;
+    return deck_new_str_cstr(buf);
+}
+
+/* system.time.{sntp_sync,set_epoch,now_iso}.
+ * sntp_sync starts the daemon against the supplied server (default
+ * pool.ntp.org). The actual sync is async; the call returns :ok once
+ * the daemon is running. now_iso returns the current wall-clock as
+ * RFC3339; falls back to `1970-01-01T00:00:00Z` when not set. */
+static deck_value_t *b_time_sntp_sync(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *srv = "pool.ntp.org";
+    if (a[0] && a[0]->type == DECK_T_STR && a[0]->as.s.len > 0) srv = a[0]->as.s.ptr;
+    return deck_sdi_time_sntp_start(srv) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("io");
+}
+static deck_value_t *b_time_set_epoch(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    int64_t e = (a[0] && a[0]->type == DECK_T_INT) ? a[0]->as.i : 0;
+    return deck_sdi_time_set_wall_epoch_s(e) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("io");
+}
+
+/* system.security.{has_pin,verify_pin,set_pin,lock,unlock,is_locked}
+ * — DL2 gate for the lockscreen + secure storage. */
+static deck_value_t *b_sec_has_pin(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_bool(deck_sdi_security_has_pin());
+}
+static deck_value_t *b_sec_verify_pin(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *pin = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : "";
+    return deck_new_bool(deck_sdi_security_verify_pin(pin) == DECK_SDI_OK);
+}
+static deck_value_t *b_sec_set_pin(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *old_pin = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    const char *new_pin = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr : NULL;
+    return deck_sdi_security_set_pin(old_pin, new_pin) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("permission_denied");
+}
+static deck_value_t *b_sec_lock(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    deck_sdi_security_lock();
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_sec_unlock(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    deck_sdi_security_unlock();
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_sec_is_locked(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_bool(deck_sdi_security_is_locked());
+}
+
+/* system.theme — atom getter / setter. Setter routes through the bridge
+ * theme handler; getter reads back what the bridge last received. */
+static deck_value_t *b_theme_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    const char *t = deck_bridge_ui_get_theme();
+    return deck_new_atom(t ? t : "green");
+}
+static deck_value_t *b_theme_set(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *atom = NULL;
+    if (a[0] && a[0]->type == DECK_T_ATOM) atom = a[0]->as.atom;
+    else if (a[0] && a[0]->type == DECK_T_STR) atom = a[0]->as.s.ptr;
+    if (atom) deck_sdi_bridge_ui_set_theme(atom);
+    return result_ok_unit();
+}
+
+/* system.display.{rotate,brightness} — proxied to bridge.ui surface. */
+static deck_value_t *b_display_rotate(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    int deg = (a[0] && a[0]->type == DECK_T_INT) ? (int)a[0]->as.i : 0;
+    deck_bridge_ui_rotation_t r = DECK_BRIDGE_UI_ROT_0;
+    switch (deg) {
+        case 90:  r = DECK_BRIDGE_UI_ROT_90;  break;
+        case 180: r = DECK_BRIDGE_UI_ROT_180; break;
+        case 270: r = DECK_BRIDGE_UI_ROT_270; break;
+        default:  r = DECK_BRIDGE_UI_ROT_0;
+    }
+    deck_bridge_ui_set_rotation(r);
+    return result_ok_unit();
+}
+static deck_value_t *b_bui_set_brightness(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c);
+static deck_value_t *b_display_brightness(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    return b_bui_set_brightness(a, n, c);   /* identical surface */
+}
+
+/* system.apps.{list,launch,current} — read what shell knows. */
+static deck_value_t *b_apps_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    extern uint32_t deck_shell_deck_apps_count(void);
+    typedef struct { uint16_t app_id; const char *id; const char *name; const char *path; }
+        deck_shell_deck_app_info_t;
+    extern void deck_shell_deck_apps_info(uint32_t idx, deck_shell_deck_app_info_t *out);
+    uint32_t cnt = deck_shell_deck_apps_count();
+    deck_value_t *list = deck_new_list(cnt);
+    for (uint32_t i = 0; i < cnt; i++) {
+        deck_shell_deck_app_info_t info = {0};
+        deck_shell_deck_apps_info(i, &info);
+        deck_value_t *m = deck_new_map(3);
+        deck_value_t *k1 = deck_new_str_cstr("id");
+        deck_value_t *v1 = deck_new_str_cstr(info.id ? info.id : "");
+        deck_value_t *k2 = deck_new_str_cstr("name");
+        deck_value_t *v2 = deck_new_str_cstr(info.name ? info.name : "");
+        deck_value_t *k3 = deck_new_str_cstr("app_id");
+        deck_value_t *v3 = deck_new_int(info.app_id);
+        deck_map_put(m, k1, v1); deck_map_put(m, k2, v2); deck_map_put(m, k3, v3);
+        deck_release(k1); deck_release(v1);
+        deck_release(k2); deck_release(v2);
+        deck_release(k3); deck_release(v3);
+        deck_list_push(list, m);
+        deck_release(m);
+    }
+    return list;
+}
+static deck_value_t *b_apps_launch(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* Cross-app launch goes through shell intent dispatch; without that
+     * wired here the call returns :unsupported so apps degrade
+     * gracefully. */
+    return result_err_atom("service_unavailable");
+}
+static deck_value_t *b_apps_current(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_atom("none");
+}
+
+/* DL2 — bridge.ui.* declarative entry points. Apps call these to drive
+ * substrate-native UI services without going through the @on / DVC tree.
+ * Each one routes through the SDI bridge.ui vtable, which the
+ * deck_bridge_ui driver implements. Returns unit; failures are logged. */
+static deck_value_t *b_bui_set_locked(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    bool locked = (a[0] && a[0]->type == DECK_T_BOOL) ? a[0]->as.b : true;
+    deck_sdi_bridge_ui_set_locked(locked);
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_bui_set_theme(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *atom = NULL;
+    if (a[0] && a[0]->type == DECK_T_ATOM) atom = a[0]->as.atom;
+    else if (a[0] && a[0]->type == DECK_T_STR) atom = a[0]->as.s.ptr;
+    if (atom) deck_sdi_bridge_ui_set_theme(atom);
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_bui_set_brightness(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    float lv = 1.0f;
+    if (a[0] && a[0]->type == DECK_T_FLOAT) lv = (float)a[0]->as.f;
+    else if (a[0] && a[0]->type == DECK_T_INT) lv = (float)a[0]->as.i / 100.0f;
+    if (lv < 0.f) lv = 0.f;
+    if (lv > 1.f) lv = 1.f;
+    deck_sdi_bridge_ui_set_brightness(lv);
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_bui_toast(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *text = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : "";
+    extern void deck_bridge_ui_overlay_toast(const char *text, uint32_t duration_ms);
+    deck_bridge_ui_overlay_toast(text, 2000);
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_bui_loading_show(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *text = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    extern void deck_bridge_ui_overlay_loading_show(const char *text);
+    deck_bridge_ui_overlay_loading_show(text);
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_bui_loading_hide(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    extern void deck_bridge_ui_overlay_loading_hide(void);
+    deck_bridge_ui_overlay_loading_hide();
+    return deck_retain(deck_unit());
+}
+
+/* DL1 fillers — system.{url,logs,scheduler,events,intents}. Catalog-only
+ * services declared in @needs but previously without dispatch. Each
+ * surface returns :ok / a benign empty value so apps that *use* them at
+ * DL1 won't crash; richer behaviour ships when their backing subsystems
+ * land (system.intents already piggybacks on shell intent dispatch). */
+
+/* system.url — deep-link dispatch. Without a wired handler table the
+ * stub returns :no_handler for unknown schemes and :ok for the ones the
+ * shell already knows (deck://, file://). A real implementation routes
+ * through system.intents.dispatch. */
+static bool url_recognised(const char *u)
+{
+    if (!u) return false;
+    if (strncmp(u, "deck://", 7) == 0) return true;
+    if (strncmp(u, "file://", 7) == 0) return true;
+    if (strncmp(u, "http://", 7) == 0) return true;
+    if (strncmp(u, "https://", 8) == 0) return true;
+    return false;
+}
+static deck_value_t *b_url_open(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *u = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!url_recognised(u)) return result_err_atom("no_handler");
+    ESP_LOGI("deck.url", "open: %s", u ? u : "(null)");
+    return result_ok_unit();
+}
+static deck_value_t *b_url_can_open(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *u = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    return deck_new_bool(url_recognised(u));
+}
+
+/* system.logs — emit/ring/clear. emit pipes through ESP_LOG; ring/clear
+ * are no-ops at DL1 (the platform log buffer is the sink of record). */
+static deck_value_t *b_logs_emit(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    if (a[0] && a[0]->type == DECK_T_STR) {
+        ESP_LOGI("deck.app", "%s", a[0]->as.s.ptr);
+    }
+    return deck_retain(deck_unit());
+}
+static deck_value_t *b_logs_ring(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_list(0);
+}
+static deck_value_t *b_logs_clear(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+static deck_value_t *b_logs_set_level(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+
+/* system.scheduler — register_after / register_every / cancel / list.
+ * Apps normally drive timers via @on after / @on every (handled in the
+ * runtime loop). Direct calls return :ok at DL1 so cross-app schedulers
+ * don't break — true cross-app dispatch is a DL2 follow-up. */
+static deck_value_t *b_sched_register_after(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c; return result_ok_unit();
+}
+static deck_value_t *b_sched_register_every(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c; return result_ok_unit();
+}
+static deck_value_t *b_sched_cancel(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c; return result_ok_unit();
+}
+static deck_value_t *b_sched_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_list(0);
+}
+
+/* system.events — publish / subscribe. publish is a no-op sink (the
+ * event bus is internal at DL1; only @on os.<event> taps it). subscribe
+ * returns an empty stream sentinel — apps that need streams use the
+ * declarative @on form. */
+static deck_value_t *b_events_publish(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c; return result_ok_unit();
+}
+static deck_value_t *b_events_subscribe(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    /* Empty list stand-in until DL3 stream registry exists. */
+    return deck_new_list(0);
+}
+
+/* system.intents — matches / dispatch. matches returns []; dispatch
+ * forwards to url.open semantics. The shell already drives @handles
+ * routing internally. */
+static deck_value_t *b_intents_matches(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return deck_new_list(0);
+}
+static deck_value_t *b_intents_dispatch(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *u = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!url_recognised(u)) return result_err_atom("no_match");
+    return result_ok_unit();
+}
+
+/* DL2 — storage.cache (SERVICES §16). In-memory LRU is overkill at DL2;
+ * we route through NVS (the storage already wired) so cached values
+ * survive a reboot. Each entry is a str→str pair under namespace
+ * "deck_cache". TTL is recorded but not enforced at this layer; callers
+ * can stamp timestamps in the value themselves. */
+static deck_value_t *b_cache_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *key = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!key) return deck_new_none();
+    char buf[256];
+    if (deck_sdi_nvs_get_str("deck_cache", key, buf, sizeof(buf)) != DECK_SDI_OK)
+        return deck_new_none();
+    deck_value_t *s = deck_new_str_cstr(buf);
+    deck_value_t *o = deck_new_some(s);
+    deck_release(s);
+    return o;
+}
+static deck_value_t *b_cache_put(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *key = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    const char *val = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr : NULL;
+    if (!key || !val) return result_err_atom("malformed");
+    return deck_sdi_nvs_set_str("deck_cache", key, val) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("io");
+}
+static deck_value_t *b_cache_delete(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *key = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!key) return result_err_atom("malformed");
+    deck_sdi_nvs_del("deck_cache", key);
+    return result_ok_unit();
+}
+static deck_value_t *b_cache_clear(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    deck_sdi_nvs_clear("deck_cache");
+    return result_ok_unit();
+}
+
+/* DL2 — system.locale (SERVICES §28). Single-string current locale
+ * stored in NVS namespace "cyberdeck", key "locale". Default "en-US". */
+static deck_value_t *b_locale_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    char buf[16];
+    if (deck_sdi_nvs_get_str("cyberdeck", "locale", buf, sizeof(buf)) != DECK_SDI_OK)
+        strcpy(buf, "en-US");
+    return deck_new_str_cstr(buf);
+}
+static deck_value_t *b_locale_set(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *code = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!code) return result_err_atom("malformed");
+    return deck_sdi_nvs_set_str("cyberdeck", "locale", code) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("io");
+}
+static deck_value_t *b_locale_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    static const char *AVAILABLE[] = { "en-US", "es-ES", "es-MX", "ja-JP", NULL };
+    deck_value_t *list = deck_new_list(4);
+    for (const char **e = AVAILABLE; *e; e++) {
+        deck_value_t *s = deck_new_str_cstr(*e);
+        deck_list_push(list, s);
+        deck_release(s);
+    }
+    return list;
+}
+
+/* DL2 — data.cache (SERVICES §43). Schema'd response cache, currently a
+ * thin wrapper over storage.cache with a per-key namespace prefix. */
+static deck_value_t *b_data_cache_get(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *key = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!key) return deck_new_none();
+    char nskey[160];
+    snprintf(nskey, sizeof(nskey), "data:%s", key);
+    char buf[512];
+    if (deck_sdi_nvs_get_str("deck_cache", nskey, buf, sizeof(buf)) != DECK_SDI_OK)
+        return deck_new_none();
+    deck_value_t *s = deck_new_str_cstr(buf);
+    deck_value_t *o = deck_new_some(s);
+    deck_release(s);
+    return o;
+}
+static deck_value_t *b_data_cache_put(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *key = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    const char *val = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr : NULL;
+    if (!key || !val) return result_err_atom("malformed");
+    char nskey[160];
+    snprintf(nskey, sizeof(nskey), "data:%s", key);
+    return deck_sdi_nvs_set_str("deck_cache", nskey, val) == DECK_SDI_OK
+        ? result_ok_unit() : result_err_atom("io");
+}
+
+/* DL2 — media.image (SERVICES §40). Surface-only stub: load returns a
+ * handle (the source string), decode_size returns :unsupported because
+ * a real image pipeline isn't wired. Apps detect support via has_image. */
+static deck_value_t *b_image_load(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *src = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
+    if (!src) return result_err_atom("malformed");
+    return result_err_atom("unsupported");
+}
+static deck_value_t *b_image_decode_size(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("unsupported");
+}
+static deck_value_t *b_image_free(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+
+/* DL2 — auth.oauth (SERVICES §42). Returns :not_configured for every
+ * call until a provider is registered. */
+static deck_value_t *b_oauth_authorize_url(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("not_configured");
+}
+static deck_value_t *b_oauth_exchange_token(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("not_configured");
+}
+static deck_value_t *b_oauth_refresh_token(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("not_configured");
+}
+static deck_value_t *b_oauth_revoke(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("not_configured");
+}
+
+/* DL2 — share.target (SERVICES §44). Routes through the bridge.ui
+ * share_show overlay (already wired) when the payload is text/url. */
+static deck_value_t *b_share_dispatch(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n; (void)c;
+    const char *text = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : "";
+    const char *url  = (n >= 2 && a[1] && a[1]->type == DECK_T_STR)
+                         ? a[1]->as.s.ptr : "";
+    extern void deck_bridge_ui_overlay_share_show(const char *text,
+        const char *url, void (*on_copy)(void *), void (*on_dismiss)(void *),
+        void *user);
+    deck_bridge_ui_overlay_share_show(text, url, NULL, NULL, NULL);
+    return result_ok_unit();
+}
+
+/* DL2 — network.ws (SERVICES §18). Handle-producing surface returning
+ * :unsupported until a real client is wired. */
+static deck_value_t *b_ws_open(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("unsupported");
+}
+static deck_value_t *b_ws_send(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_err_atom("unsupported");
+}
+static deck_value_t *b_ws_close(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)a; (void)n; (void)c;
+    return result_ok_unit();
+}
+
 static deck_value_t *b_info_cpu_freq(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
@@ -1951,6 +2589,37 @@ static deck_value_t *b_time_duration(deck_value_t **args, uint32_t n, deck_inter
     int64_t a = args[0]->type == DECK_T_INT ? args[0]->as.i : (int64_t)args[0]->as.f;
     int64_t b = args[1]->type == DECK_T_INT ? args[1]->as.i : (int64_t)args[1]->as.f;
     return deck_new_int(a - b);
+}
+
+/* DL3 — finite tick stream. Produces `count` Timestamps spaced
+ * `interval_ms` apart starting at 0. The resulting stream carries
+ * tick_unit_us = interval_ms * 1000, so downstream throttle/debounce/
+ * delay/buffer apply real interval math. */
+static deck_value_t *b_time_ticks(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    if (!args[0] || args[0]->type != DECK_T_INT || args[0]->as.i <= 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.ticks(interval_ms:int>0, count:int>0)"); return NULL;
+    }
+    if (!args[1] || args[1]->type != DECK_T_INT || args[1]->as.i < 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "time.ticks(interval_ms:int>0, count:int>0)"); return NULL;
+    }
+    int64_t interval_ms = args[0]->as.i;
+    int64_t count       = args[1]->as.i;
+    if (count > 4096) {
+        set_err(c, DECK_RT_OUT_OF_RANGE, 0, 0, "time.ticks: count > 4096"); return NULL;
+    }
+    deck_value_t *list = deck_new_list((uint32_t)count);
+    if (!list) return NULL;
+    for (int64_t i = 0; i < count; i++) {
+        deck_value_t *ts = deck_new_int(i * interval_ms);
+        deck_list_push(list, ts);
+        deck_release(ts);
+    }
+    deck_value_t *s = deck_new_stream_from_list(list);
+    deck_release(list);
+    if (s) s->as.stream.tick_unit_us = interval_ms * 1000LL;
+    return s;
 }
 static deck_value_t *b_time_to_iso(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -4626,6 +5295,7 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env,
         } else if (kind && strcmp(kind, "status") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
             if (node && label) deck_dvc_set_str(&s_bui_arena, node, "label", label);
+            if (node) deck_dvc_set_str(&s_bui_arena, node, "tone", "info");
             if (node && (data || action)) {
                 ast_node_t *expr = data ? data : action;
                 deck_value_t *lv = content_eval_expr(c, env, expr);
@@ -4713,6 +5383,7 @@ static void content_render(deck_interp_ctx_t *c, deck_env_t *env,
             }
         } else if (kind && strcmp(kind, "error") == 0) {
             node = deck_dvc_node_new(&s_bui_arena, DVC_LABEL);
+            if (node) deck_dvc_set_str(&s_bui_arena, node, "tone", "error");
             if (node && action) {
                 deck_value_t *v = content_eval_expr(c, env, action);
                 if (v) {
@@ -5171,6 +5842,43 @@ static deck_value_t *stream_from_new_list(deck_value_t *owned_list)
     return s;
 }
 
+/* DL3 — propagate tick metadata across operators. Pure transformations
+ * (map/filter/each/scan/take/skip) keep the upstream tick spacing.
+ * Operators that *change* the spacing (throttle/buffer/window) compute
+ * their own. Source streams without a tick (cold lists) carry 0, which
+ * means temporal operators apply their cold-collapsed semantics. */
+static int64_t stream_tick_unit(const deck_value_t *s)
+{
+    return (s && s->type == DECK_T_STREAM) ? s->as.stream.tick_unit_us : 0;
+}
+static deck_value_t *stream_from_new_list_with_tick(deck_value_t *owned_list,
+                                                     int64_t tick_unit_us)
+{
+    deck_value_t *s = deck_new_stream_from_list(owned_list);
+    deck_release(owned_list);
+    if (s) s->as.stream.tick_unit_us = tick_unit_us;
+    return s;
+}
+
+/* Read a Duration argument as microseconds. Duration's canonical unit is
+ * milliseconds (concept #71); we convert here. Accepts plain int (ms)
+ * or float (ms with sub-millisecond fraction). Returns -1 on error. */
+static int64_t duration_arg_us(deck_value_t *v)
+{
+    if (!v) return -1;
+    if (v->type == DECK_T_INT)   return v->as.i * 1000LL;
+    if (v->type == DECK_T_FLOAT) return (int64_t)(v->as.f * 1000.0);
+    return -1;
+}
+
+/* Compact helper for operators that conserve tick spacing — propagates
+ * the upstream's tick_unit_us onto the new stream. */
+static deck_value_t *stream_passthrough_tick(deck_value_t *owned_list,
+                                              deck_value_t *upstream)
+{
+    return stream_from_new_list_with_tick(owned_list, stream_tick_unit(upstream));
+}
+
 static deck_value_t *b_stream_map(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -5186,7 +5894,7 @@ static deck_value_t *b_stream_map(deck_value_t **args, uint32_t n, deck_interp_c
         deck_list_push(out, r);
         deck_release(r);
     }
-    return stream_from_new_list(out);
+    return stream_from_new_list_with_tick(out, stream_tick_unit(args[0]));
 }
 
 static deck_value_t *b_stream_filter(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5205,7 +5913,7 @@ static deck_value_t *b_stream_filter(deck_value_t **args, uint32_t n, deck_inter
         deck_release(r);
         if (keep) deck_list_push(out, src->as.list.items[i]);
     }
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 static deck_value_t *b_stream_each(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5240,7 +5948,7 @@ static deck_value_t *b_stream_distinct(deck_value_t **args, uint32_t n, deck_int
             prev = cur;
         }
     }
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 static deck_value_t *b_stream_skip(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5262,7 +5970,7 @@ static deck_value_t *b_stream_skip(deck_value_t **args, uint32_t n, deck_interp_
     for (uint32_t i = start; i < len; i++) {
         deck_list_push(out, src->as.list.items[i]);
     }
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 static deck_value_t *b_stream_take(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5284,7 +5992,7 @@ static deck_value_t *b_stream_take(deck_value_t **args, uint32_t n, deck_interp_
     for (uint32_t i = 0; i < stop; i++) {
         deck_list_push(out, src->as.list.items[i]);
     }
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 static deck_value_t *b_stream_take_while(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5304,7 +6012,7 @@ static deck_value_t *b_stream_take_while(deck_value_t **args, uint32_t n, deck_i
         if (!keep) break;
         deck_list_push(out, src->as.list.items[i]);
     }
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 static deck_value_t *b_stream_scan(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5325,7 +6033,7 @@ static deck_value_t *b_stream_scan(deck_value_t **args, uint32_t n, deck_interp_
         deck_list_push(out, r);
     }
     deck_release(acc);
-    return stream_from_new_list(out);
+    return stream_passthrough_tick(out, args[0]);
 }
 
 /* J1/J2 — cold semantics for time-based + multi-source stream ops.
@@ -5345,32 +6053,89 @@ static deck_value_t *b_stream_scan(deck_value_t **args, uint32_t n, deck_interp_
  * driven by FreeRTOS timers; the surface stays identical so apps
  * compiled against the cold runtime keep working. */
 
+/* DL3 throttle — emit at most one element per d. With tick_unit > 0
+ * we keep elements whose virtual timestamp is at least d after the last
+ * kept timestamp. With tick_unit == 0 (cold/instant) every element
+ * shares ts=0, so only the first survives — matches the prior cold
+ * pass-through semantics for batch streams. */
 static deck_value_t *b_stream_throttle_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)n; (void)c;
+    (void)n;
     if (!stream_check(args[0], c, "stream.throttle")) return NULL;
-    return deck_retain(args[0]);
+    int64_t d_us = duration_arg_us(args[1]);
+    if (d_us < 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.throttle(d:Duration)"); return NULL;
+    }
+    int64_t tick = stream_tick_unit(args[0]);
+    deck_value_t *src = stream_items(args[0]);
+    uint32_t len = src ? src->as.list.len : 0;
+    deck_value_t *out = deck_new_list(len);
+    if (!out) return NULL;
+    if (tick <= 0) {
+        /* Cold/instant — every emission shares the same ts. Pre-DL3
+         * passed the whole stream through; DL3 makes throttle observable
+         * by keeping only the first element. */
+        if (len > 0) deck_list_push(out, src->as.list.items[0]);
+    } else {
+        int64_t last_emit_us = INT64_MIN;
+        for (uint32_t i = 0; i < len; i++) {
+            int64_t ts = (int64_t)i * tick;
+            if (last_emit_us == INT64_MIN || ts - last_emit_us >= d_us) {
+                deck_list_push(out, src->as.list.items[i]);
+                last_emit_us = ts;
+            }
+        }
+    }
+    return stream_from_new_list_with_tick(out, tick);
 }
 
+/* DL3 delay — shift every emission by d. Order and values are preserved;
+ * the tick metadata stays the same (d shifts the whole timeline).
+ * Pass-through is correct semantics for the batch model. */
 static deck_value_t *b_stream_delay_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)n; (void)c;
+    (void)n;
     if (!stream_check(args[0], c, "stream.delay")) return NULL;
+    if (duration_arg_us(args[1]) < 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.delay(d:Duration)"); return NULL;
+    }
     return deck_retain(args[0]);
 }
 
+/* DL3 debounce — emit the last value after d of silence. With tick > 0
+ * an element survives only if the *next* element is at least d away (or
+ * if it is the last). With tick == 0 silence between consecutive items
+ * is zero — only the last survives. */
 static deck_value_t *b_stream_debounce_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
     if (!stream_check(args[0], c, "stream.debounce")) return NULL;
+    int64_t d_us = duration_arg_us(args[1]);
+    if (d_us < 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "stream.debounce(d:Duration)"); return NULL;
+    }
+    int64_t tick = stream_tick_unit(args[0]);
     deck_value_t *src = stream_items(args[0]);
     uint32_t len = src ? src->as.list.len : 0;
-    deck_value_t *out = deck_new_list(len > 0 ? 1 : 0);
+    deck_value_t *out = deck_new_list(len);
     if (!out) return NULL;
-    if (len > 0) deck_list_push(out, src->as.list.items[len - 1]);
-    return stream_from_new_list(out);
+    if (tick <= 0) {
+        if (len > 0) deck_list_push(out, src->as.list.items[len - 1]);
+    } else {
+        for (uint32_t i = 0; i < len; i++) {
+            int64_t this_ts = (int64_t)i * tick;
+            int64_t next_ts = (i + 1 < len) ? (int64_t)(i + 1) * tick : this_ts + d_us;
+            if (next_ts - this_ts >= d_us) {
+                deck_list_push(out, src->as.list.items[i]);
+            }
+        }
+    }
+    return stream_from_new_list_with_tick(out, tick);
 }
 
+/* DL3 merge — when both upstreams carry tick > 0, interleave by virtual
+ * timestamp (stable: ties favour `a`). When either tick is 0, fall back
+ * to concat (a then b). */
 static deck_value_t *b_stream_merge_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -5380,13 +6145,34 @@ static deck_value_t *b_stream_merge_cold(deck_value_t **args, uint32_t n, deck_i
     deck_value_t *b = stream_items(args[1]);
     uint32_t la = a ? a->as.list.len : 0;
     uint32_t lb = b ? b->as.list.len : 0;
+    int64_t tick_a = stream_tick_unit(args[0]);
+    int64_t tick_b = stream_tick_unit(args[1]);
     deck_value_t *out = deck_new_list(la + lb);
     if (!out) return NULL;
+    if (tick_a > 0 && tick_b > 0) {
+        uint32_t i = 0, j = 0;
+        while (i < la && j < lb) {
+            int64_t ts_a = (int64_t)i * tick_a;
+            int64_t ts_b = (int64_t)j * tick_b;
+            if (ts_a <= ts_b) deck_list_push(out, a->as.list.items[i++]);
+            else              deck_list_push(out, b->as.list.items[j++]);
+        }
+        for (; i < la; i++) deck_list_push(out, a->as.list.items[i]);
+        for (; j < lb; j++) deck_list_push(out, b->as.list.items[j]);
+        /* Output tick is the gcd-style spacing — using the smaller one
+         * keeps downstream throttle/debounce conservative. */
+        int64_t out_tick = (tick_a < tick_b) ? tick_a : tick_b;
+        return stream_from_new_list_with_tick(out, out_tick);
+    }
     for (uint32_t i = 0; i < la; i++) deck_list_push(out, a->as.list.items[i]);
     for (uint32_t i = 0; i < lb; i++) deck_list_push(out, b->as.list.items[i]);
     return stream_from_new_list(out);
 }
 
+/* DL3 combine — when both upstreams carry tick > 0, walk forward in
+ * virtual time and emit (latest_a, latest_b) at every event past the
+ * point where both have emitted at least once. tick == 0 keeps the
+ * cold last-pair behavior. */
 static deck_value_t *b_stream_combine_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)n;
@@ -5396,8 +6182,29 @@ static deck_value_t *b_stream_combine_cold(deck_value_t **args, uint32_t n, deck
     deck_value_t *b = stream_items(args[1]);
     uint32_t la = a ? a->as.list.len : 0;
     uint32_t lb = b ? b->as.list.len : 0;
-    deck_value_t *out = deck_new_list(0);
+    int64_t tick_a = stream_tick_unit(args[0]);
+    int64_t tick_b = stream_tick_unit(args[1]);
+    deck_value_t *out = deck_new_list(la + lb);
     if (!out) return NULL;
+    if (tick_a > 0 && tick_b > 0 && la > 0 && lb > 0) {
+        uint32_t i = 0, j = 0;
+        deck_value_t *last_a = NULL, *last_b = NULL;
+        while (i < la || j < lb) {
+            int64_t ts_a = (i < la) ? (int64_t)i * tick_a : INT64_MAX;
+            int64_t ts_b = (j < lb) ? (int64_t)j * tick_b : INT64_MAX;
+            if (ts_a <= ts_b) { last_a = a->as.list.items[i++]; }
+            else              { last_b = b->as.list.items[j++]; }
+            if (last_a && last_b) {
+                deck_value_t *items[2] = { last_a, last_b };
+                deck_value_t *t = deck_new_tuple(items, 2);
+                if (!t) { deck_release(out); return NULL; }
+                deck_list_push(out, t);
+                deck_release(t);
+            }
+        }
+        int64_t out_tick = (tick_a < tick_b) ? tick_a : tick_b;
+        return stream_from_new_list_with_tick(out, out_tick);
+    }
     if (la > 0 && lb > 0) {
         deck_value_t *items[2] = { a->as.list.items[la - 1],
                                    b->as.list.items[lb - 1] };
@@ -5431,7 +6238,10 @@ static deck_value_t *b_stream_buffer_cold(deck_value_t **args, uint32_t n, deck_
         deck_list_push(out, chunk);
         deck_release(chunk);
     }
-    return stream_from_new_list(out);
+    /* buffer reduces emission rate by `size`; the resulting tick is
+     * size * upstream_tick. */
+    return stream_from_new_list_with_tick(out,
+        stream_tick_unit(args[0]) * (int64_t)size);
 }
 
 static deck_value_t *b_stream_window_cold(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
@@ -5457,7 +6267,8 @@ static deck_value_t *b_stream_window_cold(deck_value_t **args, uint32_t n, deck_
         deck_list_push(out, win);
         deck_release(win);
     }
-    return stream_from_new_list(out);
+    /* window emits on every upstream tick — same rate as upstream. */
+    return stream_passthrough_tick(out, args[0]);
 }
 
 /* ---- json.* ------------------------------------------------------
@@ -5663,6 +6474,7 @@ static const builtin_t BUILTINS[] = {
     { "time.now",               b_time_now,          0, 0 },
     { "time.now_us",            b_time_now_us,       0, 0 },
     { "time.duration",          b_time_duration,     2, 2 },
+    { "time.ticks",             b_time_ticks,        2, 2 },   /* DL3 */
     { "time.to_iso",            b_time_to_iso,       1, 1 },
     /* Concept #32 — §3 @builtin time completeness. Timestamps in epoch
      * seconds, Durations in seconds. */
@@ -5683,7 +6495,7 @@ static const builtin_t BUILTINS[] = {
     { "time.duration_str",      b_time_duration_str, 1, 1 },
     { "time.ago",               b_time_ago,          1, 1 },
 
-    /* system.info */
+    /* system.info — legacy namespace, kept as alias of system.platform.* */
     { "system.info.device_id",    b_info_device_id,    0, 0 },
     { "system.info.free_heap",    b_info_free_heap,    0, 0 },
     { "system.info.deck_level",   b_info_deck_level,   0, 0 },
@@ -5696,12 +6508,104 @@ static const builtin_t BUILTINS[] = {
     { "system.info.uptime",       b_info_uptime,       0, 0 },
     { "system.info.cpu_freq_mhz", b_info_cpu_freq,     0, 0 },
     { "system.info.versions",     b_info_versions,     0, 0 },
+
+    /* system.platform — canonical SERVICES §21 names. Aliases share
+     * the same handlers as system.info.* for now; the wire-level name
+     * is what the spec mandates apps emit. */
+    { "system.platform.device_id",       b_info_device_id,    0, 0 },
+    { "system.platform.model",           b_info_device_model, 0, 0 },
+    { "system.platform.os_name",         b_info_os_name,      0, 0 },
+    { "system.platform.os_version",      b_info_os_version,   0, 0 },
+    { "system.platform.runtime_version", b_info_os_version,   0, 0 },
+    { "system.platform.deck_level",      b_info_deck_level,   0, 0 },
+    { "system.platform.edition",         b_info_deck_level,   0, 0 },
+    { "system.platform.app_id",          b_info_app_id,       0, 0 },
+    { "system.platform.app_version",     b_info_app_version,  0, 0 },
+    { "system.platform.versions",        b_info_versions,     0, 0 },
+    { "system.platform.uptime",          b_info_uptime,       0, 0 },
+    { "system.platform.free_heap",       b_info_free_heap,    0, 0 },
+    { "system.platform.used_heap",       b_power_heap_free,   0, 0 },
+    { "system.platform.cpu_freq",        b_info_cpu_freq,     0, 0 },
     /* J9 — system.power / system.notify / system.ota stubs. */
     { "system.power.uptime",      b_power_uptime,      0, 0 },
     { "system.power.heap_free",   b_power_heap_free,   0, 0 },
     { "system.power.restart",     b_power_restart,     0, 0 },
     { "system.notify.show",       b_notify_show,       1, 1 },
     { "system.ota.check_update",  b_ota_check_update,  0, 0 },
+
+    /* DL1 service surfaces — backed by stub dispatch so apps that
+     * declare them in @needs.services can call without crashing. */
+    { "system.url.open",                b_url_open,              1, 1 },
+    { "system.url.can_open",            b_url_can_open,          1, 1 },
+    { "system.logs.emit",               b_logs_emit,             1, 1 },
+    { "system.logs.ring",               b_logs_ring,             0, 2 },
+    { "system.logs.clear",              b_logs_clear,            1, 1 },
+    { "system.logs.set_level",          b_logs_set_level,        2, 2 },
+    { "system.scheduler.register_after",  b_sched_register_after,  3, 3 },
+    { "system.scheduler.register_every",  b_sched_register_every,  3, 3 },
+    { "system.scheduler.cancel",          b_sched_cancel,          1, 1 },
+    { "system.scheduler.list",            b_sched_list,            0, 0 },
+    { "system.events.publish",          b_events_publish,        2, 2 },
+    { "system.events.subscribe",        b_events_subscribe,      1, 1 },
+    { "system.events.subscribe_pattern",b_events_subscribe,      1, 1 },
+    { "system.intents.matches",         b_intents_matches,       1, 1 },
+    { "system.intents.dispatch",        b_intents_dispatch,      1, 1 },
+
+    /* DL2 — bridge.ui declarative entry points. Apps may call these
+     * directly (in addition to using @on / DVC). Lockscreen finally
+     * exposed as a UI service per BRIDGE §59.2. */
+    { "bridge.ui.set_locked",     b_bui_set_locked,     1, 1 },
+    { "bridge.ui.set_theme",      b_bui_set_theme,      1, 1 },
+    { "bridge.ui.set_brightness", b_bui_set_brightness, 1, 1 },
+    { "bridge.ui.toast",          b_bui_toast,          1, 1 },
+    { "bridge.ui.loading_show",   b_bui_loading_show,   0, 1 },
+    { "bridge.ui.loading_hide",   b_bui_loading_hide,   0, 0 },
+
+    /* DL2 Tier-2/3 native services — backed by existing SDI drivers. */
+    { "network.http.get",         b_http_get,           1, 1 },
+    { "network.http.post",        b_http_post,          2, 2 },
+    { "network.wifi.scan",        b_wifi_scan,          0, 0 },
+    { "network.wifi.connect",     b_wifi_connect,       2, 2 },
+    { "network.wifi.disconnect",  b_wifi_disconnect,    0, 0 },
+    { "network.wifi.status",      b_wifi_status,        0, 0 },
+    { "network.wifi.ip",          b_wifi_ip,            0, 0 },
+    { "system.time.sntp_sync",    b_time_sntp_sync,     0, 1 },
+    { "system.time.set_epoch",    b_time_set_epoch,     1, 1 },
+    { "system.security.has_pin",      b_sec_has_pin,    0, 0 },
+    { "system.security.verify_pin",   b_sec_verify_pin, 1, 1 },
+    { "system.security.set_pin",      b_sec_set_pin,    2, 2 },
+    { "system.security.lock",         b_sec_lock,       0, 0 },
+    { "system.security.unlock",       b_sec_unlock,     0, 0 },
+    { "system.security.is_locked",    b_sec_is_locked,  0, 0 },
+    { "system.theme.get",         b_theme_get,          0, 0 },
+    { "system.theme.set",         b_theme_set,          1, 1 },
+    { "system.display.rotate",    b_display_rotate,     1, 1 },
+    { "system.display.brightness",b_display_brightness, 1, 1 },
+    { "system.apps.list",         b_apps_list,          0, 0 },
+    { "system.apps.launch",       b_apps_launch,        1, 2 },
+    { "system.apps.current",      b_apps_current,       0, 0 },
+
+    /* DL2 — remaining Tier-1/2/4 service surfaces. */
+    { "storage.cache.get",        b_cache_get,          1, 1 },
+    { "storage.cache.put",        b_cache_put,          2, 3 },
+    { "storage.cache.delete",     b_cache_delete,       1, 1 },
+    { "storage.cache.clear",      b_cache_clear,        0, 0 },
+    { "system.locale.get",        b_locale_get,         0, 0 },
+    { "system.locale.set",        b_locale_set,         1, 1 },
+    { "system.locale.list",       b_locale_list,        0, 0 },
+    { "data.cache.get",           b_data_cache_get,     1, 1 },
+    { "data.cache.put",           b_data_cache_put,     2, 3 },
+    { "media.image.load",         b_image_load,         1, 1 },
+    { "media.image.decode_size",  b_image_decode_size,  1, 1 },
+    { "media.image.free",         b_image_free,         1, 1 },
+    { "auth.oauth.authorize_url",   b_oauth_authorize_url,   1, 4 },
+    { "auth.oauth.exchange_token",  b_oauth_exchange_token,  1, 4 },
+    { "auth.oauth.refresh_token",   b_oauth_refresh_token,   1, 4 },
+    { "auth.oauth.revoke",          b_oauth_revoke,          1, 2 },
+    { "share.target.dispatch",    b_share_dispatch,     1, 2 },
+    { "network.ws.open",          b_ws_open,            1, 2 },
+    { "network.ws.send",          b_ws_send,            2, 2 },
+    { "network.ws.close",         b_ws_close,           1, 1 },
 
     /* text — spec 03-deck-os §3 (post-#15a unification on `len`).
      * `len` / `starts` / `ends` match §11.2's list.len convention;
@@ -7368,6 +8272,72 @@ static deck_err_t run_machine(const ast_node_t *machine,
      * level transitions, all progression via state-internal `transition`
      * hooks) keep the auto-loop below. */
     if (machine->as.machine.transitions.len > 0) {
+        /* Standalone path (no app handle bound) — drive the machine
+         * locally by reading c->pending_machine_event between hooks.
+         * App-handle path keeps the original "fire and wait" behaviour
+         * because dispatch is driven externally via app_dispatch. */
+        struct deck_runtime_app *_app = app_from_ctx(c);
+        if (!_app) {
+            c->standalone_machine_state = state->as.state.name;
+            for (int steps = 0; steps < DECK_MACHINE_MAX_TRANSITIONS; steps++) {
+                c->pending_machine_event = NULL;
+                const char *ignored = NULL;
+                run_state_hooks(c, state, "enter", &ignored);
+                content_render_state(c, c->global, machine, state);
+                if (c->err != DECK_RT_OK) return c->err;
+                const char *evt = c->pending_machine_event;
+                if (!evt) {
+                    run_state_hooks(c, state, "leave", NULL);
+                    ESP_LOGI(TAG, "machine '%s' terminated in :%s",
+                             machine->as.machine.name, state->as.state.name);
+                    return c->err;
+                }
+                /* Find a transition matching evt + current state. */
+                const ast_node_t *match = NULL;
+                for (uint32_t i = 0; i < machine->as.machine.transitions.len; i++) {
+                    const ast_node_t *t = machine->as.machine.transitions.items[i];
+                    if (!t || t->kind != AST_MACHINE_TRANSITION) continue;
+                    if (!t->as.machine_transition.event ||
+                        strcmp(t->as.machine_transition.event, evt) != 0) continue;
+                    if (t->as.machine_transition.from_state &&
+                        strcmp(t->as.machine_transition.from_state,
+                               state->as.state.name) != 0) continue;
+                    match = t; break;
+                }
+                if (!match) {
+                    set_err(c, DECK_RT_INTERNAL, state->line, state->col,
+                            "machine '%s' has no transition for :%s from :%s",
+                            machine->as.machine.name, evt, state->as.state.name);
+                    return c->err;
+                }
+                run_state_hooks(c, state, "leave", NULL);
+                if (c->err != DECK_RT_OK) return c->err;
+                if (match->as.machine_transition.before_body) {
+                    deck_value_t *r = deck_interp_run(c, c->global,
+                        match->as.machine_transition.before_body);
+                    if (r) deck_release(r);
+                    if (c->err != DECK_RT_OK) return c->err;
+                }
+                state = find_state(machine, match->as.machine_transition.to_state);
+                if (!state) {
+                    set_err(c, DECK_RT_INTERNAL, match->line, match->col,
+                            "transition target :%s not found",
+                            match->as.machine_transition.to_state);
+                    return c->err;
+                }
+                c->standalone_machine_state = state->as.state.name;
+                if (match->as.machine_transition.after_body) {
+                    deck_value_t *r = deck_interp_run(c, c->global,
+                        match->as.machine_transition.after_body);
+                    if (r) deck_release(r);
+                    if (c->err != DECK_RT_OK) return c->err;
+                }
+            }
+            set_err(c, DECK_RT_INTERNAL, machine->line, machine->col,
+                    "machine exceeded max transitions (%d)",
+                    DECK_MACHINE_MAX_TRANSITIONS);
+            return c->err;
+        }
         const char *ignored = NULL;
         run_state_hooks(c, state, "enter", &ignored);
         /* Concept #46 — render the initial state's declarative content. */
@@ -7541,7 +8511,15 @@ static deck_value_t *b_machine_send(deck_value_t **args, uint32_t n, deck_interp
         set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "machine.send(:event, payload?)"); return NULL;
     }
     struct deck_runtime_app *app = app_from_ctx(c);
-    if (!app) { set_err(c, DECK_RT_INTERNAL, 0, 0, "machine.send: no app context"); return NULL; }
+    if (!app) {
+        /* Standalone machine path (run_on_launch / conformance). Record
+         * the event so the surrounding run_machine loop can advance the
+         * state. Multiple sends in the same hook are coalesced — the
+         * last one wins, matching the app-context behaviour where
+         * dispatch is also deferred. */
+        c->pending_machine_event = args[0]->as.atom;
+        return deck_retain(deck_unit());
+    }
     const char *event = args[0]->as.atom;
     deck_value_t *payload = (n >= 2) ? args[1] : NULL;
 
@@ -8347,4 +9325,65 @@ const char *deck_runtime_app_id(const deck_runtime_app_t *app)
 const char *deck_runtime_app_name(const deck_runtime_app_t *app)
 {
     return (app && app->in_use) ? app->ld.app_name : NULL;
+}
+
+/* DL3 canary — exercises the tick scheduler end-to-end without needing
+ * a Deck app. Returns DECK_RT_OK iff every probe matches expected
+ * output lengths. Logs one summary line. Defined here at the bottom of
+ * the file so it can call the static b_time_ticks /
+ * b_stream_throttle_cold / b_stream_debounce_cold handlers directly. */
+deck_err_t deck_runtime_dl3_tick_canary(void)
+{
+    deck_interp_ctx_t ctx = {0};
+
+    /* time.ticks(100, 10) — 10 timestamps spaced 100ms apart. */
+    deck_value_t *interval = deck_new_int(100);
+    deck_value_t *count    = deck_new_int(10);
+    deck_value_t *tk_args[2] = { interval, count };
+    deck_value_t *ticks = b_time_ticks(tk_args, 2, &ctx);
+    deck_release(interval); deck_release(count);
+    if (!ticks || ticks->type != DECK_T_STREAM ||
+        ticks->as.stream.list->as.list.len != 10 ||
+        ticks->as.stream.tick_unit_us != 100000) {
+        ESP_LOGE("deck.dl3", "canary: time.ticks(100,10) shape wrong");
+        if (ticks) deck_release(ticks);
+        return DECK_RT_ABORTED;
+    }
+
+    /* throttle(ticks, 300ms) — keeps idx 0,3,6,9 → len 4. */
+    deck_value_t *thr_d = deck_new_int(300);
+    deck_value_t *th_args[2] = { ticks, thr_d };
+    deck_value_t *thr = b_stream_throttle_cold(th_args, 2, &ctx);
+    deck_release(thr_d);
+    uint32_t thr_len = (thr && thr->type == DECK_T_STREAM)
+                          ? thr->as.stream.list->as.list.len : 0;
+
+    /* debounce(ticks, 50ms) — every gap is 100ms ≥ 50ms → all survive. */
+    deck_value_t *deb_d = deck_new_int(50);
+    deck_value_t *db_args[2] = { ticks, deb_d };
+    deck_value_t *deb = b_stream_debounce_cold(db_args, 2, &ctx);
+    deck_release(deb_d);
+    uint32_t deb_len = (deb && deb->type == DECK_T_STREAM)
+                          ? deb->as.stream.list->as.list.len : 0;
+
+    /* debounce(ticks, 200ms) — every gap (100ms) < 200ms; only the
+     * tail survives via the implicit infinite silence after. */
+    deck_value_t *deb2_d = deck_new_int(200);
+    deck_value_t *db2_args[2] = { ticks, deb2_d };
+    deck_value_t *deb2 = b_stream_debounce_cold(db2_args, 2, &ctx);
+    deck_release(deb2_d);
+    uint32_t deb2_len = (deb2 && deb2->type == DECK_T_STREAM)
+                           ? deb2->as.stream.list->as.list.len : 0;
+
+    if (thr) deck_release(thr);
+    if (deb) deck_release(deb);
+    if (deb2) deck_release(deb2);
+    deck_release(ticks);
+
+    bool pass = (thr_len == 4 && deb_len == 10 && deb2_len == 1);
+    ESP_LOGI("deck.dl3",
+             "tick-canary: throttle=%u debounce_50=%u debounce_200=%u → %s",
+             (unsigned)thr_len, (unsigned)deb_len, (unsigned)deb2_len,
+             pass ? "PASS" : "FAIL");
+    return pass ? DECK_RT_OK : DECK_RT_ABORTED;
 }

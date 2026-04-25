@@ -282,6 +282,9 @@ deck_err_t deck_shell_dl2_boot(void)
     /* H3 — runtime-side intent canary. */
     run_intent_canary();
 
+    /* K5 — DL3 tick-scheduler canary. */
+    deck_runtime_dl3_tick_canary();
+
     /* Show lockscreen — fires on_unlocked synchronously if no PIN. */
     deck_shell_lockscreen_show(on_unlocked);
     return DECK_RT_OK;

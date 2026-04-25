@@ -88,8 +88,14 @@ typedef struct {
  * buffer/window) still panics :bug — those require per-stream state
  * and timer ticks that are not part of the v1 runtime. */
 typedef struct {
-    deck_value_t *list;       /* retained — items already emitted */
-    bool          terminated; /* cold streams are always terminated */
+    deck_value_t *list;        /* retained — items already emitted */
+    bool          terminated;  /* cold streams are always terminated */
+    /* DL3 — virtual tick spacing between emissions, microseconds.
+     * 0 = "instant" (cold-collapsed semantics: temporal operators
+     * pass through or keep-only-last). >0 = the n-th emission carries
+     * timestamp n*tick_unit_us. Producers like time.ticks(d, n) set
+     * this to apply real interval math through throttle/debounce/etc. */
+    int64_t       tick_unit_us;
 } deck_stream_t;
 
 /* DL2 F21.1: function value. All pointers point into the runtime arena

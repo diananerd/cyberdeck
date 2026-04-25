@@ -64,6 +64,12 @@ typedef struct {
      * which returns this value and clears the flag. */
     struct deck_value *try_propagated;   /* retained when set */
     bool               try_unwinding;
+    /* Conformance-mode machine driver — when no app handle exists
+     * (deck_runtime_run_on_launch path), Machine.send records the
+     * pending event here and run_machine drains it to advance the
+     * state machine in-process. Both fields are interned strings. */
+    const char        *pending_machine_event;
+    const char        *standalone_machine_state;
 } deck_interp_ctx_t;
 
 /* Initialize interpreter context. global env starts empty. */
@@ -260,6 +266,13 @@ void        deck_env_force_release(deck_env_t *e);
 
 /* Interpreter selftest. */
 deck_err_t deck_interp_run_selftest(void);
+
+/* DL3 — tick-scheduler smoke test. Builds an in-process stream of 10
+ * ticks at 100ms, applies throttle(300ms) and debounce(50ms) and
+ * verifies the output list lengths match real interval math. Logs a
+ * one-line summary and returns DECK_RT_OK on pass. Used by the shell
+ * as a hardware canary for the K1–K4 stream surface. */
+deck_err_t deck_runtime_dl3_tick_canary(void);
 
 #ifdef __cplusplus
 }
