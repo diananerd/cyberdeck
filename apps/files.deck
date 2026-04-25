@@ -22,7 +22,12 @@
 type Entry = { name: str, is_dir: bool }
 
 fn root_entries () -> [Entry] =
-  [{ name: "etc", is_dir: true }, { name: "home", is_dir: true }, { name: "tmp", is_dir: true }, { name: "var", is_dir: true }]
+  [
+    { name: "etc",  is_dir: true },
+    { name: "home", is_dir: true },
+    { name: "tmp",  is_dir: true },
+    { name: "var",  is_dir: true },
+  ]
 
 @on launch:
   log.info("files: boot")

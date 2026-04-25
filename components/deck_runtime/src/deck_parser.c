@@ -599,7 +599,8 @@ static ast_node_t *parse_primary(deck_parser_t *p)
             break;
         }
         case TOK_LBRACKET: {
-            /* DL2 F21.4: list literal `[e1, e2, ...]` (also empty `[]`). */
+            /* DL2 F21.4: list literal `[e1, e2, ...]` (also empty `[]`).
+             * H2 — trailing comma allowed for multi-line literals. */
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
             n = ast_new(p->arena, AST_LIT_LIST, ln, co); if (!n) return NULL;
@@ -611,6 +612,7 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                     ast_list_push(p->arena, &n->as.list.items, item);
                     if (!at(p, TOK_COMMA)) break;
                     advance(p);
+                    if (at(p, TOK_RBRACKET)) break;   /* trailing comma */
                 }
             }
             if (!expect(p, TOK_RBRACKET, "expected ']' to close list")) return NULL;

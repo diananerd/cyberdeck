@@ -14,7 +14,12 @@
 type Entry = { id: str, name: str }
 
 fn catalog () -> [Entry] =
-  [{ id: "tasks", name: "TASKS" }, { id: "files", name: "FILES" }, { id: "settings", name: "SETTINGS" }, { id: "bluesky", name: "BLUESKY" }]
+  [
+    { id: "tasks",    name: "TASKS" },
+    { id: "files",    name: "FILES" },
+    { id: "settings", name: "SETTINGS" },
+    { id: "bluesky",  name: "BLUESKY" },
+  ]
 
 @on launch:
   log.info("launcher: boot")

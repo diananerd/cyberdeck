@@ -315,6 +315,32 @@ static bool scan_number(deck_lexer_t *lx, deck_token_t *out)
 #undef NEXT_OK
     no_dur_suffix: ;
     }
+
+    /* Size suffix (spec §01 §3 literals `64KB 192KB 4MB 1GB`).
+     * Canonical unit is bytes. Two-letter suffix; we stop only if the
+     * char after the suffix is another ident character (so `64KB` ≠
+     * a longer ident). Only on integer literals — `1.5KB` is rejected. */
+    if (!seen_dot && lx->pos + 1 < lx->len) {
+        int c0 = peek(lx);
+        int c1 = peek_at(lx, 1);
+        int c2 = peek_at(lx, 2);
+        bool has_suffix = false;
+        int64_t mult = 1;
+        if ((c0 == 'K' || c0 == 'M' || c0 == 'G') && c1 == 'B' &&
+            !(c2 == '_' || (c2 >= 'a' && c2 <= 'z') ||
+              (c2 >= 'A' && c2 <= 'Z') || (c2 >= '0' && c2 <= '9'))) {
+            switch (c0) {
+                case 'K': mult = 1024LL; break;
+                case 'M': mult = 1024LL * 1024LL; break;
+                case 'G': mult = 1024LL * 1024LL * 1024LL; break;
+            }
+            has_suffix = true;
+        }
+        if (has_suffix) {
+            out->as.i *= mult;
+            advance(lx); advance(lx);
+        }
+    }
     return true;
 }
 
@@ -683,6 +709,12 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
     if (c == '\n') {
         uint32_t line = lx->line, col = lx->col;
         advance(lx);
+        /* H2 — inside `(`/`[`/`{` newlines are whitespace; do not
+         * trip indent tracking and do not emit NEWLINE so multi-line
+         * literals parse like inline ones. */
+        if (lx->bracket_depth > 0) {
+            return deck_lexer_next(lx, out);
+        }
         lx->at_line_start = true;
         emit(out, TOK_NEWLINE, line, col);
         return true;
@@ -746,12 +778,12 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
             if (peek(lx) == '>') { advance(lx); emit(out, TOK_ARROW, lx->line, lx->col); }
             else                 { emit(out, TOK_MINUS, lx->line, lx->col); }
             return true;
-        case '(': advance(lx); emit(out, TOK_LPAREN,   lx->line, lx->col); return true;
-        case ')': advance(lx); emit(out, TOK_RPAREN,   lx->line, lx->col); return true;
-        case '[': advance(lx); emit(out, TOK_LBRACKET, lx->line, lx->col); return true;
-        case ']': advance(lx); emit(out, TOK_RBRACKET, lx->line, lx->col); return true;
-        case '{': advance(lx); emit(out, TOK_LBRACE,   lx->line, lx->col); return true;
-        case '}': advance(lx); emit(out, TOK_RBRACE,   lx->line, lx->col); return true;
+        case '(': advance(lx); lx->bracket_depth++; emit(out, TOK_LPAREN,   lx->line, lx->col); return true;
+        case ')': advance(lx); if (lx->bracket_depth) lx->bracket_depth--; emit(out, TOK_RPAREN, lx->line, lx->col); return true;
+        case '[': advance(lx); lx->bracket_depth++; emit(out, TOK_LBRACKET, lx->line, lx->col); return true;
+        case ']': advance(lx); if (lx->bracket_depth) lx->bracket_depth--; emit(out, TOK_RBRACKET, lx->line, lx->col); return true;
+        case '{': advance(lx); lx->bracket_depth++; emit(out, TOK_LBRACE,   lx->line, lx->col); return true;
+        case '}': advance(lx); if (lx->bracket_depth) lx->bracket_depth--; emit(out, TOK_RBRACE, lx->line, lx->col); return true;
         case ',': advance(lx); emit(out, TOK_COMMA,    lx->line, lx->col); return true;
         case ';': advance(lx); emit(out, TOK_SEMI,     lx->line, lx->col); return true;
         case '.': advance(lx); emit(out, TOK_DOT,      lx->line, lx->col); return true;

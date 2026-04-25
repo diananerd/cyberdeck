@@ -22,7 +22,11 @@
 type Post = { author: str, text: str }
 
 fn fixture () -> [Post] =
-  [{ author: "alice", text: "hello from deck" }, { author: "bob", text: "world!" }, { author: "carol", text: "deck rules" }]
+  [
+    { author: "alice", text: "hello from deck" },
+    { author: "bob",   text: "world!" },
+    { author: "carol", text: "deck rules" },
+  ]
 
 @on launch:
   log.info("bluesky: boot")

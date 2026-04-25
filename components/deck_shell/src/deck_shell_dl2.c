@@ -15,6 +15,7 @@
 #include "deck_shell_deck_apps.h"
 
 #include "deck_bridge_ui.h"
+#include "deck_interp.h"
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -171,6 +172,51 @@ static void shell_lock_handler(bool locked)
     deck_shell_lockscreen_lock(on_unlocked);
 }
 
+/* H3 — runtime-side intent canary. Walks the loaded .deck apps, runs
+ * each `@on trigger_<atom>` event we expect, and logs the outcome.
+ * This proves the G4 path (intent-id → @on trigger_<atom> dispatch
+ * with payload binding) end-to-end without needing a physical tap on
+ * the LCD. The actual touchscreen → bridge intent_hook → runtime path
+ * is wired (concept #58/#59/#60) and shares this same code from
+ * `deck_runtime_app_dispatch` onwards, so a green canary is a strong
+ * signal that the touch path will fire equivalently. */
+static void canary_dispatch(deck_runtime_app_t *app, const char *event)
+{
+    if (!app) return;
+    deck_err_t rc = deck_runtime_app_dispatch(app, event, NULL);
+    ESP_LOGI(TAG, "tap-canary: %s → %s",
+             event, rc == DECK_RT_OK ? "OK" : deck_err_name(rc));
+}
+
+static void run_intent_canary(void)
+{
+    /* settings.deck — every parameterless trigger_*. */
+    deck_runtime_app_t *settings = NULL;
+    deck_runtime_app_t *taskman  = NULL;
+    deck_runtime_app_t *files    = NULL;
+    deck_runtime_app_t *bluesky  = NULL;
+    uint32_t n = deck_shell_deck_apps_count();
+    for (uint32_t i = 0; i < n; i++) {
+        deck_shell_deck_app_info_t info;
+        deck_shell_deck_apps_info(i, &info);
+        if (!info.id) continue;
+        if      (strcmp(info.id, "cyberdeck.settings") == 0)
+            settings = deck_shell_deck_apps_handle(info.app_id);
+        else if (strcmp(info.id, "cyberdeck.taskman") == 0)
+            taskman  = deck_shell_deck_apps_handle(info.app_id);
+        else if (strcmp(info.id, "cyberdeck.files") == 0)
+            files    = deck_shell_deck_apps_handle(info.app_id);
+        else if (strcmp(info.id, "cyberdeck.bluesky") == 0)
+            bluesky  = deck_shell_deck_apps_handle(info.app_id);
+    }
+    canary_dispatch(settings, "trigger_lock_now");
+    canary_dispatch(settings, "trigger_check_update");
+    canary_dispatch(settings, "trigger_about");
+    canary_dispatch(taskman,  "trigger_open_compose");
+    canary_dispatch(files,    "trigger_go_up");
+    canary_dispatch(bluesky,  "trigger_refresh");
+}
+
 deck_err_t deck_shell_dl2_boot(void)
 {
     if (s_booted) return DECK_RT_OK;
@@ -193,6 +239,9 @@ deck_err_t deck_shell_dl2_boot(void)
      * taps fire @on resume. Failures here are non-fatal — we boot the
      * OS without user apps if none are present or any fail to parse. */
     deck_shell_deck_apps_scan_and_register();
+
+    /* H3 — runtime-side intent canary. */
+    run_intent_canary();
 
     /* Show lockscreen — fires on_unlocked synchronously if no PIN. */
     deck_shell_lockscreen_show(on_unlocked);

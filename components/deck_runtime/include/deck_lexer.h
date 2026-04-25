@@ -95,6 +95,12 @@ typedef struct {
     bool        at_line_start;
     bool        emitted_eof;
 
+    /* H2 — open-bracket nesting depth across `(`, `[`, `{`. While
+     * depth > 0, NEWLINE / INDENT / DEDENT are suppressed so multi-
+     * line list, tuple, and record literals work without indentation
+     * games. Each `(`/`[`/`{` increments; `)`/`]`/`}` decrements. */
+    uint16_t    bracket_depth;
+
     const char *err_msg;
     uint32_t    err_line;
     uint32_t    err_col;

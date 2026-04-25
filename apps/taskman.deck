@@ -26,7 +26,14 @@ type Task = { id: str, title: str, done: bool }
 
 @on launch:
   log.info("taskman: boot")
-  Machine.replace({ tasks: [{ id: "t1", title: "BUY GROCERIES", done: false }, { id: "t2", title: "CALL DR", done: false }, { id: "t3", title: "FINISH DECK SPEC", done: false }], draft: "" })
+  Machine.replace({
+    tasks: [
+      { id: "t1", title: "BUY GROCERIES",    done: false },
+      { id: "t2", title: "CALL DR",          done: false },
+      { id: "t3", title: "FINISH DECK SPEC", done: false },
+    ],
+    draft: "",
+  })
 
 @machine taskman
   state running:
