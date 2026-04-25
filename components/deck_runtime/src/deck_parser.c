@@ -1442,37 +1442,81 @@ static ast_node_t *parse_suite(deck_parser_t *p);
  * the holder binding and the field-access idents doesn't matter. */
 static uint32_t s_let_dest_seq = 0;
 
+/* LANG §3.2 — `let <pattern> = expr` desugars to a sequence of
+ * primitive lets that pull each binder out of a temporary holder.
+ * Supports paren tuple (positional + named + shorthand), list cons,
+ * record field-shorthand. */
+typedef struct {
+    const char *binder;          /* name to bind */
+    enum { LD_POS, LD_FIELD, LD_LIST_IDX, LD_LIST_TAIL } kind;
+    uint32_t    pos;             /* tuple index for LD_POS / LD_LIST_IDX */
+    const char *field;           /* field name for LD_FIELD */
+} ld_binding_t;
+
 static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t co)
 {
+    ld_binding_t binders[16];
+    uint32_t nb = 0;
+
+    /* Paren form: positional `(a, b)`, named-explicit `(x: a, y: b)`,
+     * or named-shorthand `(x, y)`. The first delimiter is consumed by
+     * the caller (it dispatched on TOK_LPAREN), so advance now. */
     advance(p); /* ( */
-    const char *names[16];
-    uint32_t n_names = 0;
     if (at(p, TOK_RPAREN)) {
         set_err(p, DECK_LOAD_PARSE,
                 "let destructuring pattern cannot be empty");
         return NULL;
     }
+    bool any_named = false;
     for (;;) {
-        if (n_names >= 16) {
+        if (nb >= 16) {
             set_err(p, DECK_LOAD_PARSE,
                     "let destructuring: too many elements (max 16)");
             return NULL;
         }
         if (!at(p, TOK_IDENT)) {
             set_err(p, DECK_LOAD_PARSE,
-                    "let destructuring: only plain ident binders supported at this layer");
+                    "let destructuring: expected ident binder");
             return NULL;
         }
-        names[n_names++] = p->cur.text;
+        const char *first = p->cur.text;
         advance(p);
+        if (at(p, TOK_COLON)) {
+            /* `field: binder` form. */
+            advance(p);
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "expected ident binder after `:` in let destructuring");
+                return NULL;
+            }
+            binders[nb].binder = p->cur.text;
+            binders[nb].kind   = LD_FIELD;
+            binders[nb].field  = first;
+            advance(p);
+            any_named = true;
+        } else {
+            /* Plain ident — interpreted as positional for now; if the
+             * loop turns out to be all-named (any_named flips later)
+             * we promote it to field-shorthand. */
+            binders[nb].binder = first;
+            binders[nb].kind   = LD_POS;
+            binders[nb].pos    = nb;
+            binders[nb].field  = first;   /* shorthand fallback */
+        }
+        nb++;
         if (!at(p, TOK_COMMA)) break;
         advance(p);
     }
     if (!expect(p, TOK_RPAREN, "expected ')' closing let destructuring pattern")) return NULL;
-    if (n_names == 1) {
-        set_err(p, DECK_LOAD_PARSE,
-                "let destructuring pattern must contain at least 2 elements");
-        return NULL;
+    /* Promote all-positional → field-shorthand only when the user
+     * mixed at least one named entry; pure positional stays as tuple
+     * indexing (compatible with both positional tuples and lists). */
+    if (any_named) {
+        for (uint32_t i = 0; i < nb; i++) {
+            if (binders[i].kind == LD_POS) {
+                binders[i].kind  = LD_FIELD;
+            }
+        }
     }
     if (at(p, TOK_COLON)) {
         advance(p);
@@ -1498,15 +1542,27 @@ static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t
     holder->as.let.body  = NULL;
     ast_list_push(p->arena, &d->as.do_.exprs, holder);
 
-    for (uint32_t i = 0; i < n_names; i++) {
+    for (uint32_t i = 0; i < nb; i++) {
         ast_node_t *ident = ast_new(p->arena, AST_IDENT, ln, co); if (!ident) return NULL;
         ident->as.s = dest_name;
-        ast_node_t *get = ast_new(p->arena, AST_TUPLE_GET, ln, co); if (!get) return NULL;
-        get->as.tuple_get.obj = ident;
-        get->as.tuple_get.idx = i;
+        ast_node_t *getter = NULL;
+        if (binders[i].kind == LD_POS) {
+            getter = ast_new(p->arena, AST_TUPLE_GET, ln, co);
+            if (!getter) return NULL;
+            getter->as.tuple_get.obj = ident;
+            getter->as.tuple_get.idx = binders[i].pos;
+        } else {
+            /* LD_FIELD — desugar `_dest.field` via AST_DOT. The
+             * interpreter already routes DOT on a map to map.get(field),
+             * which is how the runtime stores named tuples + records. */
+            getter = ast_new(p->arena, AST_DOT, ln, co);
+            if (!getter) return NULL;
+            getter->as.dot.obj   = ident;
+            getter->as.dot.field = binders[i].field;
+        }
         ast_node_t *bind = ast_new(p->arena, AST_LET, ln, co); if (!bind) return NULL;
-        bind->as.let.name  = names[i];
-        bind->as.let.value = get;
+        bind->as.let.name  = binders[i].binder;
+        bind->as.let.value = getter;
         bind->as.let.body  = NULL;
         ast_list_push(p->arena, &d->as.do_.exprs, bind);
     }
