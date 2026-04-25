@@ -6808,6 +6808,35 @@ static const builtin_t BUILTINS[] = {
     { "fs.read_bytes",          b_fs_read_bytes,     1, 1 },
     { "fs.write_bytes",         b_fs_write_bytes,    2, 2 },
 
+    /* SERVICES §14/§15 — canonical storage.* prefixes alias the legacy
+     * top-level fs / nvs names. Apps using `@use storage.fs as fs`
+     * write `fs.read(...)` after the alias, so the legacy name remains
+     * the call surface; these aliases simply make the spec-canonical
+     * call (`storage.fs.read`) work without an alias. */
+    { "storage.fs.exists",      b_fs_exists,         1, 1 },
+    { "storage.fs.read",        b_fs_read,           1, 1 },
+    { "storage.fs.list",        b_fs_list,           1, 1 },
+    { "storage.fs.write",       b_fs_write,          2, 2 },
+    { "storage.fs.append",      b_fs_append,         2, 2 },
+    { "storage.fs.delete",      b_fs_delete,         1, 1 },
+    { "storage.fs.mkdir",       b_fs_mkdir,          1, 1 },
+    { "storage.fs.rename",      b_fs_move,           2, 2 },
+    { "storage.fs.read_bytes",  b_fs_read_bytes,     1, 1 },
+    { "storage.fs.write_bytes", b_fs_write_bytes,    2, 2 },
+    { "storage.nvs.get",        b_nvs_get,           1, 1 },
+    { "storage.nvs.set",        b_nvs_set,           2, 2 },
+    { "storage.nvs.delete",     b_nvs_delete,        1, 1 },
+    { "storage.nvs.get_int",    b_nvs_get_int,       1, 1 },
+    { "storage.nvs.set_int",    b_nvs_set_int,       2, 2 },
+    { "storage.nvs.get_bool",   b_nvs_get_bool,      1, 1 },
+    { "storage.nvs.set_bool",   b_nvs_set_bool,      2, 2 },
+    { "storage.nvs.get_float",  b_nvs_get_float,     1, 1 },
+    { "storage.nvs.set_float",  b_nvs_set_float,     2, 2 },
+    { "storage.nvs.get_bytes",  b_nvs_get_bytes,     1, 1 },
+    { "storage.nvs.set_bytes",  b_nvs_set_bytes,     2, 2 },
+    { "storage.nvs.keys",       b_nvs_keys,          0, 0 },
+    { "storage.nvs.clear",      b_nvs_clear,         0, 0 },
+
     /* os lifecycle (single-app stubs in DL1) */
     { "os.resume",              b_os_resume,         0, 0 },
     { "os.suspend",             b_os_suspend,        0, 0 },
