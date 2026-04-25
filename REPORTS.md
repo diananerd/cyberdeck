@@ -3146,6 +3146,68 @@ hardware in their spec-first form (multi-line literals, type aliases,
 - Visual tap probing on the touchscreen — automated UI harness would
   let us assert pixel state + tap simulation; manual today.
 
+### Concept #80.stages-I1-I2 + J1-J12 — close every partial / open gap
+
+Closes the entire follow-up backlog. I1/I2 unblock @assets parse + add
+payload-carrying tap canary; J1–J12 close every partial/divergent gap
+plus the open spec gaps from the previous checkpoint.
+
+  I1   parser: @assets accepts non-string values + trailing kv
+       modifiers (`download:`, `as:`, `for_domain:`, `ttl:`).
+  I2   payload-carrying canary: settings.deck's
+       `@on trigger_set_theme(:amber)` etc. fire end-to-end with
+       three new green canaries. Two runtime fixes — scalar
+       single-param payload binding + binding the FIELD name (user's
+       `v`) instead of the type-annotation pattern's binder.
+
+  J1+J2 cold semantics for stream time/merge ops. Passthrough
+       throttle/delay; debounce-last; concat merge; tuple-last
+       combine; buffer/window per BUILTINS §12. No more :bug panics
+       from these names.
+  J3   `hal_backlight_set_level(float)` API. Quantises to on/off on
+       the CH422G EXIO2 board; future PWM-capable boards drop in
+       smooth dimming through the same call.
+  J4   per-app badge pills in the statusbar. Up to 4 concurrent;
+       count <= 0 hides.
+  J5   native date picker (lv_roller × 3 for Y/M/D). Replaces the
+       confirm-dialog stub.
+  J6   native share sheet (COPY + DISMISS) and permission sheet
+       (ALLOW + DENY with bold permission name).
+  J7   theme repaint on `bridge.ui.set_theme(:amber|:neon|:green)` —
+       statusbar + navbar widgets recolor immediately.
+  J8   parser: `@grants services:` with quoted-string keys nested
+       block, lowering to `services.<id>` entries with an `alias`
+       option.
+  J9   concrete driver stubs: `system.power.{uptime,heap_free,
+       restart}`, `system.notify.show`, `system.ota.check_update`.
+  J10  UI tap test harness — `deck_bridge_ui_simulate_tap(intent_id)`
+       fires LV_EVENT_CLICKED on the matching widget. Exercises
+       touchscreen → bridge intent_hook → runtime end-to-end.
+  J11  @migrate runner already wired (verified with new
+       `apps/conformance/app_migrate.deck`).
+  J12  `@service` provider runtime —
+       `deck_runtime_app_invoke_service(app, method, payload)`
+       resolves method on provider's @service block, runs body
+       in provider's env, returns value.
+
+Final hardware run: 5/5 reference apps load + run; 9/9 tap canaries
+green (lock_now, check_update, about, open_compose, go_up, refresh,
+set_theme(:amber), set_rotation(90), set_brightness(42)).
+
+| Commit | Stages |
+|---|---|
+| `976a977` | I1, I2, J3, J4, J5, J6, J7, J8 |
+| `58781ef` | J1, J2, J9, J10, J11, J12 |
+
+**Genuinely outstanding** (small, scoped tickets if needed):
+- DL3 tick scheduler proper — replaces the cold-stream collapse with
+  real timer-driven emissions. Apps that need real throttle
+  semantics need this.
+- True PWM dimming requires a board revision routing BL through a
+  GPIO with `ledc` rather than the CH422G expander.
+- Cross-app `@service` dispatch through the SDI registry — today
+  invocation is in-process via `deck_runtime_app_invoke_service`.
+
 ### Session checkpoint — stages A–G closed
 
 | Commit | Stage | Scope |
