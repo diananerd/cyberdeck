@@ -793,3 +793,357 @@ void deck_bridge_ui_overlay_keyboard_hide(void)
 {
     if (deck_bridge_ui_lock(200)) { keyboard_hide_impl(); deck_bridge_ui_unlock(); }
 }
+
+/* ---------- DATE PICKER (J5) ---------- */
+
+#include <time.h>
+#include <stdio.h>
+
+typedef struct {
+    lv_obj_t                  *backdrop;
+    lv_obj_t                  *roller_y;
+    lv_obj_t                  *roller_m;
+    lv_obj_t                  *roller_d;
+    deck_bridge_ui_overlay_cb_t on_pick;
+    deck_bridge_ui_overlay_cb_t on_cancel;
+    void                      *user_data;
+    bool                       fired;
+    /* Output the bridge writes back into for the runtime to read. The
+     * cb passes through the already-bound user_data; the calling
+     * adapter (in deck_bridge_ui.c) can stash a pointer here. */
+} date_state_t;
+
+static int date_state_year(date_state_t *s)
+{
+    return (int)lv_roller_get_selected(s->roller_y) + 2020;
+}
+static int date_state_month(date_state_t *s)
+{
+    return (int)lv_roller_get_selected(s->roller_m) + 1;
+}
+static int date_state_day(date_state_t *s)
+{
+    return (int)lv_roller_get_selected(s->roller_d) + 1;
+}
+/* Last picked values — exposed via getters; date overlay is single-instance. */
+static int s_last_year = 2026, s_last_month = 1, s_last_day = 1;
+int  deck_bridge_ui_overlay_date_picked_year (void) { return s_last_year;  }
+int  deck_bridge_ui_overlay_date_picked_month(void) { return s_last_month; }
+int  deck_bridge_ui_overlay_date_picked_day  (void) { return s_last_day;   }
+
+static void date_dismiss(date_state_t *s, bool ok)
+{
+    if (!s || s->fired) return;
+    s->fired = true;
+    if (ok) {
+        s_last_year  = date_state_year(s);
+        s_last_month = date_state_month(s);
+        s_last_day   = date_state_day(s);
+    }
+    deck_bridge_ui_overlay_cb_t cb = ok ? s->on_pick : s->on_cancel;
+    void *ud = s->user_data;
+    lv_obj_t *bd = s->backdrop;
+    s->backdrop = NULL;
+    lv_mem_free(s);
+    if (bd) lv_obj_del(bd);
+    if (cb) cb(ud);
+}
+
+static void date_ok_cb(lv_event_t *e)
+{
+    date_dismiss((date_state_t *)lv_event_get_user_data(e), true);
+}
+static void date_cancel_cb(lv_event_t *e)
+{
+    date_dismiss((date_state_t *)lv_event_get_user_data(e), false);
+}
+
+void deck_bridge_ui_overlay_date_show(const char *title,
+                                       int initial_year,
+                                       int initial_month,
+                                       int initial_day,
+                                       deck_bridge_ui_overlay_cb_t on_pick,
+                                       deck_bridge_ui_overlay_cb_t on_cancel,
+                                       void *user_data)
+{
+    if (!deck_bridge_ui_lock(200)) return;
+    date_state_t *st = lv_mem_alloc(sizeof(*st));
+    if (!st) { deck_bridge_ui_unlock(); return; }
+    memset(st, 0, sizeof(*st));
+    st->on_pick   = on_pick;
+    st->on_cancel = on_cancel;
+    st->user_data = user_data;
+
+    st->backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(st->backdrop, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(st->backdrop, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(st->backdrop, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_width(st->backdrop, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(st->backdrop, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dlg = lv_obj_create(st->backdrop);
+    lv_obj_set_size(dlg, 420, LV_SIZE_CONTENT);
+    lv_obj_align(dlg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dlg, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(dlg, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(dlg, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(dlg, 12, LV_PART_MAIN);
+    lv_obj_set_flex_flow(dlg, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(dlg, LV_FLEX_ALIGN_START,
+                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    if (title && *title) {
+        lv_obj_t *t = lv_label_create(dlg);
+        lv_label_set_text(t, title);
+        lv_obj_set_style_text_color(t, CD_PRIMARY_DIM, LV_PART_MAIN);
+    }
+
+    lv_obj_t *row = lv_obj_create(dlg);
+    lv_obj_set_size(row, lv_pct(100), 160);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(row, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER,
+                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    /* Build year/month/day option strings. */
+    char year_opts[256] = {0};
+    for (int y = 2020; y <= 2035; y++) {
+        char tmp[8];
+        snprintf(tmp, sizeof(tmp), "%d%s", y, y == 2035 ? "" : "\n");
+        strncat(year_opts, tmp, sizeof(year_opts) - strlen(year_opts) - 1);
+    }
+    static const char month_opts[] = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12";
+    char day_opts[128] = {0};
+    for (int d = 1; d <= 31; d++) {
+        char tmp[8];
+        snprintf(tmp, sizeof(tmp), "%02d%s", d, d == 31 ? "" : "\n");
+        strncat(day_opts, tmp, sizeof(day_opts) - strlen(day_opts) - 1);
+    }
+
+    st->roller_y = lv_roller_create(row);
+    lv_roller_set_options(st->roller_y, year_opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(st->roller_y, 3);
+    lv_obj_set_style_bg_color(st->roller_y, CD_BG_CARD, LV_PART_MAIN);
+    lv_obj_set_style_text_color(st->roller_y, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(st->roller_y, CD_PRIMARY_DIM, LV_PART_SELECTED);
+    if (initial_year >= 2020 && initial_year <= 2035)
+        lv_roller_set_selected(st->roller_y, initial_year - 2020, LV_ANIM_OFF);
+
+    st->roller_m = lv_roller_create(row);
+    lv_roller_set_options(st->roller_m, month_opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(st->roller_m, 3);
+    lv_obj_set_style_bg_color(st->roller_m, CD_BG_CARD, LV_PART_MAIN);
+    lv_obj_set_style_text_color(st->roller_m, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(st->roller_m, CD_PRIMARY_DIM, LV_PART_SELECTED);
+    if (initial_month >= 1 && initial_month <= 12)
+        lv_roller_set_selected(st->roller_m, initial_month - 1, LV_ANIM_OFF);
+
+    st->roller_d = lv_roller_create(row);
+    lv_roller_set_options(st->roller_d, day_opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(st->roller_d, 3);
+    lv_obj_set_style_bg_color(st->roller_d, CD_BG_CARD, LV_PART_MAIN);
+    lv_obj_set_style_text_color(st->roller_d, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(st->roller_d, CD_PRIMARY_DIM, LV_PART_SELECTED);
+    if (initial_day >= 1 && initial_day <= 31)
+        lv_roller_set_selected(st->roller_d, initial_day - 1, LV_ANIM_OFF);
+
+    /* Button row */
+    lv_obj_t *btnrow = lv_obj_create(dlg);
+    lv_obj_set_size(btnrow, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btnrow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btnrow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(btnrow, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(btnrow, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_END,
+                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *cancel = lv_btn_create(btnrow);
+    lv_obj_set_style_bg_opa(cancel, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(cancel, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(cancel, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(cancel, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(cancel, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(cancel, 12, LV_PART_MAIN);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "CANCEL");
+    lv_obj_set_style_text_color(cl, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(cancel, date_cancel_cb, LV_EVENT_CLICKED, st);
+    lv_obj_clear_flag(cancel, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_t *ok = lv_btn_create(btnrow);
+    lv_obj_set_style_bg_color(ok, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ok, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ok, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ok, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(ok, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(ok, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(ok, 12, LV_PART_MAIN);
+    lv_obj_t *okl = lv_label_create(ok);
+    lv_label_set_text(okl, "OK");
+    lv_obj_set_style_text_color(okl, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_center(okl);
+    lv_obj_add_event_cb(ok, date_ok_cb, LV_EVENT_CLICKED, st);
+    lv_obj_clear_flag(ok, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+    deck_bridge_ui_unlock();
+}
+
+/* ---------- SHARE SHEET (J6) ---------- */
+
+typedef struct {
+    lv_obj_t *backdrop;
+    deck_bridge_ui_overlay_cb_t on_copy;
+    deck_bridge_ui_overlay_cb_t on_dismiss;
+    void     *user_data;
+    bool      fired;
+} share_state_t;
+
+static void share_dismiss(share_state_t *s, bool is_copy)
+{
+    if (!s || s->fired) return;
+    s->fired = true;
+    deck_bridge_ui_overlay_cb_t cb = is_copy ? s->on_copy : s->on_dismiss;
+    void *ud = s->user_data;
+    lv_obj_t *bd = s->backdrop;
+    s->backdrop = NULL;
+    lv_mem_free(s);
+    if (bd) lv_obj_del(bd);
+    if (cb) cb(ud);
+}
+
+static void share_copy_cb(lv_event_t *e)
+{
+    share_dismiss((share_state_t *)lv_event_get_user_data(e), true);
+}
+static void share_dismiss_cb(lv_event_t *e)
+{
+    share_dismiss((share_state_t *)lv_event_get_user_data(e), false);
+}
+
+void deck_bridge_ui_overlay_share_show(const char *text,
+                                        const char *url,
+                                        deck_bridge_ui_overlay_cb_t on_copy,
+                                        deck_bridge_ui_overlay_cb_t on_dismiss,
+                                        void *user_data)
+{
+    if (!deck_bridge_ui_lock(200)) return;
+    share_state_t *s = lv_mem_alloc(sizeof(*s));
+    if (!s) { deck_bridge_ui_unlock(); return; }
+    memset(s, 0, sizeof(*s));
+    s->on_copy    = on_copy;
+    s->on_dismiss = on_dismiss;
+    s->user_data  = user_data;
+
+    s->backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s->backdrop, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s->backdrop, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s->backdrop, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s->backdrop, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(s->backdrop, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dlg = lv_obj_create(s->backdrop);
+    lv_obj_set_size(dlg, 420, LV_SIZE_CONTENT);
+    lv_obj_align(dlg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dlg, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(dlg, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(dlg, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(dlg, 12, LV_PART_MAIN);
+    lv_obj_set_flex_flow(dlg, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(dlg, LV_FLEX_ALIGN_START,
+                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    lv_obj_t *title = lv_label_create(dlg);
+    lv_label_set_text(title, "SHARE");
+    lv_obj_set_style_text_color(title, CD_PRIMARY_DIM, LV_PART_MAIN);
+
+    if (text && *text) {
+        lv_obj_t *t = lv_label_create(dlg);
+        lv_label_set_text(t, text);
+        lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(t, lv_pct(100));
+        lv_obj_set_style_text_color(t, CD_PRIMARY, LV_PART_MAIN);
+    }
+    if (url && *url) {
+        lv_obj_t *u = lv_label_create(dlg);
+        lv_label_set_text(u, url);
+        lv_label_set_long_mode(u, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(u, lv_pct(100));
+        lv_obj_set_style_text_color(u, CD_PRIMARY_DIM, LV_PART_MAIN);
+    }
+
+    lv_obj_t *row = lv_obj_create(dlg);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(row, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(row, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END,
+                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *dismiss = lv_btn_create(row);
+    lv_obj_set_style_bg_opa(dismiss, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(dismiss, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dismiss, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(dismiss, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(dismiss, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(dismiss, 12, LV_PART_MAIN);
+    lv_obj_t *dl = lv_label_create(dismiss);
+    lv_label_set_text(dl, "DISMISS");
+    lv_obj_set_style_text_color(dl, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_center(dl);
+    lv_obj_add_event_cb(dismiss, share_dismiss_cb, LV_EVENT_CLICKED, s);
+    lv_obj_clear_flag(dismiss, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+    lv_obj_t *copy = lv_btn_create(row);
+    lv_obj_set_style_bg_color(copy, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(copy, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_color(copy, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_border_width(copy, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(copy, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(copy, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(copy, 12, LV_PART_MAIN);
+    lv_obj_t *cl = lv_label_create(copy);
+    lv_label_set_text(cl, "COPY");
+    lv_obj_set_style_text_color(cl, CD_BG_DARK, LV_PART_MAIN);
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(copy, share_copy_cb, LV_EVENT_CLICKED, s);
+    lv_obj_clear_flag(copy, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+    deck_bridge_ui_unlock();
+}
+
+/* ---------- PERMISSION SHEET (J6) ---------- */
+
+void deck_bridge_ui_overlay_permission_show(const char *permission,
+                                             const char *rationale,
+                                             deck_bridge_ui_overlay_cb_t on_grant,
+                                             deck_bridge_ui_overlay_cb_t on_deny,
+                                             void *user_data)
+{
+    /* Permission sheet shares confirm_show's structure but uses
+     * permission name as title and ALLOW/DENY labels. We piggyback on
+     * the existing confirm overlay to avoid duplicating dialog
+     * boilerplate; the dedicated styling separation keeps the spec
+     * surface explicit and lets us evolve the look in one place
+     * later. */
+    char title[64];
+    snprintf(title, sizeof(title), "PERMISSION: %s",
+             permission ? permission : "?");
+    if (!deck_bridge_ui_lock(200)) return;
+    confirm_show(title, rationale ? rationale : "",
+                 "ALLOW", "DENY",
+                 0, 0, on_grant, on_deny, user_data);
+    deck_bridge_ui_unlock();
+}

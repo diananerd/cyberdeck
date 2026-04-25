@@ -439,23 +439,26 @@ static deck_sdi_err_t bui_date_show_impl(void *ctx, const char *title,
     (void)ctx;
     if (!deck_bridge_ui_lvgl_is_ready()) return DECK_SDI_ERR_FAIL;
 
-    char msg[48] = "--";
+    /* J5 — native roller picker. Decompose epoch_ms into Y/M/D for the
+     * roller initial values; OK fires the SDI cb (the picked date is
+     * readable through deck_bridge_ui_overlay_date_picked_*()). */
     time_t t = (time_t)(initial_epoch_ms / 1000);
     struct tm tm;
+    int yy = 2026, mm = 1, dd = 1;
     if (gmtime_r(&t, &tm)) {
-        snprintf(msg, sizeof(msg), "%04d-%02d-%02d %02d:%02d",
-                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                 tm.tm_hour, tm.tm_min);
+        yy = tm.tm_year + 1900;
+        mm = tm.tm_mon + 1;
+        dd = tm.tm_mday;
     }
 
     date_adapter_t *a = malloc(sizeof(*a));
     if (!a) return DECK_SDI_ERR_NO_MEMORY;
     a->sdi_cb    = on_pick;
     a->user_data = user_data;
-    deck_bridge_ui_overlay_confirm_cb(title ? title : "PICK DATE", msg,
-                                       "OK", "CANCEL",
-                                       bui_date_ok_adapter,
-                                       bui_date_cancel_adapter, a);
+    deck_bridge_ui_overlay_date_show(title ? title : "PICK DATE",
+                                      yy, mm, dd,
+                                      bui_date_ok_adapter,
+                                      bui_date_cancel_adapter, a);
     return DECK_SDI_OK;
 }
 
@@ -463,17 +466,8 @@ static deck_sdi_err_t bui_share_show_impl(void *ctx, const char *text, const cha
 {
     (void)ctx;
     if (!deck_bridge_ui_lvgl_is_ready()) return DECK_SDI_ERR_FAIL;
-    /* Reference bridge has no system share sheet — surface a toast with
-     * the payload so developers can verify the request went through. */
-    char buf[96];
-    if (url && *url) {
-        snprintf(buf, sizeof(buf), "SHARE: %s", url);
-    } else if (text && *text) {
-        snprintf(buf, sizeof(buf), "SHARE: %s", text);
-    } else {
-        snprintf(buf, sizeof(buf), "SHARE");
-    }
-    deck_bridge_ui_overlay_toast(buf, 2000);
+    /* J6 — native share sheet with COPY + DISMISS buttons. */
+    deck_bridge_ui_overlay_share_show(text, url, NULL, NULL, NULL);
     return DECK_SDI_OK;
 }
 
@@ -506,16 +500,13 @@ static deck_sdi_err_t bui_permission_show_impl(void *ctx,
 {
     (void)ctx;
     if (!deck_bridge_ui_lvgl_is_ready()) return DECK_SDI_ERR_FAIL;
-    char title[48];
-    snprintf(title, sizeof(title), "PERMISSION: %s",
-             permission_name ? permission_name : "?");
     perm_adapter_t *a = malloc(sizeof(*a));
     if (!a) return DECK_SDI_ERR_NO_MEMORY;
     a->on_grant = on_grant; a->on_deny = on_deny; a->user_data = user_data;
-    deck_bridge_ui_overlay_confirm_cb(title, rationale ? rationale : "",
-                                       "ALLOW", "DENY",
-                                       bui_perm_grant_adapter,
-                                       bui_perm_deny_adapter, a);
+    /* J6 — dedicated permission sheet (not a generic confirm). */
+    deck_bridge_ui_overlay_permission_show(permission_name, rationale,
+                                            bui_perm_grant_adapter,
+                                            bui_perm_deny_adapter, a);
     return DECK_SDI_OK;
 }
 
@@ -553,6 +544,12 @@ static deck_sdi_err_t bui_set_theme_impl(void *ctx, const char *theme_atom)
     } else {
         s_theme_atom[0] = '\0';
     }
+    /* J7 — repaint the docks immediately. The activity content
+     * underneath only refreshes when the runtime pushes its next
+     * snapshot (decoded with the new palette baked in by the runtime
+     * convention). */
+    deck_bridge_ui_statusbar_apply_theme(theme_atom);
+    deck_bridge_ui_navbar_apply_theme(theme_atom);
     if (s_theme_handler) s_theme_handler(theme_atom);
     return DECK_SDI_OK;
 }
@@ -588,9 +585,9 @@ static deck_sdi_err_t bui_set_navbar_impl(void *ctx, bool visible)
 static deck_sdi_err_t bui_set_badge_impl(void *ctx, const char *app_id, int count)
 {
     (void)ctx;
-    /* Reference bridge has no per-app badge surface yet. Log so callers
-     * can verify the request routed. Future: statusbar pill indicator. */
-    ESP_LOGI(TAG, "set_badge: app=%s count=%d", app_id ? app_id : "?", count);
+    /* J4 — statusbar pill. count <= 0 hides; otherwise a small numeric
+     * pill appears beside the time/wifi/batt cluster. */
+    deck_bridge_ui_statusbar_set_badge(app_id, count);
     return DECK_SDI_OK;
 }
 
@@ -611,10 +608,11 @@ static deck_sdi_err_t bui_set_rotation_impl(void *ctx, int rot)
 static deck_sdi_err_t bui_set_brightness_impl(void *ctx, float level)
 {
     (void)ctx;
-    /* Board HAL exposes on/off only. Threshold at 1% — anything above
-     * that turns the backlight on; below that (including 0) turns it off.
-     * True PWM dimming is future work in hal_backlight. */
-    esp_err_t rc = hal_backlight_set(level > 0.01f);
+    /* J3 — route through hal_backlight_set_level. The reference board's
+     * BL line goes through CH422G EXIO2 (no hardware PWM), so the call
+     * still quantises to on/off, but a future PWM-capable board picks
+     * up smooth dimming without touching the bridge. */
+    esp_err_t rc = hal_backlight_set_level(level);
     return (rc == ESP_OK) ? DECK_SDI_OK : DECK_SDI_ERR_FAIL;
 }
 

@@ -109,3 +109,30 @@ void deck_bridge_ui_navbar_set_visible(bool visible)
     else         lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     deck_bridge_ui_unlock();
 }
+
+#include <string.h>
+
+void deck_bridge_ui_navbar_apply_theme(const char *atom)
+{
+    if (!s_bar) return;
+    lv_color_t prim, dim;
+    if      (atom && !strcmp(atom, "amber")) { prim = lv_color_hex(0xFFB000); dim = lv_color_hex(0x4D3500); }
+    else if (atom && !strcmp(atom, "neon"))  { prim = lv_color_hex(0xFF00FF); dim = lv_color_hex(0x500050); }
+    else                                      { prim = lv_color_hex(0x00FF41); dim = lv_color_hex(0x004D13); }
+    if (!deck_bridge_ui_lock(200)) return;
+    lv_obj_set_style_border_color(s_bar, dim, LV_PART_MAIN);
+    /* Recolor each child button (border + label). */
+    uint32_t cnt = lv_obj_get_child_cnt(s_bar);
+    for (uint32_t i = 0; i < cnt; i++) {
+        lv_obj_t *btn = lv_obj_get_child(s_bar, i);
+        if (!btn) continue;
+        lv_obj_set_style_border_color(btn, prim, LV_PART_MAIN);
+        if (lv_obj_get_child_cnt(btn) > 0) {
+            lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+            if (lbl) lv_obj_set_style_text_color(lbl, prim, LV_PART_MAIN);
+        }
+    }
+    lv_obj_invalidate(s_bar);
+    deck_bridge_ui_unlock();
+    ESP_LOGI(TAG, "navbar: theme → %s", atom ? atom : "?");
+}

@@ -27,3 +27,20 @@ esp_err_t hal_backlight_set(bool on)
 {
     return on ? hal_backlight_on() : hal_backlight_off();
 }
+
+static float s_level = 1.0f;
+
+esp_err_t hal_backlight_set_level(float level)
+{
+    if (level < 0.0f) level = 0.0f;
+    if (level > 1.0f) level = 1.0f;
+    s_level = level;
+    /* CH422G EXIO2 is binary; quantise. Future board with a
+     * PWM-capable BL line can use s_level for ledc duty. */
+    return (level > 0.01f) ? hal_backlight_on() : hal_backlight_off();
+}
+
+float hal_backlight_get_level(void)
+{
+    return s_level;
+}

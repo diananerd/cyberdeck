@@ -103,6 +103,38 @@ void deck_bridge_ui_overlay_multiselect_show(const char *title,
 void deck_bridge_ui_overlay_keyboard_show(const char *kind_atom);
 void deck_bridge_ui_overlay_keyboard_hide(void);
 
+/* J5 — native date picker via three lv_roller wheels (year/month/day).
+ * `on_pick` fires when the user taps OK; `on_cancel` (may be NULL)
+ * fires on dismiss. After OK the latest values are readable via
+ * `_picked_year/_month/_day`. */
+void deck_bridge_ui_overlay_date_show(const char *title,
+                                       int initial_year,
+                                       int initial_month,
+                                       int initial_day,
+                                       deck_bridge_ui_overlay_cb_t on_pick,
+                                       deck_bridge_ui_overlay_cb_t on_cancel,
+                                       void *user_data);
+int  deck_bridge_ui_overlay_date_picked_year (void);
+int  deck_bridge_ui_overlay_date_picked_month(void);
+int  deck_bridge_ui_overlay_date_picked_day  (void);
+
+/* J6 — native share sheet: shows text + URL on a card with COPY +
+ * DISMISS buttons. COPY fires on_copy (caller can stash the payload),
+ * DISMISS fires on_dismiss. Either may be NULL. */
+void deck_bridge_ui_overlay_share_show(const char *text,
+                                        const char *url,
+                                        deck_bridge_ui_overlay_cb_t on_copy,
+                                        deck_bridge_ui_overlay_cb_t on_dismiss,
+                                        void *user_data);
+
+/* J6 — native permission sheet: dedicated card with bold permission
+ * name, rationale paragraph, ALLOW + DENY buttons. */
+void deck_bridge_ui_overlay_permission_show(const char *permission,
+                                             const char *rationale,
+                                             deck_bridge_ui_overlay_cb_t on_grant,
+                                             deck_bridge_ui_overlay_cb_t on_deny,
+                                             void *user_data);
+
 /* ---------- Statusbar (top dock — time + WiFi + battery) ---------- */
 
 deck_sdi_err_t deck_bridge_ui_statusbar_init(void);
@@ -119,6 +151,18 @@ void           deck_bridge_ui_navbar_relayout(void);
  * no-ops in that case. */
 void           deck_bridge_ui_statusbar_set_visible(bool visible);
 void           deck_bridge_ui_navbar_set_visible(bool visible);
+
+/* J7 — apply a theme atom (`"green"` / `"amber"` / `"neon"`) by
+ * re-coloring the statusbar + navbar widgets. The activity content
+ * underneath only repaints when the runtime pushes its next snapshot;
+ * the docks update immediately. Unknown atoms fall back to green. */
+void           deck_bridge_ui_statusbar_apply_theme(const char *atom);
+void           deck_bridge_ui_navbar_apply_theme(const char *atom);
+
+/* J4 — set / clear a numeric badge pill for an app in the statusbar.
+ * count == 0 hides the pill. Multiple apps may have badges; pills
+ * stack right-to-left after the time. */
+void           deck_bridge_ui_statusbar_set_badge(const char *app_id, int count);
 
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 

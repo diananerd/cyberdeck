@@ -2961,6 +2961,42 @@ static ast_node_t *parse_grants_decl(deck_parser_t *p)
         if (!expect(p, TOK_COLON, "expected ':' after grant entry name")) return NULL;
         if (!expect(p, TOK_NEWLINE, "expected newline after grant entry ':'")) return NULL;
         while (at(p, TOK_NEWLINE)) advance(p);
+
+        /* J8 — `services:` followed by a quoted-string-keyed sub-block
+         * is the spec-first form: each `"<id>": <alias>` line becomes
+         * a separate `services.<id>` grant entry with an `alias` option
+         * carrying the alias ident. Symmetric to @needs.services. */
+        if (strcmp(name, "services") == 0 && at(p, TOK_INDENT)) {
+            advance(p); /* INDENT */
+            while (!at(p, TOK_DEDENT) && !at(p, TOK_EOF)) {
+                if (at(p, TOK_NEWLINE)) { advance(p); continue; }
+                if (!at(p, TOK_STRING)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected quoted service id in @grants services block");
+                    return NULL;
+                }
+                if (ne >= 32) { set_err(p, DECK_LOAD_PARSE, "too many @grants entries (max 32)"); return NULL; }
+                const char *svc_id = p->cur.text;
+                advance(p);
+                if (!expect(p, TOK_COLON, "expected ':' after service id")) return NULL;
+                /* RHS may be an ident (alias) or a full expression. */
+                ast_node_t *rhs = parse_expr_prec(p, 0);
+                if (!rhs) return NULL;
+                /* Build a fully-qualified entry name. */
+                char qbuf[160];
+                snprintf(qbuf, sizeof(qbuf), "services.%s", svc_id);
+                names[ne] = deck_intern(qbuf, (uint32_t)strlen(qbuf));
+                offs[ne]  = opts.len;
+                if (!opt_buf_push(p, &opts, deck_intern_cstr("alias"), rhs)) return NULL;
+                lens[ne] = opts.len - offs[ne];
+                ne++;
+                while (at(p, TOK_NEWLINE)) advance(p);
+            }
+            if (!expect(p, TOK_DEDENT, "expected dedent closing services block")) return NULL;
+            while (at(p, TOK_NEWLINE)) advance(p);
+            continue;
+        }
+
         names[ne] = name;
         offs[ne]  = opts.len;
 

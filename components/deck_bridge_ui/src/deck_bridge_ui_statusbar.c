@@ -20,6 +20,7 @@
 
 #include <time.h>
 #include <stdio.h>
+#include <string.h>
 
 static const char *TAG = "bridge_ui.sb";
 
@@ -164,4 +165,102 @@ void deck_bridge_ui_statusbar_set_visible(bool visible)
     if (visible) lv_obj_clear_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     deck_bridge_ui_unlock();
+}
+
+/* J7 — recolor docks on theme atom change. Unknown atoms fall back
+ * to green. Triggers no re-layout, just hue swap. */
+static lv_color_t theme_primary(const char *atom)
+{
+    if (atom && !strcmp(atom, "amber")) return lv_color_hex(0xFFB000);
+    if (atom && !strcmp(atom, "neon"))  return lv_color_hex(0xFF00FF);
+    return lv_color_hex(0x00FF41);
+}
+static lv_color_t theme_dim(const char *atom)
+{
+    if (atom && !strcmp(atom, "amber")) return lv_color_hex(0x4D3500);
+    if (atom && !strcmp(atom, "neon"))  return lv_color_hex(0x500050);
+    return lv_color_hex(0x004D13);
+}
+
+void deck_bridge_ui_statusbar_apply_theme(const char *atom)
+{
+    if (!s_bar) return;
+    if (!deck_bridge_ui_lock(200)) return;
+    lv_color_t prim = theme_primary(atom);
+    lv_color_t dim  = theme_dim(atom);
+    lv_obj_set_style_border_color(s_bar, dim, LV_PART_MAIN);
+    if (s_lbl_title) lv_obj_set_style_text_color(s_lbl_title, prim, LV_PART_MAIN);
+    if (s_lbl_time)  lv_obj_set_style_text_color(s_lbl_time,  prim, LV_PART_MAIN);
+    if (s_lbl_wifi)  lv_obj_set_style_text_color(s_lbl_wifi,  prim, LV_PART_MAIN);
+    if (s_lbl_batt)  lv_obj_set_style_text_color(s_lbl_batt,  prim, LV_PART_MAIN);
+    lv_obj_invalidate(s_bar);
+    deck_bridge_ui_unlock();
+    ESP_LOGI(TAG, "statusbar: theme → %s", atom ? atom : "?");
+}
+
+/* J4 — per-app badge pills. Up to 4 concurrent. */
+#define BADGE_MAX 4
+typedef struct {
+    char        app_id[32];
+    int         count;
+    lv_obj_t   *pill;
+} badge_slot_t;
+static badge_slot_t s_badges[BADGE_MAX];
+
+static badge_slot_t *find_badge(const char *app_id, bool make)
+{
+    if (!app_id) return NULL;
+    badge_slot_t *empty = NULL;
+    for (int i = 0; i < BADGE_MAX; i++) {
+        if (s_badges[i].app_id[0] == '\0') {
+            if (!empty) empty = &s_badges[i];
+            continue;
+        }
+        if (strcmp(s_badges[i].app_id, app_id) == 0) return &s_badges[i];
+    }
+    if (!make || !empty) return NULL;
+    strncpy(empty->app_id, app_id, sizeof(empty->app_id) - 1);
+    empty->app_id[sizeof(empty->app_id) - 1] = '\0';
+    return empty;
+}
+
+void deck_bridge_ui_statusbar_set_badge(const char *app_id, int count)
+{
+    if (!s_bar || !app_id) return;
+    if (!deck_bridge_ui_lock(200)) return;
+    badge_slot_t *b = find_badge(app_id, count > 0);
+    if (!b) { deck_bridge_ui_unlock(); return; }
+    if (count <= 0) {
+        if (b->pill) { lv_obj_del(b->pill); b->pill = NULL; }
+        b->app_id[0] = '\0';
+        b->count = 0;
+        deck_bridge_ui_unlock();
+        return;
+    }
+    b->count = count;
+    if (!b->pill) {
+        /* Create a small bg-tinted pill with a numeric label. Lives in
+         * the statusbar's right-side row container (last child). */
+        uint32_t cnt = lv_obj_get_child_cnt(s_bar);
+        lv_obj_t *right = cnt >= 2 ? lv_obj_get_child(s_bar, cnt - 1) : s_bar;
+        b->pill = lv_obj_create(right);
+        lv_obj_set_size(b->pill, LV_SIZE_CONTENT, 22);
+        lv_obj_set_style_bg_color(b->pill, lv_color_hex(0x004D13), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(b->pill, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_color(b->pill, lv_color_hex(0x00FF41), LV_PART_MAIN);
+        lv_obj_set_style_border_width(b->pill, 1, LV_PART_MAIN);
+        lv_obj_set_style_radius(b->pill, 11, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(b->pill, 6, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(b->pill, 0, LV_PART_MAIN);
+        lv_obj_t *l = lv_label_create(b->pill);
+        lv_obj_set_style_text_color(l, lv_color_hex(0x00FF41), LV_PART_MAIN);
+        lv_obj_center(l);
+    }
+    if (b->pill && lv_obj_get_child_cnt(b->pill) > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", count);
+        lv_label_set_text(lv_obj_get_child(b->pill, 0), buf);
+    }
+    deck_bridge_ui_unlock();
+    ESP_LOGI(TAG, "badge: %s = %d", app_id, count);
 }
