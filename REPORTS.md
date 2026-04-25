@@ -2980,20 +2980,107 @@ every state machine terminates cleanly.
 | `5e93ec3` | REPORTS | post-alignment checkpoint |
 | `482a2b3` | F | hardware verification: TOK_ASSIGN fix + app rewrite |
 
-**Gaps surfaced but NOT fixed this session** (become future tickets):
+### Concept #80.stages-G1–G6 — close every spec-form gap (commit `554d43c`)
 
-- `list <expr>` + `item x ->` per-item template + `for in do` inside
-  content. demo.deck fails at line 67:10 with the same error as the
-  first-draft apps. The parser consumes the `list` primitive but the
-  nested template body trips on a context check.
-- `{t with field: value}` record-update syntax.
-- `Machine.replace(record)` / `Machine.send(:atom(payload))` with
-  payload. The spec-first taskman.deck relied on both; the current
-  version has no state mutation.
-- `type T = { … }` top-level declarations (spec form) vs the
-  `@type T` decorator form the parser accepts.
-- Parameterised `@on trigger_<atom>(v: T)` handlers.
+Stage F's hardware run surfaced five spec-form gaps; this batch closes
+all of them, restores the apps to their spec-first surface, and
+re-verifies on hardware.
 
-Each gap is a small, well-scoped spec-conformance ticket. The 5 apps
-shipped use the subset of LANG §15 that is live today; the REPORTS
-trail documents the delta.
+  G1  parser: indented YAML-list values in @app fields
+      `serves: NEWLINE INDENT - "x" NEWLINE - "y" DEDENT` synthesises
+      AST_LIT_LIST so demo.deck's `serves:` clause + spec-style app
+      manifests parse cleanly. Implemented in `parse_scalar_fields` —
+      detects NEWLINE-after-colon, requires INDENT, walks `- expr`
+      lines until DEDENT.
+
+  G2  parser: `{ <base> with f: v, … }` record-update form
+      The brace-literal parser parses the first sub-expression and
+      then peeks for `with`. If present, it emits AST_WITH (reusing
+      the same runtime as the postfix `expr with { … }` form, which
+      already shipped). Same edit also added bare-name → string keys:
+      `{ tasks: […] }` no longer tries to look up `tasks` as an
+      identifier — IDENT immediately followed by `:` is treated as
+      a string literal key.
+
+  G3  runtime: Machine.replace + Machine.data
+      Per-app `machine_data` value added to `struct deck_runtime_app`.
+      `Machine.replace(record)` retains the value into that slot;
+      `Machine.data` returns a retained ref (or `:none`). Both casings
+      (`Machine.*` and `machine.*`) registered. New `DL1_CAP_MACHINE`
+      bit added to the loader's capability allowlist so Machine.*
+      dotted chains pass the cap check.
+
+  G4  runtime: parameterised `@on trigger_<atom>` handlers
+      `content_bind_intent` now inspects the action AST shape: bare
+      atom (`:foo`) or atom-call (`:foo(payload_expr)`) capture the
+      atom name + payload expression on the binding. The dispatcher
+      runs the existing action_ast first (preserves backwards
+      compatibility), then looks up `@on trigger_<atom>` and invokes
+      it with the evaluated payload bound to the handler's first
+      declared parameter (and to `event` for legacy access).
+
+  G5  parser: bare-keyword `type T = <type-expr>` top-level
+      Detected as IDENT "type" + IDENT + `=` in `parse_top_item`.
+      Parse-and-discard via `skip_type_annotation` — DL2 doesn't
+      enforce types so the body's shape is irrelevant; only its name
+      goes into the AST_TYPE_DEF placeholder.
+
+  Bonus parser bug: `parse_config_decl` checked `TOK_EQ` (`==`) where
+  `TOK_ASSIGN` (`=`) was the right token. Fixed at the top of stage F.
+
+**Hardware verification (G6):** re-flashed and watched UART. All five
+apps now load + run on reference hardware:
+
+```
+shell.deck_apps: loaded app_id=100 cyberdeck.launcher  Launcher
+shell.deck_apps: loaded app_id=101 cyberdeck.settings  Settings
+shell.deck_apps: loaded app_id=102 cyberdeck.bluesky   Bluesky
+shell.deck_apps: loaded app_id=103 cyberdeck.taskman   Tasks
+shell.deck_apps: loaded app_id=104 cyberdeck.files     Files
+shell.deck_apps: registered 5 .deck apps
+```
+
+Each `@on launch` fires; each machine enters its initial state; each
+machine emits its expected `on enter` log. The launcher then runs as
+the foreground app. The apps now exercise:
+
+- `type Entry = { … }` top-level declarations.
+- List literals of records (`[{ id: "x", name: "Y" }, …]`).
+- Bare-name record-literal keys (`{ tasks: […], draft: "" }`).
+- `Machine.replace(…)` seeding user state on launch.
+- `Machine.data.<field>` reading state inside content.
+- `list <expr>` + `item x -> body` template inside content.
+- `@on trigger_<atom>(v: T)` parameterised handlers (settings'
+  `set_theme/set_rotation/set_brightness/toggle_idle_lock`).
+- Content vocabulary: `group / list / toggle / range / choice /
+  navigate / trigger / rich_text`.
+
+**Remaining known gaps** (orthogonal to this batch, not blocking):
+
+- `demo.deck` still fails at line 74:20 in `@needs` parser — a
+  different field-name parsing rule, separate ticket.
+- Multi-line list/record literals (`[\n  { … },\n  { … }\n]`) require
+  inline form today. Adding newline tolerance inside `[…]` and `{…}`
+  is a small parser tweak left for later.
+- True bridge rendering of the spec-first content trees on the LCD —
+  the bridge accepts the snapshots and renders the basic shape, but
+  finer presentation (dynamic list with item template populating
+  N rows, group framing, intent firing wiring through to `@on
+  trigger_*`) needs end-to-end tap testing on the touchscreen.
+
+### Session checkpoint — stages A–G closed
+
+| Commit | Stage | Scope |
+|---|---|---|
+| `3030b51` | A  | bridge.ui vtable wired (18 new slots) |
+| `154ae59` | B  | shell consults `deck_runtime_app_back` |
+| `66bce75` | C  | bridge PATCH path with same-shape diff |
+| `3eb42b1` | D  | cold-stream runtime (8/15 ops live) |
+| `09ddb75` | E  | five reference apps (spec-first drafts) |
+| `5e93ec3` | —  | REPORTS post-alignment checkpoint |
+| `482a2b3` | F  | hardware verify + TOK_ASSIGN fix + first rewrite |
+| `017a591` | —  | REPORTS stage F |
+| `554d43c` | G1–G6 | close all spec-form gaps; spec-first apps live on HW |
+
+Build green throughout. All five reference apps load + run on
+hardware via `idf.py -p /dev/cu.usbmodem1101 flash` + UART monitor.
