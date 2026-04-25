@@ -3068,6 +3068,84 @@ the foreground app. The apps now exercise:
   N rows, group framing, intent firing wiring through to `@on
   trigger_*`) needs end-to-end tap testing on the touchscreen.
 
+### Concept #80.stages-H1–H3 — close orthogonal gaps (commit `72eaf41`)
+
+H1, H2, H3 closed in a single follow-up batch and verified on hardware.
+
+  H1  lexer: size suffix `64KB / 192KB / 4MB / 1GB`
+      Mirrors the duration-suffix scanner (`1ms / 5m / 1h`). Two-letter
+      suffix recognised after a `KB`/`MB`/`GB`-typable integer iff the
+      char after the suffix is not another ident-char. Multiplies the
+      literal value by 1024 / 1024² / 1024³. demo.deck advanced past
+      @needs/74:20; new failure at 183:52 in @assets is the next gap.
+
+  H2  lexer + parser: multi-line list / record literals
+      `deck_lexer_t.bracket_depth` tracks nesting across `( [ {`. While
+      > 0, NEWLINE/INDENT/DEDENT are suppressed so:
+      ```
+      [
+        { id: "tasks", name: "TASKS" },
+        { id: "files", name: "FILES" },
+      ]
+      ```
+      lexes equivalent to the inline form. List literal parser also
+      learned to accept a trailing comma (map already did).
+
+      Reference apps restored to the spec-first multi-line form:
+      launcher.catalog(), files.root_entries(), bluesky.fixture(),
+      taskman's Machine.replace seed all use the indented record-of-
+      records shape and load cleanly.
+
+  H3  hardware tap-canary
+      `deck_shell_dl2_boot` now invokes `run_intent_canary()` after
+      registering the .deck apps. It dispatches every parameterless
+      `trigger_*` event against the loaded settings/taskman/files/
+      bluesky handles via `deck_runtime_app_dispatch`. Six green
+      canaries on hardware:
+
+      ```
+      deck.app: settings: lock now      ← trigger_lock_now
+      deck.app: settings: OTA check     ← trigger_check_update
+      deck.app: settings: about         ← trigger_about
+      deck.app: taskman: open compose   ← trigger_open_compose
+      deck.app: files: up               ← trigger_go_up
+      deck.app: bluesky: refresh        ← trigger_refresh
+      ```
+
+      The full touchscreen → bridge intent_hook → runtime path shares
+      the same `deck_runtime_app_intent_v` / `_app_dispatch` code from
+      that point on, so a green canary is a strong correctness signal
+      for the @on trigger_<atom> dispatch (G4). Visual tap probing on
+      the LCD remains a manual verification step (no UI test
+      harness yet).
+
+### Session checkpoint — stages A–H closed
+
+| Commit | Stage | Scope |
+|---|---|---|
+| `3030b51` | A   | bridge.ui vtable wired (18 new slots) |
+| `154ae59` | B   | shell consults `deck_runtime_app_back` |
+| `66bce75` | C   | bridge PATCH path with same-shape diff |
+| `3eb42b1` | D   | cold-stream runtime (8/15 ops live) |
+| `09ddb75` | E   | five reference apps (drafts) |
+| `5e93ec3` | —   | REPORTS post-alignment checkpoint |
+| `482a2b3` | F   | hardware verify + TOK_ASSIGN fix + first rewrite |
+| `017a591` | —   | REPORTS stage F |
+| `554d43c` | G1–G6 | spec-form gaps; spec-first apps live on HW |
+| `1fad5f9` | —   | REPORTS stage G |
+| `72eaf41` | H1–H3 | size suffix + multi-line literals + tap-canary |
+
+Build green throughout. All five reference apps load + run on
+hardware in their spec-first form (multi-line literals, type aliases,
+@on trigger_<atom> handlers, Machine.replace seeded state).
+
+**Outstanding items** (filed for next session):
+- `@assets` block: literal call expressions like `icon: ASSETS["x"]`
+  fail at parse (demo.deck:183:52). Asset values today must be plain
+  string literals.
+- Visual tap probing on the touchscreen — automated UI harness would
+  let us assert pixel state + tap simulation; manual today.
+
 ### Session checkpoint — stages A–G closed
 
 | Commit | Stage | Scope |
