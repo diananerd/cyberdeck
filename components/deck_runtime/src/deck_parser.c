@@ -385,6 +385,26 @@ static ast_node_t *parse_primary(deck_parser_t *p)
              * a paren/tuple shape into a lambda. */
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p);
+            /* Zero-arg lambda `() -> body` (BUILTINS §14 etc. uses
+             * `() -> T` thunks). Peek for the empty paren followed by
+             * `->`; if matched, build the lambda with zero params. */
+            if (at(p, TOK_RPAREN) && peek_next_tok(p) == TOK_ARROW &&
+                !p->no_lambda) {
+                advance(p); /* ) */
+                advance(p); /* -> */
+                ast_node_t *body = parse_expr_prec(p, 0);
+                if (!body) return NULL;
+                ast_node_t *fn = ast_new(p->arena, AST_FN_DEF, ln, co);
+                if (!fn) return NULL;
+                fn->as.fndef.name     = NULL;
+                fn->as.fndef.params   = NULL;
+                fn->as.fndef.n_params = 0;
+                fn->as.fndef.effects  = NULL;
+                fn->as.fndef.n_effects= 0;
+                fn->as.fndef.body     = body;
+                n = fn;
+                break;
+            }
             ast_node_t *first = parse_expr_prec(p, 0);
             if (!first) return NULL;
             /* Spec §3.7 named-field atom variant payload: `(name: value, …)`
@@ -709,23 +729,23 @@ static ast_node_t *parse_postfix(deck_parser_t *p, ast_node_t *head)
                 head = n;
                 continue;
             }
-            /* `send` is a reserved keyword for the statement form `send :evt`
-             * (spec 02-deck-app §8 legacy). When it appears as a field name
-             * after `.` it is unambiguously the map-member access that
-             * `Machine.send(:evt)` / `machine.send(:evt)` rely on (concepts
-             * #44/#47/#58). Accept it plus any other keyword that has a
-             * meaningful use as a capability method name. */
-            if (!at(p, TOK_IDENT) && !at(p, TOK_KW_SEND)) {
+            /* `send` and `some`/`none` are reserved keywords that also
+             * appear legitimately as method names on capabilities
+             * (Machine.send, option.some, option.none). Accept them
+             * here so `cap.method` lookups don't trip the keyword. */
+            const char *field_name = NULL;
+            if      (at(p, TOK_IDENT))    field_name = p->cur.text;
+            else if (at(p, TOK_KW_SEND))  field_name = deck_intern_cstr("send");
+            else if (at(p, TOK_KW_SOME))  field_name = deck_intern_cstr("some");
+            else if (at(p, TOK_KW_NONE))  field_name = deck_intern_cstr("none");
+            else {
                 set_err(p, DECK_LOAD_PARSE,
                         "expected field name or index after '.'");
                 return NULL;
             }
             ast_node_t *n = mknode(p, AST_DOT); if (!n) return NULL;
             n->as.dot.obj   = head;
-            /* TOK_KW_SEND has no text payload; substitute the keyword
-             * spelling so dotted-path lookups (Machine.send) resolve. */
-            n->as.dot.field = at(p, TOK_KW_SEND) ? deck_intern_cstr("send")
-                                                  : p->cur.text;
+            n->as.dot.field = field_name;
             advance(p);
             head = n;
             continue;
@@ -995,6 +1015,57 @@ static ast_node_t *parse_pattern(deck_parser_t *p)
 
 static ast_node_t *parse_pattern_primary(deck_parser_t *p)
 {
+    /* Spec §5.6 — record pattern `Type { field: pat, … }` /
+     * `Type { field }` (field-shorthand). Detected by an IDENT followed
+     * by `{`. The runtime treats records as maps, so we encode each
+     * named-field sub-pattern as a positional sub here, dropping the
+     * field name (the matcher accesses by atom-key in the map). */
+    if (p->cur.type == TOK_IDENT && peek_next_tok(p) == TOK_LBRACE) {
+        const char *ctor = p->cur.text;
+        uint32_t ln = p->cur.line, co = p->cur.col;
+        advance(p); advance(p);   /* type name, { */
+        ast_node_t *subs[16];
+        uint32_t n_subs = 0;
+        if (!at(p, TOK_RBRACE)) {
+            for (;;) {
+                if (n_subs >= 16) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "record pattern: too many fields (max 16)");
+                    return NULL;
+                }
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected field name in record pattern");
+                    return NULL;
+                }
+                const char *field_name = p->cur.text;
+                advance(p);
+                ast_node_t *s;
+                if (at(p, TOK_COLON)) {
+                    advance(p);
+                    s = parse_pattern(p); if (!s) return NULL;
+                } else {
+                    /* field-shorthand: `Type { field }` binds `field`
+                     * to the field's value. */
+                    s = ast_new(p->arena, AST_PAT_IDENT, ln, co);
+                    if (!s) return NULL;
+                    s->as.pat_ident = field_name;
+                }
+                subs[n_subs++] = s;
+                if (!at(p, TOK_COMMA)) break;
+                advance(p);
+            }
+        }
+        if (!expect(p, TOK_RBRACE, "expected '}' closing record pattern")) return NULL;
+        ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
+        if (!n) return NULL;
+        n->as.pat_variant.ctor   = ctor;
+        n->as.pat_variant.subs   = n_subs > 0
+            ? deck_arena_memdup(p->arena, subs, n_subs * sizeof(ast_node_t *))
+            : NULL;
+        n->as.pat_variant.n_subs = n_subs;
+        return n;
+    }
     /* DL2 F22 — variant patterns `some(x)`, `ok(v)`, etc. detected by
      * IDENT-or-KW-some followed by `(`. Treat TOK_KW_SOME as an ident
      * for this purpose. */
@@ -1058,12 +1129,29 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             advance(p); /* [ */
             ast_node_t *subs[16];
             uint32_t n_subs = 0;
+            const char *rest_binder = NULL;   /* Spec §5.6 cons pattern */
             if (!at(p, TOK_RBRACKET)) {
                 for (;;) {
                     if (n_subs >= 16) {
                         set_err(p, DECK_LOAD_PARSE,
                                 "list pattern: too many elements (max 16)");
                         return NULL;
+                    }
+                    /* `...rest` cons-binder — `...` lexes as three
+                     * TOK_DOTs followed by an IDENT. Captures the
+                     * tail binding name and stops the loop. */
+                    if (at(p, TOK_DOT) &&
+                        peek_next_tok(p) == TOK_DOT) {
+                        advance(p); advance(p);
+                        if (at(p, TOK_DOT)) advance(p);
+                        if (!at(p, TOK_IDENT)) {
+                            set_err(p, DECK_LOAD_PARSE,
+                                    "expected rest-binder ident after `...`");
+                            return NULL;
+                        }
+                        rest_binder = p->cur.text;
+                        advance(p);
+                        break;
                     }
                     ast_node_t *s = parse_pattern(p); if (!s) return NULL;
                     subs[n_subs++] = s;
@@ -1072,9 +1160,25 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
                 }
             }
             if (!expect(p, TOK_RBRACKET, "expected ']' closing list pattern")) return NULL;
+            /* Encode `[head, ...rest]` as a variant whose ctor signals
+             * the cons shape and last sub is a synthetic IDENT pattern
+             * for the rest binder. The matcher distinguishes cons via
+             * the special ctor name. */
+            const char *ctor = rest_binder ? "[h...]" : "[]";
+            if (rest_binder) {
+                ast_node_t *r = ast_new(p->arena, AST_PAT_IDENT, ln, co);
+                if (!r) return NULL;
+                r->as.pat_ident = rest_binder;
+                if (n_subs >= 16) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "list pattern: too many elements (max 16)");
+                    return NULL;
+                }
+                subs[n_subs++] = r;
+            }
             ast_node_t *n = ast_new(p->arena, AST_PAT_VARIANT, ln, co);
             if (!n) return NULL;
-            n->as.pat_variant.ctor   = deck_intern_cstr("[]");
+            n->as.pat_variant.ctor   = deck_intern_cstr(ctor);
             n->as.pat_variant.subs   = n_subs ? deck_arena_memdup(p->arena, subs, n_subs * sizeof(ast_node_t *)) : NULL;
             n->as.pat_variant.n_subs = n_subs;
             return n;
@@ -1121,11 +1225,19 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
             return wrap;
         }
         case TOK_LPAREN: {
-            /* Spec §8.2 — tuple pattern `(p1, p2, …, pN)`. Encoded as a
-             * variant pattern with ctor "(,)" and one sub per element;
-             * matcher (interp) checks arity against DECK_T_TUPLE. A lone
-             * `(pat)` is a parenthesised pattern (returns the inner),
-             * and `()` is the unit pattern (matches DECK_T_UNIT). */
+            /* Spec §5.6 — paren pattern is one of:
+             *   ()                       unit pattern
+             *   (pat)                    parenthesised
+             *   (pat, pat, …)            positional tuple
+             *   (field: pat, …)          named tuple — fields collected
+             *                            into the same variant shape as
+             *                            positional, sub patterns only
+             *                            (field names are parsed-and-
+             *                            discarded since the runtime
+             *                            represents named tuples as the
+             *                            same map shape used for atom-
+             *                            variant payloads, keyed by
+             *                            field name in match). */
             uint32_t ln = p->cur.line, co = p->cur.col;
             advance(p); /* ( */
             if (at(p, TOK_RPAREN)) {
@@ -1144,6 +1256,14 @@ static ast_node_t *parse_pattern_primary(deck_parser_t *p)
                     set_err(p, DECK_LOAD_PARSE,
                             "tuple pattern: too many elements (max 16)");
                     return NULL;
+                }
+                /* Named-tuple element `field: pat` — eat the field
+                 * name + colon, then parse the sub-pattern. The field
+                 * name is positional in the variant we build, mirroring
+                 * how the runtime stores named tuples. */
+                if (at(p, TOK_IDENT) && peek_next_tok(p) == TOK_COLON) {
+                    advance(p); /* field name */
+                    advance(p); /* : */
                 }
                 ast_node_t *s = parse_pattern(p); if (!s) return NULL;
                 subs[n_subs++] = s;
@@ -2867,8 +2987,17 @@ static bool skip_type_annotation(deck_parser_t *p)
     uint32_t bd = 0;   /* bracket depth: () [] {} */
     while (!at(p, TOK_EOF)) {
         if (bd == 0) {
+            /* LANG §4.4 — function-type annotations like `f: (int) -> int`
+             * include `->` after the parens. Recognise that pattern by
+             * looking for `->` AFTER we've already closed the function
+             * signature paren (bd==0 with previous content); the
+             * shortcut: never treat `->` as a terminator — let it
+             * continue, and walk past the result type. The downside is
+             * a `let x = a -> b` would absorb the `->` too, but `->`
+             * outside a fn-type or arm body has no other meaning in
+             * this grammar, so this is safe. */
             if (at(p, TOK_COMMA) || at(p, TOK_RPAREN) ||
-                at(p, TOK_BANG)  || at(p, TOK_ARROW)  ||
+                at(p, TOK_BANG)  ||
                 at(p, TOK_ASSIGN) || at(p, TOK_NEWLINE) ||
                 at(p, TOK_DEDENT))
                 return true;
@@ -2917,6 +3046,10 @@ static ast_node_t *parse_fn_decl(deck_parser_t *p)
             if (at(p, TOK_COLON)) {
                 advance(p);
                 if (!skip_type_annotation(p)) return NULL;
+                /* LANG §2.6 — fn-type annotations carry an optional
+                 * purity bit (`(int) -> unit !`). Consume it so the
+                 * outer comma/rparen check sees the right token. */
+                if (at(p, TOK_BANG)) advance(p);
             }
             if (!at(p, TOK_COMMA)) break;
             advance(p);

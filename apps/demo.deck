@@ -281,9 +281,9 @@ fn add_three (a: int, b: int, c: int) -> int =
 
 fn quadratic_roots (a: float, b: float, c: float) -> Result (float, float) demo.Error =
   let disc = b * b - 4.0 * a * c
-  if disc < 0.0
-    then :err :bad_input
-    else
+  match disc < 0.0
+    | true  -> :err :bad_input
+    | false ->
       let s = math.sqrt(disc)
       let two_a = 2.0 * a
       :ok ((-b + s) / two_a, (-b - s) / two_a)
@@ -325,8 +325,7 @@ fn count_down (n: int, acc: [int]) -> [int] =
 
 fn run_builtin_sweep () -> bool ! =
   -- ─── math (full) ───
-  let m_ok =
-    math.abs_int(-5) == 5
+  let m_ok = math.abs_int(-5) == 5
       and math.min_int(2, 5) == 2
       and math.max_int(2, 5) == 5
       and math.clamp_int(15, 0, 10) == 10
@@ -360,8 +359,7 @@ fn run_builtin_sweep () -> bool ! =
       and math.max_int > 0
 
   -- ─── text (full) ───
-  let t_ok =
-    text.len("hello") == 5
+  let t_ok = text.len("hello") == 5
       and text.chars("héllo") >= 5
       and text.is_empty("") and not text.is_empty("x")
       and text.is_blank("   ")
@@ -396,8 +394,7 @@ fn run_builtin_sweep () -> bool ! =
       and text.hex_encode("A") == "41"
 
   -- ─── list (full) ───
-  let l_ok =
-    list.len(list.empty()) == 0
+  let l_ok = list.len(list.empty()) == 0
       and list.len(list.repeat(0, 5)) == 5
       and list.len(list.range(0, 10)) == 10
       and list.len(list.range_step(0, 10, 2)) == 5
@@ -433,8 +430,7 @@ fn run_builtin_sweep () -> bool ! =
   let p = map.set(map.empty(), "a", 1)
   let p2 = map.set(p, "b", 2)
   let p3 = map.set(p2, "c", 3)
-  let mp_ok =
-    map.len(p3) == 3
+  let mp_ok = map.len(p3) == 3
       and not map.is_empty(p3)
       and map.has(p3, "b")
       and map.get(p3, "a") == :some 1
@@ -450,8 +446,7 @@ fn run_builtin_sweep () -> bool ! =
 
   -- ─── bytes (full) ───
   let b = bytes.from_str("hello", :utf8)
-  let by_ok =
-    bytes.len(b) == 5
+  let by_ok = bytes.len(b) == 5
       and bytes.eq(b, bytes.from_str("hello", :utf8))
       and bytes.len(bytes.slice(b, 1, 4)) == 3
       and bytes.len(bytes.concat([b, b])) == 10
@@ -467,8 +462,7 @@ fn run_builtin_sweep () -> bool ! =
       and (match bytes.from_b64("aGk=") | :ok x -> bytes.len(x) == 2 | :err _ -> false)
 
   -- ─── option (full) ───
-  let opt_ok =
-    option.is_some(option.some(1))
+  let opt_ok = option.is_some(option.some(1))
       and option.is_none(option.none())
       and option.unwrap_or(:none, 42) == 42
       and option.unwrap_or(:some 7, 0) == 7
@@ -480,8 +474,7 @@ fn run_builtin_sweep () -> bool ! =
       and (match option.filter(:some 5, x -> x > 99) | :none -> true | _ -> false)
 
   -- ─── result (full) ───
-  let r_ok =
-    result.is_ok(:ok 5)
+  let r_ok = result.is_ok(:ok 5)
       and result.is_err(:err :bad_input)
       and result.unwrap_or(:err :bad_input, 99) == 99
       and result.unwrap_or_else(:err :bad_input, e -> 7) == 7
@@ -493,9 +486,8 @@ fn run_builtin_sweep () -> bool ! =
       and (match result.or_else(:err :a, e -> :ok 1) | :ok 1 -> true | _ -> false)
 
   -- ─── json (full) ───
-  let j_ok =
-    (match json.parse("[1, 2, 3]") | :ok v -> type_of(v) == :list | :err _ -> false)
-      and (match json.parse("{\"a\": 1}") | :ok v -> type_of(v) == :map | :err _ -> false)
+  let j_ok = (match json.parse("[1, 2, 3]") | :ok v -> type_of(v) == :list | :err _ -> false)
+      and (match json.parse("\{\"a\": 1\}") | :ok v -> type_of(v) == :map | :err _ -> false)
       and (match json.parse("\"x\"") | :ok v -> type_of(v) == :str | :err _ -> false)
       and (match json.parse("42") | :ok v -> type_of(v) == :int | :err _ -> false)
       and (match json.parse("true") | :ok v -> type_of(v) == :bool | :err _ -> false)
@@ -510,8 +502,7 @@ fn run_builtin_sweep () -> bool ! =
   let earlier = time.sub(now1, 5m)
   let dp = time.date_parts(now1)
   let durp = time.duration_parts(5m + 30s)
-  let ti_ok =
-    now1 > 0
+  let ti_ok = now1 > 0
       and mono > 0
       and time.before(earlier, later)
       and time.after(later, earlier)
@@ -540,8 +531,7 @@ fn run_builtin_sweep () -> bool ! =
   let r6 = rand.uuid()
   let r7 = rand.bytes(8)
   let r8 = rand.range(0.0, 1.0)
-  let rd_ok =
-    r1 >= 0 and r1 < 10
+  let rd_ok = r1 >= 0 and r1 < 10
       and r2 >= 0.0 and r2 < 1.0
       and (r3 == true or r3 == false)
       and (match r4 | :some _ -> true | :none -> false)
@@ -553,8 +543,7 @@ fn run_builtin_sweep () -> bool ! =
 
   -- ─── record (full) ───
   let post = sample_post()
-  let rec_ok =
-    list.len(record.keys(post)) == 5
+  let rec_ok = list.len(record.keys(post)) == 5
       and record.has_field(post, :likes)
       and not record.has_field(post, :nonexistent)
       and (match record.field(post, :likes) | :some 99 -> true | _ -> false)
@@ -562,8 +551,7 @@ fn run_builtin_sweep () -> bool ! =
       and map.len(record.to_map(post)) == 5
 
   -- ─── type_of (every shape) ───
-  let typ_ok =
-    type_of(42) == :int
+  let typ_ok = type_of(42) == :int
       and type_of(3.14) == :float
       and type_of(true) == :bool
       and type_of("hi") == :str
@@ -1156,9 +1144,7 @@ fn read_recent_heap () -> int ! =
   let _   = destructure_demo()
   let h1  = field_shorthand_demo()
   let h2  = with_postfix_demo()
-  if h1.likes == 5 and h2.likes == 999
-    then log.info("PASS:section_H_destructuring")
-    else log.warn("FAIL:section_H_destructuring")
+  if h1.likes == 5 and h2.likes == 999 then log.info("PASS:section_H_destructuring") else log.warn("FAIL:section_H_destructuring")
 
   -- Section I: per-tier service consumption (subset)
   let r_tier = try_each_tier()
@@ -1202,9 +1188,7 @@ fn read_recent_heap () -> int ! =
   if s14 then log.info("PASS:section_S14_self_call") else log.warn("FAIL:section_S14")
 
   let s15 = s15_with_chain()
-  if s15.likes == 3 and s15.author.handle == "renamed"
-    then log.info("PASS:section_S15_with_chain")
-    else log.warn("FAIL:section_S15")
+  if s15.likes == 3 and s15.author.handle == "renamed" then log.info("PASS:section_S15_with_chain") else log.warn("FAIL:section_S15")
 
   -- Total service smoke test
   let r_svc_all = s_all_services_smoke()
@@ -1342,10 +1326,12 @@ fn read_recent_heap () -> int ! =
   keep:    false
 
   on :ping (msg: str) -> Result str echo.Error ! =
-    if text.is_empty(msg) then :err :empty
-    else
-      if text.len(msg) > 200 then :err :too_long
-      else :ok ("pong: " ++ msg)
+    match text.is_empty(msg)
+      | true  -> :err :empty
+      | false ->
+        match text.len(msg) > 200
+          | true  -> :err :too_long
+          | false -> :ok ("pong: " ++ msg)
 
   on :stream_count (n: int) -> Stream int ! =
     let xs = list.range(0, n)
@@ -1482,9 +1468,9 @@ fn s1_pattern_combinatorics () -> bool ! =
 ------------------------------------------------------------------------
 
 fn build_tree (depth: int, value: int) -> Tree =
-  if depth == 0
-    then :leaf
-    else :node (
+  match depth == 0
+    | true  -> :leaf
+    | false -> :node (
       left:  build_tree(depth - 1, value * 2),
       right: build_tree(depth - 1, value * 2 + 1),
       value: value
