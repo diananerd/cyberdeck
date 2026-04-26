@@ -9,6 +9,7 @@
 #include "drivers/deck_sdi_fs.h"
 #include "drivers/deck_sdi_shell.h"
 #include "drivers/deck_sdi_bridge_ui.h"
+#include "deck_sdi_services.h"
 
 #include "esp_log.h"
 #include "esp_random.h"
@@ -1138,20 +1139,36 @@ static deck_value_t *b_tasks_fps(deck_value_t **a, uint32_t n, deck_interp_ctx_t
 }
 
 /* DL2 — system.services (SERVICES §37). Service registry for cross-
- * app @service IPC. Backed by deck_shell_deck_apps_handle iteration
- * over loaded apps. */
+ * app @service IPC. Backed by deck_sdi_services (O(1) lookup); falls
+ * back to a linear scan over loaded apps if the registry is cold (e.g.
+ * standalone runtime tests with no shell). */
+typedef struct { deck_value_t *list; } svc_iter_collect_t;
+static bool svc_collect_cb(const char *id, void *provider, void *user)
+{
+    (void)provider;
+    svc_iter_collect_t *col = user;
+    deck_list_push(col->list, deck_new_str_cstr(id));
+    return true;
+}
 static deck_value_t *b_services_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
-    uint32_t cnt = deck_shell_deck_apps_count();
-    deck_value_t *list = deck_new_list(cnt);
-    for (uint32_t i = 0; i < cnt; i++) {
-        deck_shell_deck_app_info_t info = {0};
-        deck_shell_deck_apps_info(i, &info);
-        struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
-        const char *svc_id = h ? deck_runtime_app_service_id(h) : NULL;
-        if (!svc_id) continue;
-        deck_list_push(list, deck_new_str_cstr(svc_id));
+    size_t cnt = deck_sdi_services_count();
+    deck_value_t *list = deck_new_list((uint32_t)cnt);
+    if (cnt > 0) {
+        svc_iter_collect_t col = { .list = list };
+        deck_sdi_services_iter(svc_collect_cb, &col);
+    } else {
+        /* Fallback: shell registry path is the source of truth at boot. */
+        uint32_t lc = deck_shell_deck_apps_count();
+        for (uint32_t i = 0; i < lc; i++) {
+            deck_shell_deck_app_info_t info = {0};
+            deck_shell_deck_apps_info(i, &info);
+            struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
+            const char *svc_id = h ? deck_runtime_app_service_id(h) : NULL;
+            if (!svc_id) continue;
+            deck_list_push(list, deck_new_str_cstr(svc_id));
+        }
     }
     return list;
 }
@@ -1160,15 +1177,7 @@ static deck_value_t *b_services_has(deck_value_t **a, uint32_t n, deck_interp_ct
     (void)n; (void)c;
     const char *want = (a[0] && a[0]->type == DECK_T_STR) ? a[0]->as.s.ptr : NULL;
     if (!want) return deck_new_bool(false);
-    uint32_t cnt = deck_shell_deck_apps_count();
-    for (uint32_t i = 0; i < cnt; i++) {
-        deck_shell_deck_app_info_t info = {0};
-        deck_shell_deck_apps_info(i, &info);
-        struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
-        const char *svc = h ? deck_runtime_app_service_id(h) : NULL;
-        if (svc && strcmp(svc, want) == 0) return deck_new_bool(true);
-    }
-    return deck_new_bool(false);
+    return deck_new_bool(deck_sdi_services_lookup(want) != NULL);
 }
 static deck_value_t *b_services_invoke(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -1177,6 +1186,16 @@ static deck_value_t *b_services_invoke(deck_value_t **a, uint32_t n, deck_interp
     const char *method = (a[1] && a[1]->type == DECK_T_STR) ? a[1]->as.s.ptr
                           : (a[1] && a[1]->type == DECK_T_ATOM ? a[1]->as.atom : NULL);
     if (!svc_id || !method) return result_err_atom("malformed");
+    deck_value_t *payload = (n >= 3) ? a[2] : NULL;
+
+    /* Primary path: SDI services registry. */
+    void *provider = deck_sdi_services_lookup(svc_id);
+    if (provider) {
+        struct deck_runtime_app *h = (struct deck_runtime_app *)provider;
+        deck_value_t *r = deck_runtime_app_invoke_service(h, method, payload);
+        return r ? r : result_err_atom("not_found");
+    }
+    /* Fallback for runtime configurations without the shell wired up. */
     uint32_t cnt = deck_shell_deck_apps_count();
     for (uint32_t i = 0; i < cnt; i++) {
         deck_shell_deck_app_info_t info = {0};
@@ -1184,7 +1203,6 @@ static deck_value_t *b_services_invoke(deck_value_t **a, uint32_t n, deck_interp
         struct deck_runtime_app *h = deck_shell_deck_apps_handle(info.app_id);
         const char *svc = h ? deck_runtime_app_service_id(h) : NULL;
         if (!svc || strcmp(svc, svc_id) != 0) continue;
-        deck_value_t *payload = (n >= 3) ? a[2] : NULL;
         deck_value_t *r = deck_runtime_app_invoke_service(h, method, payload);
         return r ? r : result_err_atom("not_found");
     }

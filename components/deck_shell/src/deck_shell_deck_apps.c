@@ -27,6 +27,7 @@
 #include "deck_bridge_ui.h"
 #include "deck_interp.h"
 #include "drivers/deck_sdi_fs.h"
+#include "deck_sdi_services.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -303,6 +304,20 @@ static deck_err_t load_one(loaded_slot_t *slot, uint16_t app_id, const char *pat
     if (id)   snprintf(slot->id_copy,   sizeof(slot->id_copy),   "%s", id);
     if (name) snprintf(slot->name_copy, sizeof(slot->name_copy), "%s", name);
 
+    /* Cross-app @service dispatch: register the provider in the SDI
+     * services registry so b_services_invoke / b_services_has resolve
+     * via O(1) lookup instead of an O(N) walk of loaded apps. The
+     * provider cookie is the deck_runtime_app_t handle; the runtime's
+     * b_services_invoke casts back and calls deck_runtime_app_invoke_service. */
+    const char *svc = deck_runtime_app_service_id(handle);
+    if (svc && *svc) {
+        deck_sdi_err_t sr = deck_sdi_services_register(svc, handle);
+        if (sr != DECK_SDI_OK) {
+            ESP_LOGW(TAG, "service \"%s\" register: %s",
+                     svc, deck_sdi_strerror(sr));
+        }
+    }
+
     ESP_LOGI(TAG, "loaded app_id=%u id=\"%s\" name=\"%s\" from %s",
              (unsigned)app_id,
              slot->id_copy[0] ? slot->id_copy : "?",
@@ -351,6 +366,8 @@ deck_err_t deck_shell_deck_apps_scan_and_register(void)
         if (rr != DECK_RT_OK) {
             ESP_LOGW(TAG, "intent_register id=%u failed: %s",
                      (unsigned)next_id, deck_err_name(rr));
+            const char *svc = deck_runtime_app_service_id(slot->handle);
+            if (svc && *svc) deck_sdi_services_unregister(svc);
             deck_runtime_app_unload(slot->handle);
             slot->handle = NULL;
             continue;
