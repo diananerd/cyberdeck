@@ -675,6 +675,71 @@ bool deck_bridge_ui_simulate_tap(uint32_t intent_id)
     return found;
 }
 
+bool deck_bridge_ui_assert_intent_visible(uint32_t intent_id)
+{
+    if (intent_id == 0) return false;
+    if (!deck_bridge_ui_lock(200)) return false;
+    bool ok = false;
+    for (int i = 0; i < BRIDGE_DIFF_SLOTS; i++) {
+        bridge_slot_t *s = &s_slots[i];
+        if (!s->used || !s->entries) continue;
+        for (size_t k = 0; k < s->n_entries; k++) {
+            const deck_dvc_node_t *n = s->entries[k].node;
+            if (!n || n->intent_id != intent_id) continue;
+            lv_obj_t *obj = s->entries[k].obj;
+            if (!obj) continue;
+            if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) continue;
+            ok = true;
+            break;
+        }
+        if (ok) break;
+    }
+    deck_bridge_ui_unlock();
+    return ok;
+}
+
+static bool dvc_label_matches(const deck_dvc_node_t *n, const char *needle)
+{
+    if (!n || n->type != DVC_LABEL) return false;
+    const deck_dvc_attr_t *a = deck_dvc_find_attr(n, "value");
+    if (!a || a->type != DVC_ATTR_STR || !a->value.s) return false;
+    return strstr(a->value.s, needle) != NULL;
+}
+
+bool deck_bridge_ui_assert_label_visible(const char *needle)
+{
+    if (!needle || !*needle) return false;
+    if (!deck_bridge_ui_lock(200)) return false;
+    bool ok = false;
+    for (int i = 0; i < BRIDGE_DIFF_SLOTS && !ok; i++) {
+        bridge_slot_t *s = &s_slots[i];
+        if (!s->used || !s->entries) continue;
+        for (size_t k = 0; k < s->n_entries; k++) {
+            const deck_dvc_node_t *n = s->entries[k].node;
+            if (dvc_label_matches(n, needle)) {
+                lv_obj_t *obj = s->entries[k].obj;
+                if (obj && !lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) { ok = true; break; }
+            }
+        }
+    }
+    deck_bridge_ui_unlock();
+    return ok;
+}
+
+size_t deck_bridge_ui_dvc_node_count(uint32_t app_id)
+{
+    if (!deck_bridge_ui_lock(200)) return 0;
+    size_t n = 0;
+    for (int i = 0; i < BRIDGE_DIFF_SLOTS; i++) {
+        bridge_slot_t *s = &s_slots[i];
+        if (!s->used) continue;
+        if (app_id != 0 && s->app_id != app_id) continue;
+        n += s->n_entries;
+    }
+    deck_bridge_ui_unlock();
+    return n;
+}
+
 deck_sdi_err_t deck_bridge_ui_register_lvgl(void)
 {
     /* Bring up LVGL eagerly so push_snapshot doesn't carry a slow

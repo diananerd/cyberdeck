@@ -172,6 +172,21 @@ void           deck_bridge_ui_statusbar_set_badge(const char *app_id, int count)
  * event was sent. */
 bool           deck_bridge_ui_simulate_tap(uint32_t intent_id);
 
+/* Test-harness assertions over the post-render widget tree.
+ *
+ * `_assert_intent_visible` — true iff a widget with that intent_id is
+ *   present in the most recent rendered slot AND its lv_obj is not
+ *   marked LV_OBJ_FLAG_HIDDEN (overlays count as siblings, not parents).
+ * `_assert_label_visible`  — true iff any DVC_LABEL node in the most
+ *   recent rendered tree has `value` containing `needle` (substring).
+ *   Useful for asserting that a render succeeded with expected text.
+ * `_dvc_node_count` — total number of patch-map entries in the slot
+ *   matching app_id, or 0 if no slot exists. Useful as a sanity gate
+ *   before asserting on individual nodes. */
+bool           deck_bridge_ui_assert_intent_visible(uint32_t intent_id);
+bool           deck_bridge_ui_assert_label_visible(const char *needle);
+size_t         deck_bridge_ui_dvc_node_count(uint32_t app_id);
+
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 
 typedef void (*deck_bridge_ui_nav_cb_t)(void);

@@ -20,6 +20,8 @@
 
 #include "lvgl.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <string.h>
 
@@ -256,6 +258,55 @@ static void run_intent_canary(void)
     canary_param_dispatch_int (settings, "trigger_set_brightness", 42);
 }
 
+/* UI harness — for each reference app, launch its activity, wait one
+ * render cycle, then assert that the bridge produced a non-empty widget
+ * tree. If the app exposes any intent_id, also assert that simulate_tap
+ * routes the click without crashing. Pops back to the launcher between
+ * apps so the harness leaves the device in its idle state. */
+typedef struct {
+    const char *app_label;
+    const char *expected_label_substr;
+} ui_harness_target_t;
+
+static void ui_harness_run(void)
+{
+    static const uint16_t app_ids[] = {
+        DECK_APPS_BASE_ID + 0,
+        DECK_APPS_BASE_ID + 1,
+        DECK_APPS_BASE_ID + 2,
+        DECK_APPS_BASE_ID + 3,
+        DECK_APPS_BASE_ID + 4,
+    };
+    int total = 0, asserted = 0;
+    for (size_t i = 0; i < sizeof(app_ids) / sizeof(app_ids[0]); i++) {
+        deck_runtime_app_t *app = deck_shell_deck_apps_handle(app_ids[i]);
+        if (!app) continue;
+        total++;
+        deck_shell_intent_t intent = {
+            .app_id = app_ids[i], .screen_id = 0, .data = NULL, .data_size = 0,
+        };
+        if (deck_shell_intent_navigate(&intent) != DECK_RT_OK) continue;
+        /* Allow LVGL one tick + a render pass. */
+        vTaskDelay(pdMS_TO_TICKS(60));
+        size_t n = deck_bridge_ui_dvc_node_count((uint32_t)app_ids[i]);
+        bool ok = (n > 0);
+        ESP_LOGI(TAG, "ui-harness: app_id=%u nodes=%u → %s",
+                 (unsigned)app_ids[i], (unsigned)n, ok ? "OK" : "FAIL");
+        if (ok) asserted++;
+        /* Try a tap on intent_id 1 — most reference apps wire their
+         * primary trigger there. Non-existent intents return false; that
+         * is not a failure, just a probe. */
+        if (deck_bridge_ui_simulate_tap(1)) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ESP_LOGI(TAG, "ui-harness: tap intent=1 dispatched");
+        }
+        deck_bridge_ui_activity_pop();
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+    ESP_LOGI(TAG, "ui-harness: %d/%d apps rendered non-empty trees",
+             asserted, total);
+}
+
 deck_err_t deck_shell_dl2_boot(void)
 {
     if (s_booted) return DECK_RT_OK;
@@ -284,6 +335,11 @@ deck_err_t deck_shell_dl2_boot(void)
 
     /* K5 — DL3 tick-scheduler canary. */
     deck_runtime_dl3_tick_canary();
+
+    /* UI test harness — push each reference app, assert non-empty
+     * widget tree, exercise simulate_tap. Pops back to launcher between
+     * apps so the device idles on the launcher when the boot finishes. */
+    ui_harness_run();
 
     /* Show lockscreen — fires on_unlocked synchronously if no PIN. */
     deck_shell_lockscreen_show(on_unlocked);
