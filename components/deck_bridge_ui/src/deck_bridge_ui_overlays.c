@@ -55,7 +55,8 @@ static void toast_show(const char *text, uint32_t duration_ms)
 
     lv_obj_t *lbl = lv_label_create(t);
     lv_label_set_text(lbl, text ? text : "");
-    lv_obj_set_style_text_color(lbl, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, CD_PRIMARY, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
 
     lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);
 
@@ -90,13 +91,15 @@ static void loading_show(const char *text)
 
     lv_obj_t *cur = lv_label_create(backdrop);
     lv_label_set_text(cur, "_");
-    lv_obj_set_style_text_color(cur, CD_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_style_text_color(cur, CD_PRIMARY, 0);
+    lv_obj_set_style_text_font(cur, &lv_font_montserrat_40, 0);
     lv_obj_align(cur, LV_ALIGN_CENTER, 0, 0);
 
     if (text && *text) {
         lv_obj_t *lbl = lv_label_create(backdrop);
         lv_label_set_text(lbl, text);
-        lv_obj_set_style_text_color(lbl, CD_PRIMARY_DIM, LV_PART_MAIN);
+        lv_obj_set_style_text_color(lbl, CD_PRIMARY_DIM, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_obj_align_to(lbl, cur, LV_ALIGN_OUT_BOTTOM_MID, 0, 16);
     }
 
@@ -178,42 +181,90 @@ static void confirm_show(const char *title, const char *message,
     lv_obj_set_style_border_width(cs->backdrop, 0, LV_PART_MAIN);
     lv_obj_clear_flag(cs->backdrop, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Dialog box. */
+    /* Dialog box. pad_all=0 — title polygon canvas goes edge-to-edge. */
     lv_obj_t *dlg = lv_obj_create(cs->backdrop);
     lv_obj_set_size(dlg, 380, LV_SIZE_CONTENT);
     lv_obj_align(dlg, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, LV_PART_MAIN);
-    lv_obj_set_style_border_width(dlg, 1, LV_PART_MAIN);
-    lv_obj_set_style_radius(dlg, 2, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(dlg, 24, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(dlg, 16, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(dlg, CD_BG_DARK, 0);
+    lv_obj_set_style_bg_opa(dlg, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(dlg, CD_PRIMARY_DIM, 0);
+    lv_obj_set_style_border_width(dlg, 1, 0);
+    lv_obj_set_style_radius(dlg, 2, 0);
+    lv_obj_set_style_pad_all(dlg, 0, 0);
+    lv_obj_clear_flag(dlg, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(dlg, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(dlg, LV_FLEX_ALIGN_START,
                            LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
+    /* Title polygon — same parallelogram geometry as the statusbar.
+     * Filled primary_dim, inverse text drawn twice for bold. */
     if (title && *title) {
-        lv_obj_t *t = lv_label_create(dlg);
-        lv_label_set_text(t, title);
-        lv_obj_set_style_text_color(t, CD_PRIMARY_DIM, LV_PART_MAIN);
+        const lv_coord_t TW = 380, TH = 28;
+        lv_color_t *tbuf = lv_mem_alloc(sizeof(lv_color_t) * TW * TH);
+        if (tbuf) {
+            lv_obj_t *cv = lv_canvas_create(dlg);
+            lv_canvas_set_buffer(cv, tbuf, TW, TH, LV_IMG_CF_TRUE_COLOR);
+            lv_obj_clear_flag(cv, LV_OBJ_FLAG_CLICKABLE);
+            lv_canvas_fill_bg(cv, CD_BG_DARK, LV_OPA_COVER);
+            lv_point_t pts[4] = {
+                { 0,      0      },
+                { TW - 1, 0      },
+                { TW - TH, TH - 1 },
+                { 0,      TH - 1 },
+            };
+            lv_draw_rect_dsc_t dsc;
+            lv_draw_rect_dsc_init(&dsc);
+            dsc.bg_color = CD_PRIMARY_DIM;
+            dsc.bg_opa   = LV_OPA_COVER;
+            lv_canvas_draw_polygon(cv, pts, 4, &dsc);
+            lv_draw_label_dsc_t txt;
+            lv_draw_label_dsc_init(&txt);
+            txt.color = lv_color_hex(0xFFFFFF);
+            txt.font  = &lv_font_montserrat_18;
+            lv_coord_t ty = (TH - (lv_coord_t)lv_font_montserrat_18.line_height) / 2;
+            if (ty < 0) ty = 0;
+            lv_canvas_draw_text(cv, 12, ty, TW - TH - 16, &txt, title);
+            lv_canvas_draw_text(cv, 13, ty, TW - TH - 17, &txt, title);
+        }
     }
+
+    /* Body container — pad 24 / row 16. Message is the protagonist:
+     * primary color, MD font. */
+    lv_obj_t *body = lv_obj_create(dlg);
+    lv_obj_set_width(body, lv_pct(100));
+    lv_obj_set_height(body, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_set_style_pad_all(body, 24, 0);
+    lv_obj_set_style_pad_row(body, 16, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START,
+                                  LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     if (message && *message) {
-        lv_obj_t *m = lv_label_create(dlg);
+        lv_obj_t *m = lv_label_create(body);
         lv_label_set_text(m, message);
         lv_label_set_long_mode(m, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(m, lv_pct(100));
-        lv_obj_set_style_text_color(m, CD_PRIMARY, LV_PART_MAIN);
+        lv_obj_set_style_text_color(m, CD_PRIMARY, 0);
+        lv_obj_set_style_text_font(m, &lv_font_montserrat_24, 0);
     }
+    /* Spacer so the action row sits 24px below the message. */
+    lv_obj_t *spacer = lv_obj_create(body);
+    lv_obj_set_size(spacer, lv_pct(100), 0);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(spacer, 0, 0);
+    lv_obj_set_style_pad_all(spacer, 0, 0);
 
-    /* Button row — right-aligned [CANCEL][OK]. */
-    lv_obj_t *row = lv_obj_create(dlg);
+    /* Button row — right-aligned [CANCEL][OK], inside the body container. */
+    lv_obj_t *row = lv_obj_create(body);
     lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_column(row, 8, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(row, 24, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_set_style_pad_top(row, 24, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END,
                            LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

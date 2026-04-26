@@ -38,11 +38,13 @@ deck_err_t deck_shell_intent_register(uint16_t app_id,
  * UNRESOLVED_SYMBOL if no resolver is registered. */
 deck_err_t deck_shell_intent_navigate(const deck_shell_intent_t *intent);
 
-/* Default back / home callbacks wired into the navbar — they call
- * `deck_bridge_ui_activity_pop` / `_pop_to_home`, but no-op while the
- * lockscreen has navigation locked. */
+/* Default back / home / tasks callbacks wired into the navbar — they
+ * call deck_bridge_ui_activity_pop / _pop_to_home / launch the task
+ * manager app respectively, but no-op while the lockscreen has
+ * navigation locked. */
 void deck_shell_navbar_back(void);
 void deck_shell_navbar_home(void);
+void deck_shell_navbar_tasks(void);
 
 /* Lock / unlock the back+home gestures. Used by lockscreen + system
  * dialogs that must not be dismissed by accident. */

@@ -50,3 +50,9 @@ CONFIG_SPIFFS_OBJ_NAME_LEN=64
 # not spec requirement — comment in s_heap_idle_budget) sees ~56 KB,
 # still comfortably above runaway-leak territory. Concept #68 (2026-04-20).
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=24576
+
+# UI fonts — CYBERDECK_FONT_SM/MD/LG/XL aliases (CLAUDE.md UI design system).
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_40=y

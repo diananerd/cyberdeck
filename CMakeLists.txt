@@ -20,7 +20,7 @@ spiffs_create_partition_image(apps apps FLASH_IN_PROJECT)
 # esp_http_client another ~200 KB. Spec 16 §4.9 budgets DL2 at ≤ 1 MB
 # total platform image. Current DL2 baseline ~1.1 MB; we enforce 1.5 MB
 # as a runaway-bloat ceiling, not a tight-fit target.
-set(CYBERDECK_BIN_MAX_BYTES 1572864)  # 1.5 MB
+set(CYBERDECK_BIN_MAX_BYTES 1835008)  # 1.75 MB — UI overhaul adds Montserrat 18/24/32/40 (~125 KB)
 add_custom_target(cyberdeck_bin_size_guard ALL
     COMMAND ${CMAKE_COMMAND}
         -DBIN_FILE=${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin

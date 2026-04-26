@@ -117,6 +117,30 @@ void deck_shell_navbar_home(void)
     deck_bridge_ui_activity_pop_to_home();
 }
 
+void deck_shell_navbar_tasks(void)
+{
+    if (s_nav_locked) {
+        ESP_LOGI(TAG, "tasks ignored — nav locked");
+        return;
+    }
+    /* Resolve cyberdeck.taskman by id and route to it. The .deck file
+     * registers itself in the apps slot table at boot, so the lookup
+     * stays robust to app_id reshuffling. */
+    uint32_t cnt = deck_shell_deck_apps_count();
+    for (uint32_t i = 0; i < cnt; i++) {
+        deck_shell_deck_app_info_t info = {0};
+        deck_shell_deck_apps_info(i, &info);
+        if (info.id && strcmp(info.id, "cyberdeck.taskman") == 0) {
+            deck_shell_intent_t intent = {
+                .app_id = info.app_id, .screen_id = 0, .data = NULL, .data_size = 0,
+            };
+            deck_shell_intent_navigate(&intent);
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "tasks: cyberdeck.taskman not loaded");
+}
+
 void deck_shell_nav_lock(bool lock)
 {
     s_nav_locked = lock;

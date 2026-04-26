@@ -3831,30 +3831,26 @@ CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE=1
 CONFIG_LV_FONT_MONTSERRAT_14=y
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_16 is not set
-# default:
-# CONFIG_LV_FONT_MONTSERRAT_18 is not set
+CONFIG_LV_FONT_MONTSERRAT_18=y
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_20 is not set
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_22 is not set
-# default:
-# CONFIG_LV_FONT_MONTSERRAT_24 is not set
+CONFIG_LV_FONT_MONTSERRAT_24=y
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_26 is not set
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_28 is not set
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_30 is not set
-# default:
-# CONFIG_LV_FONT_MONTSERRAT_32 is not set
+CONFIG_LV_FONT_MONTSERRAT_32=y
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_34 is not set
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_36 is not set
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_38 is not set
-# default:
-# CONFIG_LV_FONT_MONTSERRAT_40 is not set
+CONFIG_LV_FONT_MONTSERRAT_40=y
 # default:
 # CONFIG_LV_FONT_MONTSERRAT_42 is not set
 # default:

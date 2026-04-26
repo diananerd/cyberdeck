@@ -797,13 +797,19 @@ deck_sdi_err_t deck_bridge_ui_selftest(void)
         return DECK_SDI_ERR_FAIL;
     }
 
-    deck_sdi_err_t rv = deck_sdi_bridge_ui_push_snapshot(buf, wrote);
+    /* Verify encode/decode round-trip without rendering to the active
+     * screen — push_snapshot would write into lv_scr_act() without
+     * respecting the docked statusbar/navbar regions, briefly bleeding
+     * the test tree over the chrome before the launcher comes up. */
+    deck_dvc_envelope_t dec_env = {0};
+    deck_dvc_node_t *dec_root = NULL;
+    deck_err_t dec_rc = deck_dvc_decode(buf, wrote, &arena, &dec_env, &dec_root);
     deck_arena_reset(&arena);
-    if (rv != DECK_SDI_OK) {
-        ESP_LOGE(TAG, "push_snapshot: %s", deck_sdi_strerror(rv));
-        return rv;
+    if (dec_rc != DECK_RT_OK || !dec_root) {
+        ESP_LOGE(TAG, "selftest decode failed");
+        return DECK_SDI_ERR_FAIL;
     }
-    ESP_LOGI(TAG, "selftest: PASS (rendered %u-byte tree to LVGL screen)",
+    ESP_LOGI(TAG, "selftest: PASS (encoded+decoded %u-byte tree, no UI render)",
              (unsigned)wrote);
     return DECK_SDI_OK;
 }

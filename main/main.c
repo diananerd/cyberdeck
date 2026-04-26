@@ -142,6 +142,7 @@ void app_main(void)
     (void)deck_bridge_ui_statusbar_init();
     (void)deck_bridge_ui_navbar_init(deck_shell_navbar_back,
                                        deck_shell_navbar_home);
+    deck_bridge_ui_navbar_set_tasks_cb(deck_shell_navbar_tasks);
     deck_sdi_log_registered();
 
     /* Runtime init — heap hard-limit for DL1 is 64 KB (spec 16 §4.4). */
@@ -151,6 +152,15 @@ void app_main(void)
     run_sdi_selftests();
 #endif
 
+    /* Test-mode PIN seed: must run AFTER run_sdi_selftests because
+     * deck_sdi_security_selftest wipes the PIN slot before its own
+     * test pin set/clear cycle. Idempotent — once the slot is populated
+     * on a subsequent boot, this leaves it alone. */
+    if (!deck_sdi_security_has_pin()) {
+        deck_sdi_err_t pin_rc = deck_sdi_security_set_pin(NULL, "1234");
+        ESP_LOGI(TAG, "test PIN seed (1234): %s", deck_sdi_strerror(pin_rc));
+    }
+
     log_heap("idle");
 
     ESP_LOGI(TAG, "--- booting DL2 shell ---");
@@ -158,12 +168,13 @@ void app_main(void)
     if (shell_rc != DECK_RT_OK) {
         ESP_LOGE(TAG, "DL2 shell boot FAILED: %s", deck_err_name(shell_rc));
     }
-    /* DL1 sample app still runs once after the DL2 chrome is up so the
-     * runtime conformance path is exercised on every boot. */
-    deck_err_t dl1_rc = deck_shell_boot();
-    if (dl1_rc != DECK_RT_OK) {
-        ESP_LOGE(TAG, "DL1 sample boot FAILED: %s", deck_err_name(dl1_rc));
-    }
+    /* NOTE: deck_shell_boot() (DL1 sample that re-runs launcher.deck) is
+     * intentionally NOT invoked here. It executes the .deck launcher's
+     * state machine, which emits a push_snapshot to the active screen —
+     * directly over the C launcher's grid — leaving [dvc_type=1] in
+     * place of the apps. The DL2 path already exercises the runtime via
+     * deck_shell_deck_apps_scan_and_register's load_one. */
+    (void)deck_shell_boot;
 
     ESP_LOGI(TAG, "Bootstrap complete — idle loop (10s heartbeat)");
 

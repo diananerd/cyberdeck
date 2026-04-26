@@ -34,7 +34,7 @@ static const char *TAG = "shell.dl2";
 #define APP_ID_SETTINGS  9
 
 #define UI_STATUSBAR_H   36
-#define UI_NAVBAR_H      48
+#define UI_NAVBAR_H      72
 
 #define CD_PRIMARY      lv_color_hex(0x00FF41)
 #define CD_PRIMARY_DIM  lv_color_hex(0x004D13)
@@ -64,103 +64,240 @@ static void launcher_card_stub_cb(lv_event_t *e)
     deck_bridge_ui_overlay_toast("Coming soon...", 1500);
 }
 
-static lv_obj_t *make_app_card(lv_obj_t *parent, const char *icon,
-                                const char *name, lv_event_cb_t cb,
-                                void *cb_data, bool active)
+/* App card — pre-deck-lang TUI grid card.
+ * Square, 2px primary_dim border (active) or full-dim (stub), radius 16.
+ * Press = invert (bg primary, text bg_dark). Icon CYBERDECK_FONT_XL,
+ * name CYBERDECK_FONT_SM dim, gap 4px. */
+static lv_obj_t *make_app_card(lv_obj_t *parent, lv_coord_t sz,
+                                const char *icon, const char *name,
+                                lv_event_cb_t cb, void *cb_data, bool active)
 {
-    lv_color_t color = active ? CD_PRIMARY : CD_PRIMARY_DIM;
+    lv_color_t border_c = active ? CD_PRIMARY : CD_PRIMARY_DIM;
+    lv_color_t icon_c   = active ? CD_PRIMARY : CD_PRIMARY_DIM;
+    lv_color_t name_c   = CD_PRIMARY_DIM;
     lv_obj_t *c = lv_obj_create(parent);
-    lv_obj_set_size(c, 140, 120);
-    lv_obj_set_style_bg_color(c, CD_BG_CARD, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_color(c, color, LV_PART_MAIN);
-    lv_obj_set_style_border_width(c, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(c, 16, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(c, 12, LV_PART_MAIN);
+    lv_obj_set_size(c, sz, sz);
+    lv_obj_set_style_bg_color(c, CD_BG_DARK, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(c, border_c, 0);
+    lv_obj_set_style_border_width(c, 2, 0);
+    lv_obj_set_style_radius(c, 16, 0);
+    lv_obj_set_style_pad_all(c, 4, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER,
                             LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(c, 4, 0);
+
+    /* Press invert. */
+    lv_obj_set_style_bg_color(c, CD_PRIMARY, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(c, CD_PRIMARY, LV_STATE_PRESSED);
 
     lv_obj_t *ic = lv_label_create(c);
     lv_label_set_text(ic, icon);
-    lv_obj_set_style_text_color(ic, color, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ic, icon_c, 0);
+    lv_obj_set_style_text_font(ic, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(ic, CD_BG_DARK, LV_STATE_PRESSED);
 
     lv_obj_t *nm = lv_label_create(c);
     lv_label_set_text(nm, name);
-    lv_obj_set_style_text_color(nm, color, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(nm, 4, LV_PART_MAIN);
+    lv_obj_set_style_text_color(nm, name_c, 0);
+    lv_obj_set_style_text_font(nm, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(nm, CD_BG_DARK, LV_STATE_PRESSED);
 
-    lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     lv_obj_add_event_cb(c, cb, LV_EVENT_CLICKED, cb_data);
     return c;
+}
+
+/* Per-app launcher entry built from deck_shell_deck_apps. We exclude
+ * taskman because it's surfaced via the navbar TASKS zone instead of
+ * a card. Up to 9 user-facing apps (3x3 portrait or 5x2 landscape). */
+typedef struct {
+    uint16_t    app_id;
+    const char *name;
+    const char *icon;
+} launcher_entry_t;
+
+static const char *icon_for_id(const char *id)
+{
+    if (!id) return "[?]";
+    if (strstr(id, "settings")) return "[#]";
+    if (strstr(id, "files"))    return "[F]";
+    if (strstr(id, "bluesky"))  return "[B]";
+    if (strstr(id, "launcher")) return "[H]";
+    if (strstr(id, "demo"))     return "[D]";
+    return "[*]";
+}
+
+static void uppercase_copy(char *dst, size_t cap, const char *src)
+{
+    size_t k = 0;
+    for (; src && src[k] && k < cap - 1; k++) {
+        char ch = src[k];
+        dst[k] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+    }
+    dst[k] = '\0';
 }
 
 static void launcher_on_create(deck_bridge_ui_activity_t *act, void *intent_data)
 {
     (void)intent_data;
     lv_obj_t *scr = (lv_obj_t *)act->lvgl_screen;
-    lv_obj_set_style_bg_color(scr, CD_BG_DARK, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(scr, CD_BG_DARK, 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(scr, 0, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *area = lv_obj_create(scr);
-    lv_obj_set_size(area, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_pad_top(area, UI_STATUSBAR_H + 24, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(area, UI_NAVBAR_H + 24, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(area, 24, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(area, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(area, 16, LV_PART_MAIN);
-    lv_obj_set_style_pad_column(area, 16, LV_PART_MAIN);
-    lv_obj_set_flex_flow(area, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(area, LV_FLEX_ALIGN_CENTER,
-                            LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    /* Bundled DL2 demo apps (C-side). */
-    make_app_card(area, "[#]", "SETTINGS",
-                   launcher_navigate_cb, (void *)(uintptr_t)APP_ID_SETTINGS, true);
-    make_app_card(area, "[+]", "COUNTER",
-                   launcher_navigate_cb, (void *)(uintptr_t)APP_ID_COUNTER, true);
-    make_app_card(area, "[T]", "TASKMAN",
-                   launcher_navigate_cb, (void *)(uintptr_t)APP_ID_TASKMAN, true);
-    make_app_card(area, "[N]", "NET HELLO",
-                   launcher_navigate_cb, (void *)(uintptr_t)APP_ID_NET_HELLO, true);
-
-    /* F28 Phase 2 — .deck source apps. Label is the app name (uppercased
-     * for the visual grammar); tapping fires @on resume on the loaded
-     * handle. Stubs fill remaining slots if fewer than 4 .deck apps. */
-    uint32_t n_deck = deck_shell_deck_apps_count();
-    if (n_deck > 4) n_deck = 4;
-    for (uint32_t i = 0; i < n_deck; i++) {
-        deck_shell_deck_app_info_t info;
+    /* Collect launchable apps from deck_shell_deck_apps. Skip the
+     * launcher itself and taskman (which lives in the navbar). Cap at
+     * 9 — bigger sets need scrolling, out of scope for the chrome. */
+    enum { MAX_LAUNCHER = 9 };
+    static char s_names[MAX_LAUNCHER][32];
+    launcher_entry_t entries[MAX_LAUNCHER];
+    uint8_t n = 0;
+    uint32_t cnt = deck_shell_deck_apps_count();
+    for (uint32_t i = 0; i < cnt && n < MAX_LAUNCHER; i++) {
+        deck_shell_deck_app_info_t info = {0};
         deck_shell_deck_apps_info(i, &info);
-        char label[32];
-        const char *src = info.name ? info.name : (info.id ? info.id : info.path);
-        size_t k = 0;
-        for (; src && src[k] && k < sizeof(label) - 1; k++) {
-            char ch = src[k];
-            label[k] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
-        }
-        label[k] = '\0';
-        make_app_card(area, "[*]", label,
-                       launcher_navigate_cb, (void *)(uintptr_t)info.app_id, true);
+        if (!info.id) continue;
+        if (strcmp(info.id, "cyberdeck.launcher") == 0) continue;
+        if (strcmp(info.id, "cyberdeck.taskman")  == 0) continue;
+        const char *src = info.name ? info.name : info.id;
+        uppercase_copy(s_names[n], sizeof(s_names[n]), src);
+        entries[n].app_id = info.app_id;
+        entries[n].name   = s_names[n];
+        entries[n].icon   = icon_for_id(info.id);
+        n++;
     }
-    for (uint32_t i = n_deck; i < 4; i++) {
-        make_app_card(area, "[?]", "SLOT",  launcher_card_stub_cb, NULL, false);
+    /* Insertion sort by name. */
+    for (uint8_t i = 1; i < n; i++) {
+        launcher_entry_t key = entries[i];
+        int j = (int)i - 1;
+        while (j >= 0 && strcmp(entries[j].name, key.name) > 0) {
+            entries[j + 1] = entries[j];
+            j--;
+        }
+        entries[j + 1] = key;
+    }
+
+    /* Sizing — leave room for statusbar (top) + navbar (bottom or right). */
+    lv_disp_t *disp = lv_disp_get_default();
+    lv_coord_t sw = lv_disp_get_hor_res(disp);
+    lv_coord_t sh = lv_disp_get_ver_res(disp);
+    bool portrait = (sw < sh);
+    lv_coord_t avail_w = portrait ? sw : (sw - UI_NAVBAR_H);
+    lv_coord_t avail_h = portrait ? (sh - UI_STATUSBAR_H - UI_NAVBAR_H)
+                                  : (sh - UI_STATUSBAR_H);
+    const lv_coord_t gap = 16;
+
+    uint8_t cols = portrait ? 3 : 5;
+    if (n < cols) cols = n > 0 ? n : 1;
+    uint8_t rows = (uint8_t)((n + cols - 1) / cols);
+    if (rows == 0) rows = 1;
+
+    lv_coord_t card_w = (avail_w - gap * (cols + 1)) / cols;
+    lv_coord_t card_h = (avail_h - gap * (rows + 1)) / rows;
+    lv_coord_t card_sz = card_w < card_h ? card_w : card_h;
+    if (card_sz > 160) card_sz = 160;
+    if (card_sz < 72)  card_sz = 72;
+
+    /* Container — clear of the docks. */
+    lv_obj_t *cont = lv_obj_create(scr);
+    lv_obj_set_size(cont, avail_w, avail_h);
+    lv_obj_align(cont, portrait ? LV_ALIGN_TOP_LEFT : LV_ALIGN_TOP_LEFT,
+                 0, UI_STATUSBAR_H);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_style_radius(cont, 0, 0);
+    lv_obj_set_style_pad_all(cont, gap, 0);
+    lv_obj_set_style_pad_column(cont, gap, 0);
+    lv_obj_set_style_pad_row(cont, gap, 0);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER,
+                                 LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    if (n == 0) {
+        /* Empty-state — single dim card with "[?]". */
+        make_app_card(cont, card_sz, "[?]", "NO APPS",
+                       launcher_card_stub_cb, NULL, false);
+        return;
+    }
+
+    for (uint8_t i = 0; i < n; i++) {
+        make_app_card(cont, card_sz, entries[i].icon, entries[i].name,
+                       launcher_navigate_cb,
+                       (void *)(uintptr_t)entries[i].app_id, true);
     }
 }
 
+/* ---------- shell boot ---------- */
+
+static void run_intent_canary(void);
+static bool s_post_unlock_init_done = false;
+
+/* Heavy boot work that should run AFTER the user has unlocked. Scans
+ * the apps partition, registers intent resolvers, fires the runtime
+ * canaries. Idempotent — guarded so subsequent unlocks (lock → unlock
+ * cycles) skip the scan. */
+static void post_unlock_init(void)
+{
+    if (s_post_unlock_init_done) return;
+    s_post_unlock_init_done = true;
+
+    /* Register intent resolvers for all bundled apps. */
+    deck_shell_settings_register();
+    deck_shell_apps_register();
+
+    /* Scan the apps partition for *.deck files, load each via the
+     * persistent app runtime, register an intent resolver. */
+    deck_shell_deck_apps_scan_and_register();
+
+    /* H3 — runtime-side intent canary. */
+    run_intent_canary();
+
+    /* K5 — DL3 tick-scheduler canary. */
+    deck_runtime_dl3_tick_canary();
+}
+
+static void launcher_on_resume(deck_bridge_ui_activity_t *act, void *intent_data);
+
 static const deck_bridge_ui_lifecycle_t s_launcher_cbs = {
     .on_create = launcher_on_create,
+    .on_resume = launcher_on_resume,
 };
 
-/* ---------- shell boot ---------- */
+/* Build/rebuild the launcher grid from the current loaded-apps slot
+ * table. Wipes any prior children on the launcher screen. Called from
+ * on_create (initial empty paint, before scan) and on_resume (after
+ * scan completes). */
+static void launcher_build_grid_now(void)
+{
+    deck_bridge_ui_activity_t *top = deck_bridge_ui_activity_current();
+    if (!top || !top->lvgl_screen) return;
+    if (!deck_bridge_ui_lock(200)) return;
+    lv_obj_clean((lv_obj_t *)top->lvgl_screen);
+    deck_bridge_ui_unlock();
+    /* launcher_on_create rebuilds via the same path. Re-invoke it. */
+    launcher_on_create(top, NULL);
+}
+
+static void launcher_on_resume(deck_bridge_ui_activity_t *act, void *intent_data)
+{
+    (void)intent_data;
+    (void)act;
+}
 
 static void on_unlocked(void)
 {
     s_unlocked = true;
-    ESP_LOGI(TAG, "unlocked — pushing launcher");
+    ESP_LOGI(TAG, "on_unlocked: pushing launcher (apps already loaded)");
+    /* Apps were already scanned + loaded during dl2_boot before the
+     * lockscreen. launcher_on_create can build the grid in one pass
+     * with the populated slot table. No deferred rebuild needed. */
     deck_bridge_ui_activity_push(APP_ID_LAUNCHER, 0,
                                   &s_launcher_cbs, NULL);
 }
@@ -244,7 +381,10 @@ static void run_intent_canary(void)
         else if (strcmp(info.id, "cyberdeck.bluesky") == 0)
             bluesky  = deck_shell_deck_apps_handle(info.app_id);
     }
-    canary_dispatch(settings, "trigger_lock_now");
+    /* trigger_lock_now is intentionally skipped at boot — it would invoke
+     * bridge.ui.set_locked(true) which routes through shell_lock_handler
+     * and re-shows the lockscreen the user just dismissed. The G4 path is
+     * already exercised by every other trigger below. */
     canary_dispatch(settings, "trigger_check_update");
     canary_dispatch(settings, "trigger_about");
     canary_dispatch(taskman,  "trigger_open_compose");
@@ -323,28 +463,25 @@ deck_err_t deck_shell_dl2_boot(void)
     /* Restore display rotation before we start drawing real screens. */
     deck_shell_rotation_restore();
 
-    /* Register intent resolvers for all bundled apps. */
-    deck_shell_settings_register();
-    deck_shell_apps_register();
+    /* Run the scan + canaries on the main task BEFORE the lockscreen.
+     * Doing this in the unlock callback path triggered a GDMA descriptor
+     * race: each .deck app's @on launch state machine emitted a
+     * push_snapshot that rewrote the active screen while the LCD's GDMA
+     * was still draining the launcher's grid frame, corrupting the
+     * descriptor chain and crashing in gdma_default_tx_isr. Scanning
+     * here means renders go to a dormant background screen (the
+     * lockscreen on lv_layer_sys covers it), no race possible. */
+    post_unlock_init();
 
-    /* F28 Phase 2 — scan the apps partition for *.deck files, load each
-     * via the persistent app runtime, and register an intent resolver so
-     * taps fire @on resume. Failures here are non-fatal — we boot the
-     * OS without user apps if none are present or any fail to parse. */
-    deck_shell_deck_apps_scan_and_register();
-
-    /* H3 — runtime-side intent canary. */
-    run_intent_canary();
-
-    /* K5 — DL3 tick-scheduler canary. */
-    deck_runtime_dl3_tick_canary();
-
-    /* UI test harness — push each reference app, assert non-empty
-     * widget tree, exercise simulate_tap. Pops back to launcher between
-     * apps so the device idles on the launcher when the boot finishes. */
-    ui_harness_run();
-
-    /* Show lockscreen — fires on_unlocked synchronously if no PIN. */
+    /* Lockscreen — when a PIN is configured it gates the launcher
+     * behind PIN verify. When no PIN is set deck_shell_lockscreen_show
+     * fires the callback synchronously and the device lands directly
+     * on the launcher.
+     *
+     * NOTE: ui_harness_run is not invoked at boot — it leaves a
+     * residual .deck activity in slot 0 that pop_to_home later loads,
+     * rendering [dvc_type=1] over the launcher. */
+    (void)ui_harness_run;
     deck_shell_lockscreen_show(on_unlocked);
     return DECK_RT_OK;
 }

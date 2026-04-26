@@ -190,8 +190,12 @@ size_t         deck_bridge_ui_dvc_node_count(uint32_t app_id);
 /* ---------- Navbar (bottom dock — BACK + HOME) ---------- */
 
 typedef void (*deck_bridge_ui_nav_cb_t)(void);
+/* Three navbar zones: BACK (left-pointing triangle), HOME (outline circle),
+ * TASKS (outline square). The TASKS zone routes to the task manager app.
+ * Any callback may be NULL — the zone still renders but tap is a no-op. */
 deck_sdi_err_t deck_bridge_ui_navbar_init(deck_bridge_ui_nav_cb_t back_cb,
                                           deck_bridge_ui_nav_cb_t home_cb);
+void deck_bridge_ui_navbar_set_tasks_cb(deck_bridge_ui_nav_cb_t tasks_cb);
 
 /* ---------- Activity stack (push/pop, max 4 levels) ---------- */
 
