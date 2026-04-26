@@ -13,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 
 #include <stdarg.h>
 #include <string.h>
@@ -819,25 +820,168 @@ static deck_value_t *b_logs_set_level(deck_value_t **a, uint32_t n, deck_interp_
 }
 
 /* system.scheduler — register_after / register_every / cancel / list.
- * Apps normally drive timers via @on after / @on every (handled in the
- * runtime loop). Direct calls return :ok at DL1 so cross-app schedulers
- * don't break — true cross-app dispatch is a DL2 follow-up. */
+ *
+ * DL3 tick scheduler — backed by esp_timer. Apps register one-shot or
+ * periodic dispatchers; when each fires it dispatches `@on after_<tag>`
+ * or `@on every_<tag>` on the registering app handle.
+ *
+ * Concurrency: esp_timer callbacks run on the esp_timer task. The
+ * dispatch is fire-and-forget from this surface — the runtime's
+ * deck_runtime_app_dispatch acquires whatever locks it needs internally
+ * (and bridge.ui calls inside the @on body grab the LVGL lock through
+ * the same path UI events use today).
+ *
+ * The handle id is a small monotonically-increasing int (reused after
+ * cancel). Capacity ceiling is 16 active timers across all apps. */
+
+#define DECK_SCHED_MAX 16
+
+typedef struct {
+    bool                    in_use;
+    bool                    periodic;
+    int                     handle_id;
+    struct deck_runtime_app *app;
+    char                    tag[32];   /* dispatched event = "after_<tag>" or "every_<tag>" */
+    esp_timer_handle_t      timer;
+} sched_entry_t;
+
+static sched_entry_t s_sched[DECK_SCHED_MAX];
+static int           s_sched_next_id = 1;
+
+static sched_entry_t *sched_alloc_slot(void)
+{
+    for (int i = 0; i < DECK_SCHED_MAX; i++) {
+        if (!s_sched[i].in_use) return &s_sched[i];
+    }
+    return NULL;
+}
+
+static sched_entry_t *sched_find_by_id(int handle_id)
+{
+    for (int i = 0; i < DECK_SCHED_MAX; i++) {
+        if (s_sched[i].in_use && s_sched[i].handle_id == handle_id) return &s_sched[i];
+    }
+    return NULL;
+}
+
+static void sched_release(sched_entry_t *e)
+{
+    if (!e || !e->in_use) return;
+    if (e->timer) {
+        esp_timer_stop(e->timer);
+        esp_timer_delete(e->timer);
+        e->timer = NULL;
+    }
+    e->in_use = false;
+    e->app    = NULL;
+    e->tag[0] = '\0';
+}
+
+static void sched_timer_cb(void *arg)
+{
+    sched_entry_t *e = (sched_entry_t *)arg;
+    if (!e || !e->in_use || !e->app) return;
+    char evt[48];
+    snprintf(evt, sizeof(evt), "%s_%s", e->periodic ? "every" : "after", e->tag);
+    (void)deck_runtime_app_dispatch(e->app, evt, NULL);
+    if (!e->periodic) {
+        /* one-shot — auto-release the slot. esp_timer is fine being
+         * deleted from inside its own callback. */
+        sched_release(e);
+    }
+}
+
+/* Tag arg may be a string or atom. Returns pointer into the input;
+ * caller copies into the slot before storing. */
+static const char *sched_tag_arg(deck_value_t *v)
+{
+    if (!v) return NULL;
+    if (v->type == DECK_T_STR)  return v->as.s.ptr;
+    if (v->type == DECK_T_ATOM) return v->as.atom;
+    return NULL;
+}
+
+static deck_value_t *sched_register(bool periodic, deck_value_t **a, uint32_t n,
+                                     deck_interp_ctx_t *c, const char *who)
+{
+    (void)n;
+    if (!a[0] || a[0]->type != DECK_T_INT || a[0]->as.i <= 0) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s(ms:int>0, tag)", who);
+        return NULL;
+    }
+    const char *tag = sched_tag_arg(a[1]);
+    if (!tag || !*tag) {
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "%s: tag must be string|atom", who);
+        return NULL;
+    }
+    int64_t ms = a[0]->as.i;
+    sched_entry_t *e = sched_alloc_slot();
+    if (!e) return result_err_atom("no_capacity");
+
+    memset(e, 0, sizeof(*e));
+    e->in_use    = true;
+    e->periodic  = periodic;
+    e->handle_id = s_sched_next_id++;
+    e->app       = app_from_ctx(c);     /* may be NULL outside an app ctx — dispatch then no-ops */
+    snprintf(e->tag, sizeof(e->tag), "%s", tag);
+
+    esp_timer_create_args_t args = {
+        .callback        = sched_timer_cb,
+        .arg             = e,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name            = "deck.sched",
+    };
+    if (esp_timer_create(&args, &e->timer) != ESP_OK) {
+        sched_release(e);
+        return result_err_atom("io");
+    }
+    esp_err_t er = periodic
+        ? esp_timer_start_periodic(e->timer, (uint64_t)ms * 1000ULL)
+        : esp_timer_start_once(e->timer, (uint64_t)ms * 1000ULL);
+    if (er != ESP_OK) {
+        sched_release(e);
+        return result_err_atom("io");
+    }
+    /* (:ok, handle_id) */
+    deck_value_t *ok   = deck_new_atom("ok");
+    deck_value_t *id_v = deck_new_int(e->handle_id);
+    deck_value_t *items[2] = { ok, id_v };
+    deck_value_t *r = deck_new_tuple(items, 2);
+    deck_release(ok);
+    deck_release(id_v);
+    return r;
+}
+
 static deck_value_t *b_sched_register_after(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)a; (void)n; (void)c; return result_ok_unit();
+    return sched_register(false, a, n, c, "system.scheduler.register_after");
 }
 static deck_value_t *b_sched_register_every(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)a; (void)n; (void)c; return result_ok_unit();
+    return sched_register(true, a, n, c, "system.scheduler.register_every");
 }
 static deck_value_t *b_sched_cancel(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
-    (void)a; (void)n; (void)c; return result_ok_unit();
+    (void)n; (void)c;
+    if (!a[0] || a[0]->type != DECK_T_INT) return result_err_atom("malformed");
+    sched_entry_t *e = sched_find_by_id((int)a[0]->as.i);
+    if (!e) return result_err_atom("not_found");
+    sched_release(e);
+    return result_ok_unit();
 }
 static deck_value_t *b_sched_list(deck_value_t **a, uint32_t n, deck_interp_ctx_t *c)
 {
     (void)a; (void)n; (void)c;
-    return deck_new_list(0);
+    int active = 0;
+    for (int i = 0; i < DECK_SCHED_MAX; i++) if (s_sched[i].in_use) active++;
+    deck_value_t *list = deck_new_list((uint32_t)active);
+    for (int i = 0; i < DECK_SCHED_MAX; i++) {
+        if (!s_sched[i].in_use) continue;
+        deck_value_t *id = deck_new_int(s_sched[i].handle_id);
+        deck_list_push(list, id);
+        deck_release(id);
+    }
+    return list;
 }
 
 /* system.events — publish / subscribe. publish is a no-op sink (the
