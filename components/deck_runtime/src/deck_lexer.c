@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* ================================================================
@@ -543,6 +544,14 @@ static bool scan_atom(deck_lexer_t *lx, deck_token_t *out)
 
 static bool handle_line_start(deck_lexer_t *lx, deck_token_t *out)
 {
+    /* Inside a bracket group ((/[/{), the source spans lines but indent
+     * has no semantics — skip leading whitespace and bail without
+     * emitting any INDENT/DEDENT/NEWLINE. */
+    if (lx->bracket_depth > 0) {
+        while (peek(lx) == ' ' || peek(lx) == '\t') advance(lx);
+        lx->at_line_start = false;
+        return false;
+    }
     /* Count leading spaces (reject tabs). */
     uint32_t spaces = 0;
     while (peek(lx) == ' ') { advance(lx); spaces++; }

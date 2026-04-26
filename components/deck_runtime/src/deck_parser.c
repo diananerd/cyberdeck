@@ -345,8 +345,12 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                 tv->as.s = type_name;
                 ast_list_push(p->arena, &map->as.map_lit.keys, tk);
                 ast_list_push(p->arena, &map->as.map_lit.vals, tv);
+                while (at(p, TOK_NEWLINE)) advance(p);
                 if (!at(p, TOK_RBRACE)) {
                     for (;;) {
+                        while (at(p, TOK_NEWLINE)) advance(p);
+                        /* LANG §4.2 — field-shorthand: bare `field`
+                         * binds `field: field` from in-scope name. */
                         if (!at(p, TOK_IDENT)) {
                             set_err(p, DECK_LOAD_PARSE,
                                     "expected field name in record construction");
@@ -357,17 +361,27 @@ static ast_node_t *parse_primary(deck_parser_t *p)
                         if (!k) return NULL;
                         k->as.s = p->cur.text;
                         advance(p);
-                        if (!expect(p, TOK_COLON,
-                                    "expected ':' after field name")) return NULL;
-                        ast_node_t *v = parse_expr_prec(p, 0);
-                        if (!v) return NULL;
+                        ast_node_t *v;
+                        if (at(p, TOK_COLON)) {
+                            advance(p);
+                            v = parse_expr_prec(p, 0);
+                            if (!v) return NULL;
+                        } else {
+                            /* shorthand — value = ident with same name. */
+                            v = ast_new(p->arena, AST_IDENT, k->line, k->col);
+                            if (!v) return NULL;
+                            v->as.s = k->as.s;
+                        }
                         ast_list_push(p->arena, &map->as.map_lit.keys, k);
                         ast_list_push(p->arena, &map->as.map_lit.vals, v);
+                        while (at(p, TOK_NEWLINE)) advance(p);
                         if (!at(p, TOK_COMMA)) break;
                         advance(p);
+                        while (at(p, TOK_NEWLINE)) advance(p);
                         if (at(p, TOK_RBRACE)) break;
                     }
                 }
+                while (at(p, TOK_NEWLINE)) advance(p);
                 if (!expect(p, TOK_RBRACE,
                             "expected '}' closing record construction")) return NULL;
                 n = map;
@@ -1453,6 +1467,181 @@ typedef struct {
     const char *field;           /* field name for LD_FIELD */
 } ld_binding_t;
 
+/* Build the wrapping `do let _tmp = val; let b1 = …; let b2 = …` AST.
+ * Shared by all destructure helpers — each provides a getter expr per
+ * binder that references the placeholder _tmp. */
+static ast_node_t *finish_destructure(deck_parser_t *p,
+                                      ast_node_t *val,
+                                      uint32_t ln, uint32_t co,
+                                      const char *binders[],
+                                      ast_node_t *getters[],
+                                      uint32_t nb,
+                                      const char *dest_name)
+{
+    ast_node_t *d = ast_new(p->arena, AST_DO, ln, co); if (!d) return NULL;
+    ast_list_init(&d->as.do_.exprs);
+    ast_node_t *holder = ast_new(p->arena, AST_LET, ln, co); if (!holder) return NULL;
+    holder->as.let.name  = dest_name;
+    holder->as.let.value = val;
+    holder->as.let.body  = NULL;
+    ast_list_push(p->arena, &d->as.do_.exprs, holder);
+    for (uint32_t i = 0; i < nb; i++) {
+        ast_node_t *bind = ast_new(p->arena, AST_LET, ln, co); if (!bind) return NULL;
+        bind->as.let.name  = binders[i];
+        bind->as.let.value = getters[i];
+        bind->as.let.body  = NULL;
+        ast_list_push(p->arena, &d->as.do_.exprs, bind);
+    }
+    return d;
+}
+
+/* Helper: alloc a fresh `_dest$L$C$N` placeholder name for the holder
+ * binding so multiple destructures in the same scope don't collide. */
+static char *fresh_dest_name(deck_parser_t *p, uint32_t ln, uint32_t co)
+{
+    char tmp[40];
+    uint32_t seq = ++s_let_dest_seq;
+    snprintf(tmp, sizeof(tmp), "_dest$%u$%u$%u",
+             (unsigned)ln, (unsigned)co, (unsigned)seq);
+    return deck_arena_strdup(p->arena, tmp);
+}
+
+/* Helper: build an AST_IDENT node referencing the holder. */
+static ast_node_t *dest_ref(deck_parser_t *p, const char *name,
+                            uint32_t ln, uint32_t co)
+{
+    ast_node_t *id = ast_new(p->arena, AST_IDENT, ln, co); if (!id) return NULL;
+    id->as.s = name;
+    return id;
+}
+
+/* `let [h1, h2, …] = expr` and `let [h1, …, ...rest] = expr`. */
+static ast_node_t *parse_let_destructure_list(deck_parser_t *p,
+                                              uint32_t ln, uint32_t co)
+{
+    advance(p); /* [ */
+    const char *binders[16];
+    ast_node_t *getters[16];
+    uint32_t nb = 0;
+    char *dest_name = fresh_dest_name(p, ln, co); if (!dest_name) return NULL;
+    bool got_rest = false;
+    if (!at(p, TOK_RBRACKET)) {
+        for (;;) {
+            if (nb >= 16) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "list destructure: too many elements (max 16)");
+                return NULL;
+            }
+            /* `...rest` — bind to the tail starting at index nb. */
+            if (at(p, TOK_DOT) && peek_next_tok(p) == TOK_DOT) {
+                advance(p); advance(p);
+                if (at(p, TOK_DOT)) advance(p);
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "expected ident after `...` in list destructure");
+                    return NULL;
+                }
+                const char *rest_name = p->cur.text;
+                advance(p);
+                /* Build `list.drop(_dest, nb)` as the getter. */
+                ast_node_t *callee = ast_new(p->arena, AST_DOT, ln, co);
+                if (!callee) return NULL;
+                callee->as.dot.obj   = dest_ref(p, deck_intern_cstr("list"), ln, co);
+                callee->as.dot.field = deck_intern_cstr("drop");
+                ast_node_t *call = ast_new(p->arena, AST_CALL, ln, co);
+                if (!call) return NULL;
+                call->as.call.fn = callee;
+                ast_list_init(&call->as.call.args);
+                ast_node_t *idx = ast_new(p->arena, AST_LIT_INT, ln, co);
+                if (!idx) return NULL;
+                idx->as.i = nb;
+                ast_list_push(p->arena, &call->as.call.args, dest_ref(p, dest_name, ln, co));
+                ast_list_push(p->arena, &call->as.call.args, idx);
+                binders[nb] = rest_name;
+                getters[nb] = call;
+                nb++;
+                got_rest = true;
+                break;
+            }
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "list destructure: expected ident binder");
+                return NULL;
+            }
+            binders[nb] = p->cur.text;
+            advance(p);
+            /* Getter: `_dest.<nb>` via AST_TUPLE_GET (works for both
+             * tuples and lists in this runtime — list values are stored
+             * as positional sequences). */
+            ast_node_t *getter = ast_new(p->arena, AST_TUPLE_GET, ln, co);
+            if (!getter) return NULL;
+            getter->as.tuple_get.obj = dest_ref(p, dest_name, ln, co);
+            getter->as.tuple_get.idx = nb;
+            getters[nb] = getter;
+            nb++;
+            if (!at(p, TOK_COMMA)) break;
+            advance(p);
+        }
+    }
+    (void)got_rest;
+    if (!expect(p, TOK_RBRACKET, "expected ']' closing list destructure")) return NULL;
+    if (!expect(p, TOK_ASSIGN, "expected '=' after list destructure")) return NULL;
+    ast_node_t *val = parse_expr_prec(p, 0); if (!val) return NULL;
+    return finish_destructure(p, val, ln, co, binders, getters, nb, dest_name);
+}
+
+/* `let Type { f1, f2: alias, … } = expr`. */
+static ast_node_t *parse_let_destructure_record(deck_parser_t *p,
+                                                uint32_t ln, uint32_t co)
+{
+    advance(p); /* type name (ignored at runtime — dynamic dispatch) */
+    advance(p); /* { */
+    const char *binders[16];
+    ast_node_t *getters[16];
+    uint32_t nb = 0;
+    char *dest_name = fresh_dest_name(p, ln, co); if (!dest_name) return NULL;
+    if (!at(p, TOK_RBRACE)) {
+        for (;;) {
+            if (nb >= 16) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "record destructure: too many fields (max 16)");
+                return NULL;
+            }
+            if (!at(p, TOK_IDENT)) {
+                set_err(p, DECK_LOAD_PARSE,
+                        "record destructure: expected field name");
+                return NULL;
+            }
+            const char *field = p->cur.text;
+            advance(p);
+            const char *binder = field;   /* shorthand default */
+            if (at(p, TOK_COLON)) {
+                advance(p);
+                if (!at(p, TOK_IDENT)) {
+                    set_err(p, DECK_LOAD_PARSE,
+                            "record destructure: expected ident binder after `:`");
+                    return NULL;
+                }
+                binder = p->cur.text;
+                advance(p);
+            }
+            ast_node_t *getter = ast_new(p->arena, AST_DOT, ln, co);
+            if (!getter) return NULL;
+            getter->as.dot.obj   = dest_ref(p, dest_name, ln, co);
+            getter->as.dot.field = field;
+            binders[nb] = binder;
+            getters[nb] = getter;
+            nb++;
+            if (!at(p, TOK_COMMA)) break;
+            advance(p);
+        }
+    }
+    if (!expect(p, TOK_RBRACE, "expected '}' closing record destructure")) return NULL;
+    if (!expect(p, TOK_ASSIGN, "expected '=' after record destructure")) return NULL;
+    ast_node_t *val = parse_expr_prec(p, 0); if (!val) return NULL;
+    return finish_destructure(p, val, ln, co, binders, getters, nb, dest_name);
+}
+
 static ast_node_t *parse_let_destructure(deck_parser_t *p, uint32_t ln, uint32_t co)
 {
     ld_binding_t binders[16];
@@ -1573,8 +1762,13 @@ static ast_node_t *parse_let_stmt(deck_parser_t *p)
 {
     uint32_t ln = p->cur.line, co = p->cur.col;
     advance(p); /* let */
-    /* Spec §5.1 destructuring path — `let (a, b) = …`. */
-    if (at(p, TOK_LPAREN)) return parse_let_destructure(p, ln, co);
+    /* Spec §3.2 destructuring paths. */
+    if (at(p, TOK_LPAREN))   return parse_let_destructure(p, ln, co);
+    if (at(p, TOK_LBRACKET)) return parse_let_destructure_list(p, ln, co);
+    if (at(p, TOK_IDENT) && p->cur.text &&
+        p->cur.text[0] >= 'A' && p->cur.text[0] <= 'Z' &&
+        peek_next_tok(p) == TOK_LBRACE)
+        return parse_let_destructure_record(p, ln, co);
     ast_node_t *n = ast_new(p->arena, AST_LET, ln, co); if (!n) return NULL;
     if (!at(p, TOK_IDENT)) { set_err(p, DECK_LOAD_PARSE, "expected name after 'let'"); return NULL; }
     n->as.let.name = p->cur.text;
