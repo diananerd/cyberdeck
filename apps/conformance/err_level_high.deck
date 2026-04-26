@@ -2,10 +2,10 @@
   name: "Conf err.level"
   id: "conf.err.level"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 @needs
-  deck_level: 3
+  deck_level: 4
 
 @on launch:
   log.info("DECK_CONF_FAIL:err.level_should_have_failed_load")

@@ -13,9 +13,18 @@ static const char *TAG = "sdi.info";
 /* Runtime claims. Bumped in lockstep with the component version.
  * deck_level promotes to 2 once F25-F29 are all on the platform. */
 #define DECK_RUNTIME_VERSION     "0.3.0"
-#define DECK_LEVEL               2
+/* CyberDeck reference implementation now claims DL3 conformance:
+ * 16/16 content kinds rendered, 11/11 UI services wired (lockscreen
+ * exposed), DL3 stream tick scheduler live (15/15 ops + tick canary
+ * verified). See REPORTS.md / spec BRIDGE §59. */
+#define DECK_LEVEL               3
 #define DECK_OS_SURFACE          2
-#define DECK_EDITION             2026
+/* Spec edition advertised by the runtime. The five pillar specs in
+ * deck-lang/ are tagged "Edition: 2027" — runtime aligns. Apps still
+ * may declare older editions; the loader rejects mismatched values
+ * (deck_loader.c:stage6_compat). All shipped reference apps have been
+ * updated to 2027 in the same sweep. */
+#define DECK_EDITION             2027
 
 /* MAC-derived device id, computed once on first access. */
 static char s_device_id[13] = {0};

@@ -3152,6 +3152,32 @@ static deck_value_t *b_nvs_get(deck_value_t **args, uint32_t n, deck_interp_ctx_
     return deck_new_some(deck_new_str_cstr(val));
 }
 
+/* Spec SERVICES §15 — `nvs.get_str (key: str) -> Result str nvs.Error`.
+ * Returns (:ok, value) on hit, (:err, atom) on miss / IO failure.
+ * Distinct from `nvs.get` which retains the legacy Optional shape so
+ * older fixtures keep working. */
+static deck_value_t *b_nvs_get_str_result(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
+{
+    (void)n;
+    char key[NVS_KEY_MAX + 1];
+    bool too_long;
+    if (!nvs_copy_key(args[0], key, &too_long)) {
+        if (too_long) return result_err_atom("invalid_key");
+        set_err(c, DECK_RT_TYPE_MISMATCH, 0, 0, "nvs.get_str(key:str)"); return NULL;
+    }
+    char ns[32]; nvs_app_ns(c, ns, sizeof(ns));
+    char val[512];
+    deck_sdi_err_t rc = deck_sdi_nvs_get_str(ns, key, val, sizeof(val));
+    if (rc == DECK_SDI_ERR_NOT_FOUND) return result_err_atom("not_found");
+    if (rc != DECK_SDI_OK)            return result_err_atom("io");
+    deck_value_t *tag  = deck_new_atom("ok");
+    deck_value_t *v    = deck_new_str_cstr(val);
+    deck_value_t *items[2] = { tag, v };
+    deck_value_t *t = deck_new_tuple(items, 2);
+    deck_release(tag); deck_release(v);
+    return t;
+}
+
 /* String set: returns :ok unit / :err :atom. */
 static deck_value_t *b_nvs_set(deck_value_t **args, uint32_t n, deck_interp_ctx_t *c)
 {
@@ -6991,6 +7017,10 @@ static const builtin_t BUILTINS[] = {
     /* Concept #35 — spec §3 arity (1-arg/2-arg, implicit app-scoped ns). */
     { "nvs.get",                b_nvs_get,           1, 1 },
     { "nvs.set",                b_nvs_set,           2, 2 },
+    /* Spec SERVICES §15 names string variants explicitly with Result
+     * return shape (Result str nvs.Error). */
+    { "nvs.get_str",            b_nvs_get_str_result, 1, 1 },
+    { "nvs.set_str",            b_nvs_set,            2, 2 },
     { "nvs.delete",             b_nvs_delete,        1, 1 },
     { "nvs.get_int",            b_nvs_get_int,       1, 1 },
     { "nvs.set_int",            b_nvs_set_int,       2, 2 },
@@ -7034,6 +7064,8 @@ static const builtin_t BUILTINS[] = {
     { "storage.fs.write_bytes", b_fs_write_bytes,    2, 2 },
     { "storage.nvs.get",        b_nvs_get,           1, 1 },
     { "storage.nvs.set",        b_nvs_set,           2, 2 },
+    { "storage.nvs.get_str",    b_nvs_get_str_result, 1, 1 },
+    { "storage.nvs.set_str",    b_nvs_set,            2, 2 },
     { "storage.nvs.delete",     b_nvs_delete,        1, 1 },
     { "storage.nvs.get_int",    b_nvs_get_int,       1, 1 },
     { "storage.nvs.set_int",    b_nvs_set_int,       2, 2 },

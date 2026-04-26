@@ -8,7 +8,7 @@
   name:    "Tasks"
   id:      "cyberdeck.taskman"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 @needs
   deck_level: 1

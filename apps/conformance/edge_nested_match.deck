@@ -2,7 +2,7 @@
   name: "Conf edge.nested_match"
   id: "conf.edge.nested_match"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 @needs
   deck_level: 1

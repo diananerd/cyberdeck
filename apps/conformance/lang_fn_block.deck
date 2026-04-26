@@ -2,7 +2,7 @@
   name: "Conf lang.fn.block"
   id: "conf.lang.fn.block"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 @needs
   deck_level: 1

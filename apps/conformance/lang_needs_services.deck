@@ -2,7 +2,7 @@
   name: "Conf lang.needs.services"
   id: "conf.lang.needs.services"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 -- Coverage goal: `@needs.capabilities` map form (§4A.1). Old
 -- version used `caps: [log, math, time, http]` as a list —

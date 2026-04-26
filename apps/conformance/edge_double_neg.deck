@@ -2,7 +2,7 @@
   name: "Conf edge.double_neg"
   id: "conf.edge.double_neg"
   version: "1.0.0"
-  edition: 2026
+  edition: 2027
 
 @needs
   deck_level: 1
