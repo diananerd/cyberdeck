@@ -3639,8 +3639,7 @@ CONFIG_HAL_BACKLIGHT_PWM_GPIO=-1
 #
 # Deck SDI
 #
-# default:
-CONFIG_DECK_SDI_SELFTEST=y
+# CONFIG_DECK_SDI_SELFTEST is not set
 # end of Deck SDI
 
 #

@@ -211,6 +211,9 @@ deck_sdi_err_t deck_bridge_ui_navbar_init(deck_bridge_ui_nav_cb_t back_cb,
     if (s_navbar) return DECK_SDI_OK;
     if (!deck_bridge_ui_lock(200)) return DECK_SDI_ERR_BUSY;
     build_navbar();
+    /* Start hidden — same rationale as statusbar. The shell reveals
+     * the chrome only once the lockscreen is up (or has been skipped). */
+    if (s_navbar) lv_obj_add_flag(s_navbar, LV_OBJ_FLAG_HIDDEN);
     deck_bridge_ui_unlock();
     return DECK_SDI_OK;
 }

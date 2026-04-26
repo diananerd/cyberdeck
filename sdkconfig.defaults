@@ -56,3 +56,8 @@ CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_32=y
 CONFIG_LV_FONT_MONTSERRAT_40=y
+
+# Conformance suite — runs 79 deck tests + 15 stress tests at boot
+# (~25s). Disabled by default so the lockscreen appears promptly. Flip
+# back to =y in menuconfig for hardware verification flows.
+CONFIG_DECK_SDI_SELFTEST=n

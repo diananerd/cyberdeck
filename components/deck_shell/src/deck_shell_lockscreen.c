@@ -64,10 +64,9 @@ static void update_dots(void)
 
 static void dismiss_lock(void)
 {
-    /* Restore the docks BEFORE deleting the backdrop so the chrome
-     * appears in the same render frame as the backdrop disappears.
-     * Otherwise the activity content underneath flashes briefly with
-     * no chrome before the docks come back. */
+    /* Reveal the docks (they were started hidden by statusbar_init /
+     * navbar_init). The chrome appears the same render frame as the
+     * backdrop disappears. */
     deck_bridge_ui_statusbar_set_visible(true);
     deck_bridge_ui_navbar_set_visible(true);
     if (deck_bridge_ui_lock(200)) {
@@ -105,6 +104,26 @@ static void unlock_worker_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Run from lv_async_call AFTER the LVGL key event finishes propagating.
+ * Doing the dismiss + worker spawn directly from the key event handler
+ * deletes the numpad button mid-event, leaving LVGL's post-processing
+ * with a dangling pointer → SoC reset on the 4th digit. */
+static void unlock_async_cb(void *arg)
+{
+    (void)arg;
+    deck_shell_unlock_cb_t cb = s_state.on_unlocked;
+    dismiss_lock();
+    if (cb) {
+        BaseType_t rc = xTaskCreatePinnedToCore(
+            unlock_worker_task, "deck.unlock", UNLOCK_TASK_STACK,
+            (void *)cb, 5, NULL, 0);
+        if (rc != pdPASS) {
+            ESP_LOGE(TAG, "unlock worker task create failed; running inline");
+            cb();
+        }
+    }
+}
+
 static void verify_and_maybe_dismiss(void)
 {
     s_state.pin_buf[s_state.pin_len] = '\0';
@@ -115,18 +134,8 @@ static void verify_and_maybe_dismiss(void)
         ok = (deck_sdi_security_verify_pin(s_state.pin_buf) == DECK_SDI_OK);
     }
     if (ok) {
-        ESP_LOGI(TAG, "unlock OK");
-        deck_shell_unlock_cb_t cb = s_state.on_unlocked;
-        dismiss_lock();
-        if (cb) {
-            BaseType_t rc = xTaskCreatePinnedToCore(
-                unlock_worker_task, "deck.unlock", UNLOCK_TASK_STACK,
-                (void *)cb, 5, NULL, 0);
-            if (rc != pdPASS) {
-                ESP_LOGE(TAG, "unlock worker task create failed; running inline");
-                cb();
-            }
-        }
+        ESP_LOGI(TAG, "unlock OK — deferring dismiss to async");
+        lv_async_call(unlock_async_cb, NULL);
     } else {
         ESP_LOGW(TAG, "unlock FAILED");
         deck_bridge_ui_overlay_toast("WRONG PIN", 1500);
@@ -181,11 +190,8 @@ static void make_key(lv_obj_t *parent, const char *text, char id_char)
 static void show_full_lockscreen(void)
 {
     if (s_state.backdrop) return;
-    /* Hide docks BEFORE locking — the lockscreen owns the whole screen.
-     * Restored on dismiss. set_visible takes the UI lock internally; do
-     * it before the explicit lock below. */
-    deck_bridge_ui_statusbar_set_visible(false);
-    deck_bridge_ui_navbar_set_visible(false);
+    /* Docks start hidden in statusbar_init / navbar_init and stay that
+     * way while the lockscreen is up. dismiss_lock reveals them. */
 
     if (!deck_bridge_ui_lock(500)) return;
 

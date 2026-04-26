@@ -393,8 +393,14 @@ deck_sdi_err_t deck_bridge_ui_statusbar_init(void)
         s_refresh_timer = lv_timer_create(refresh_timer_cb, SB_REFRESH_MS, NULL);
     }
 
+    /* Start hidden — the shell explicitly reveals the chrome only once
+     * the boot is far enough along (after lockscreen show or skip).
+     * Avoids a flash of empty layout while LVGL warms up + scan runs. */
+    lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+
     deck_bridge_ui_unlock();
-    ESP_LOGI(TAG, "statusbar mounted (%dpx, refresh=%dms)", SB_HEIGHT, SB_REFRESH_MS);
+    ESP_LOGI(TAG, "statusbar mounted (%dpx, refresh=%dms, hidden)",
+             SB_HEIGHT, SB_REFRESH_MS);
     return DECK_SDI_OK;
 }
 
