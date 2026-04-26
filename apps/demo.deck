@@ -649,13 +649,7 @@ fn destructure_demo () -> int =
   a + b + px + py + first + list.len(rest) + lk
 
 @private fn sample_post () -> Post =
-  Post {
-    uri:        "demo://post/1",
-    author:     Author { did: "did:plc:demo", handle: "demo.bsky", display_name: :some "Demo", followers: 42 },
-    text:       "hello demo",
-    likes:      99,
-    created_at: 0
-  }
+  Post { uri: "demo://post/1", author: Author { did: "did:plc:demo", handle: "demo.bsky", display_name: :some "Demo", followers: 42 }, text: "hello demo", likes: 99, created_at: 0 }
 
 fn field_shorthand_demo () -> Post =
   let uri        = "demo://post/2"

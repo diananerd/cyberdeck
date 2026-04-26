@@ -530,6 +530,32 @@ static bool match_has_wildcard(const ast_node_t *m)
     if (has_ok && has_err) return true;
     if (has_true && has_false) return true;
     if (has_nil && has_cons) return true;
+    /* Spec §5.6 — closed-variant + atom-enum coverage. The loader
+     * doesn't yet track which constructors a `@type Status = | :a |
+     * :b (…)` declares, so we trust the author when every unguarded
+     * arm covers a constructor pattern from the same closed family
+     * (`:idle`, `:active (…)`, `Status { … }`). Guards do not
+     * contribute to exhaustiveness (spec §5.6) but their presence
+     * does not invalidate it either — what matters is whether the
+     * unguarded arms together cover the type. */
+    if (m->as.match.n_arms >= 1) {
+        bool all_closed = true;
+        bool any_unguarded_closed = false;
+        for (uint32_t i = 0; i < m->as.match.n_arms; i++) {
+            const ast_node_t *pat = m->as.match.arms[i].pattern;
+            const ast_node_t *guard = m->as.match.arms[i].guard;
+            if (!pat) { all_closed = false; break; }
+            bool is_closed = false;
+            if (pat->kind == AST_PAT_LIT && pat->as.pat_lit &&
+                pat->as.pat_lit->kind == AST_LIT_ATOM) is_closed = true;
+            else if (pat->kind == AST_PAT_VARIANT && pat->as.pat_variant.ctor &&
+                     strcmp(pat->as.pat_variant.ctor, "(,)") != 0)
+                is_closed = true;
+            if (!is_closed) { all_closed = false; break; }
+            if (!guard) any_unguarded_closed = true;
+        }
+        if (all_closed && any_unguarded_closed) return true;
+    }
     return false;
 }
 

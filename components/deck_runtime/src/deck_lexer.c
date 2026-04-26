@@ -651,8 +651,11 @@ bool deck_lexer_next(deck_lexer_t *lx, deck_token_t *out)
 {
     if (!lx || !out) return false;
 
-    /* Drain pending DEDENTs first. */
-    if (lx->pending_dedents > 0) {
+    /* Drain pending DEDENTs first — but never inside a bracket group,
+     * where indent has no semantics. Pending dedents accumulated in the
+     * preceding non-bracket context get held here and resume draining
+     * once bracket_depth returns to 0. */
+    if (lx->pending_dedents > 0 && lx->bracket_depth == 0) {
         lx->pending_dedents--;
         emit(out, TOK_DEDENT, lx->line, 1);
         return true;
