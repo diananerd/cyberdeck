@@ -1,0 +1,21 @@
+menu "CyberDeck board"
+
+    config HAL_BACKLIGHT_PWM_GPIO
+        int "Backlight PWM GPIO (-1 to disable, use CH422G EXIO2 binary)"
+        range -1 48
+        default -1
+        help
+            GPIO number wired to a PWM-capable backlight driver. When set
+            to a valid pin (0..48) the board HAL programs LEDC at 5 kHz /
+            10-bit and modulates duty proportional to the level passed to
+            hal_backlight_set_level. When -1 the BL line stays on the
+            CH422G EXIO2 expander (Waveshare ESP32-S3-Touch-LCD-4.3 stock
+            wiring) and dimming quantises to off (<=0.01) / on (>0.01).
+
+    config HAL_BACKLIGHT_PWM_FREQ_HZ
+        int "Backlight PWM frequency (Hz)"
+        depends on HAL_BACKLIGHT_PWM_GPIO >= 0
+        range 200 40000
+        default 5000
+
+endmenu
